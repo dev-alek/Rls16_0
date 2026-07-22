@@ -1,0 +1,2977 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-sys-key  as character no-undo .
+        3   define variable vss-revision    as character no-undo init "$Revision: f0ae80db3135, 3548, rls $":U .
+        4   define variable vss-author      as character no-undo init "$Author: DRuban $":U .
+        5   define variable vss-date        as character no-undo init "$Date: 2023/11/27 08:31:17 $":U .
+        6   define variable vss-workfile    as character no-undo init "$Workfile: kick-db.p $":U .
+        7   define variable vss-archive     as character no-undo init "$Archive: utl/kick-db.p $":U .
+        8   define variable vss-description as character no-undo init "Закачка валют, едизм, стран, налогов".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27   end procedure.
+       28   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       29   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       30   define variable v-vssrevis-logger                   as handle    no-undo .
+       31   procedure vss-logevent :
+       32     define input  parameter p-extra-paramters as character no-undo .
+       33     define variable v-vssrevis-parameters as character no-undo .
+       34     do
+       35     on error undo, return error return-value
+       36     :
+       37       if  valid-handle(v-vssrevis-logger)
+       38       and v-vssrevis-logger :get-signature("logevent") <> ""
+       39       then do:
+       40         run vss-get-parameters in this-procedure
+       41           (output v-vssrevis-parameters
+       42           ).
+       43         run logevent in v-vssrevis-logger
+       44           (input vss-workfile
+       45           ,input vss-revision
+       46           ,input v-vssrevis-parameters
+       47           ,input p-extra-paramters
+       48           ).
+       49       end.
+       50     end.
+       51   end procedure.
+       52   assign
+       53     v-vssrevis-logger = g#vssrevis-logger
+       54   .
+       55   if  valid-handle(v-vssrevis-logger)
+       56   and v-vssrevis-logger :get-signature("logevent") <> ""
+       57   then do:
+       58     assign
+       59       v-vssrevis-logevent = true
+       60     .
+       61     run vss-logevent in this-procedure (input vss-description) .
+       62   end.
+       63   define new global shared variable g#language as character no-undo .
+       64   if g#language <> '' and g#language <> 'rus':U then do:
+       65     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       66   end.
+       67   define new global shared variable g#library  as handle no-undo .
+       68   define new global shared variable g#library2 as handle no-undo .
+       69   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       70   procedure factord :
+       71     define input  parameter p-fact-date            as date    no-undo .
+       72     define input  parameter p-fact-time            as integer no-undo .
+       73     define input  parameter p-fact-num             as integer no-undo .
+       74     define input  parameter p-shift-date           as date    no-undo .
+       75     define input  parameter p-shift-num            as integer no-undo .
+       76     define input  parameter p-shift-on             as logical no-undo .
+       77     define output parameter p-fact-order           as decimal no-undo .
+       78     define output parameter p-shift-end-fact-order as decimal no-undo .
+       79     define output parameter p-day-end-fact-order   as decimal no-undo .
+       80     define variable vss-description as character no-undo init "factord: Определение порядкового номера документа".
+       81     if p-fact-date = ?
+       82     then do:
+       83       return error "Не указана фактическая дата" .
+       84     end.
+       85     define variable v-fact-date-num as integer no-undo .
+       86     assign
+       87       v-fact-date-num = integer(p-fact-date)
+       88     .
+       89     if p-fact-num = ?
+       90     or p-fact-num = 0
+       91     then do:
+       92       return error "Не задан p-fact-num " + string(p-fact-num) .
+       93     end.
+       94     if p-fact-num < 0
+       95     then do:
+       96       return error "Отрицательный fact-num " + string(p-fact-num) .
+       97     end.
+       98     if p-fact-num >= 100000000
+       99     then do:
+      100       return error "Недопустимо большой fact-num " + string(p-fact-num) .
+      101     end.
+      102     if p-shift-on = true
+      103     then do:
+      104       if p-shift-date = ?
+      105       then do:
+      106         return error "Не задана дата смены" .
+      107       end.
+      108       if p-shift-num = ?
+      109       or p-shift-num = 0
+      110       then do:
+      111         return error "Не задан номер смены" .
+      112       end.
+      113     end.
+      114     else do:
+      115       assign
+      116         p-shift-date = p-fact-date
+      117         p-shift-num  = 24
+      118       .
+      119     end.
+      120     define variable v-shift-offset as integer no-undo .
+      121     if p-shift-date = p-fact-date
+      122     then do:
+      123       assign
+      124         v-shift-offset = 1
+      125       .
+      126     end.
+      127     if p-shift-date < p-fact-date
+      128     then do:
+      129       assign
+      130         v-shift-offset = 0
+      131       .
+      132     end.
+      133     if p-shift-date > p-fact-date
+      134     then do:
+      135       message
+      136         vss-workfile vss-revision vss-description skip
+      137         "Неправильная дата закрытия смены" skip
+      138         "Дата закрытия не смены не может быть раньше чем дата открытия смены" skip
+      139         view-as alert-box error .
+      140       undo, return error
+      141         substitute("Дата закрытия не смены &1 не может быть раньше чем дата открытия смены &2"
+      142           ,string(p-fact-date, '99/99/9999':U)
+      143           ,string(p-shift-date, '99/99/9999':U)
+      144           )
+      145       .
+      146     end.
+      147     if p-shift-num < 1
+      148     or p-shift-num > 24
+      149     then do:
+      150       message
+      151         vss-workfile vss-revision vss-description skip
+      152         "Неправильный номер смены" skip
+      153         "p-shift-num" p-shift-num skip
+      154         view-as alert-box error .
+      155       undo, return error return-value .
+      156     end.
+      157     assign
+      158       p-fact-order           = v-fact-date-num
+      159                              + v-shift-offset * 0.5
+      160                              + p-shift-num    * 0.02 - 0.01
+      161                              + p-fact-num     * 0.0000000001
+      162       p-shift-end-fact-order = v-fact-date-num
+      163                              + v-shift-offset * 0.5
+      164                              + p-shift-num    * 0.02
+      165       p-day-end-fact-order   = v-fact-date-num
+      166                              + 0.99
+      167     .
+      168     if p-fact-order           <= v-fact-date-num
+      169     or p-shift-end-fact-order <= v-fact-date-num
+      170     or p-fact-order           >= p-shift-end-fact-order - 0.0000000001
+      171     or p-shift-end-fact-order >= p-day-end-fact-order
+      172     then do:
+      173       message
+      174         vss-workfile vss-revision vss-description skip
+      175         "Внутренняя ошибка при генерации фактического номера" skip
+      176         "p-fact-date"            p-fact-date            skip
+      177         "p-fact-time"            p-fact-time            skip
+      178         "p-fact-num"             p-fact-num             skip
+      179         "p-shift-date"           p-shift-date           skip
+      180         "p-shift-num"            p-shift-num            skip
+      181         "p-shift-on"             p-shift-on             skip
+      182         "p-shift-end-fact-order" p-shift-end-fact-order skip
+      183         "p-day-end-fact-order"   p-day-end-fact-order   skip
+      184         "v-fact-date-num"        v-fact-date-num        skip
+      185         view-as alert-box error .
+      186       undo, return error return-value .
+      187     end.
+      188   end procedure.
+      189   procedure day-begin-fact-order :
+      190     define input  parameter p-fact-date            as date    no-undo .
+      191     define output parameter p-day-begin-fact-order as decimal no-undo .
+      192     do
+      193     on error undo, return error return-value
+      194     :
+      195       if p-fact-date = ?
+      196       then do:
+      197         assign
+      198           p-day-begin-fact-order = 0
+      199         .
+      200       end.
+      201       else do:
+      202         assign
+      203           p-day-begin-fact-order = integer(p-fact-date)
+      204         .
+      205       end.
+      206     end.
+      207   end procedure.
+      208   procedure factord-max-fact-order :
+      209     define output parameter p-max-fact-order as decimal   no-undo .
+      210     do
+      211     on error undo, return error return-value
+      212     :
+      213       run day-begin-fact-order in this-procedure
+      214         (input  date(1, 1, 5000)
+      215         ,output p-max-fact-order
+      216         ) .
+      217     end.
+      218   end procedure.
+      219   procedure factord-cut-archive :
+      220     define input  parameter p-obj-type             as character no-undo .
+      221     define input  parameter p-obj-code             as integer   no-undo .
+      222     define input  parameter p-fact-date            as date      no-undo .
+      223     define output parameter p-shift-on             as logical   no-undo .
+      224     define output parameter p-shift-date           as date      no-undo .
+      225     define output parameter p-shift-num            as integer   no-undo .
+      226     define output parameter p-day-end-fact-order   as decimal   no-undo .
+      227     define output parameter p-shift-end-fact-order as decimal   no-undo .
+      228     define variable v-fact-order as decimal   no-undo .
+      229     define buffer buf_shift-obj for ub.shift-obj .
+      230     do
+      231     on error undo, return error return-value
+      232     :
+      233   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      234   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      235     (input  p-obj-type
+      236     ,input  p-obj-code
+      237     ,input  'shift-on=request'
+      238     ,output p-shift-on
+      239     ) no-error .
+      240       if error-status :error
+      241       then do:
+      242         message
+      243           vss-workfile vss-revision vss-description skip
+      244           "Ошибка при определении атрибута объекта" skip
+      245           "Объект" p-obj-type p-obj-code skip
+      246           error-status :get-message(1) skip
+      247           return-value skip
+      248           view-as alert-box error .
+      249         undo, return error return-value .
+      250       end.
+      251       if p-shift-on = false
+      252       then do:
+      253         assign
+      254           p-shift-date               = ?
+      255           p-shift-num                = 0
+      256         .
+      257       end.
+      258       else do:
+      259         find first buf_shift-obj share-lock
+      260           where buf_shift-obj.obj-type   = p-obj-type
+      261             and buf_shift-obj.obj-code   = p-obj-code
+      262             and buf_shift-obj.shift-date > p-fact-date
+      263           use-index pi
+      264           no-error .
+      265         if not available buf_shift-obj
+      266         or buf_shift-obj.status_ <> 'зкр':U
+      267         then do:
+      268           message
+      269             vss-workfile vss-revision vss-description skip
+      270             "Невозможно вычислить последнюю смену" skip
+      271             "Отсутствует закрытая смена с датой большей чем дата инициализации архива" skip
+      272             "Объект" p-obj-type p-obj-code skip
+      273             "Дата" p-fact-date skip
+      274             view-as alert-box error .
+      275           undo, return error return-value .
+      276         end.
+      277         find last buf_shift-obj share-lock
+      278           where buf_shift-obj.obj-type = p-obj-type
+      279             and buf_shift-obj.obj-code = p-obj-code
+      280             and buf_shift-obj.shift-date <= p-fact-date
+      281           use-index pi
+      282           no-error .
+      283         if available buf_shift-obj
+      284         then do:
+      285           if  buf_shift-obj.status_ = 'зкр':U
+      286           then do:
+      287             assign
+      288               p-shift-date = buf_shift-obj.shift-date
+      289               p-shift-num  = buf_shift-obj.shift-num
+      290             .
+      291           end.
+      292           else do:
+      293             message
+      294               vss-workfile vss-revision vss-description skip
+      295               "Невозможно вычислить последнюю смену" skip
+      296               "Статус смены отличен от статуса" 'зкр':U skip
+      297               "Объект" p-obj-type p-obj-code skip
+      298               "Дата" p-fact-date skip
+      299               "Смена" buf_shift-obj.shift-date buf_shift-obj.shift-num skip
+      300               view-as alert-box error .
+      301             undo, return error return-value .
+      302           end.
+      303         end.
+      304         else do:
+      305           assign
+      306             p-shift-date = p-fact-date - 1
+      307             p-shift-num  = 1
+      308           .
+      309         end.
+      310       end.
+      311       run factord in this-procedure
+      312         (input  p-fact-date
+      313         ,input  1
+      314         ,input  1
+      315         ,input  p-shift-date
+      316         ,input  p-shift-num
+      317         ,input  p-shift-on
+      318         ,output v-fact-order
+      319         ,output p-shift-end-fact-order
+      320         ,output p-day-end-fact-order
+      321         ) no-error .
+      322       if error-status :error
+      323       then do:
+      324         message
+      325           vss-workfile vss-revision vss-description skip
+      326           "Ошибка при вызове процедуры factord"
+      327           error-status :get-message(1) skip
+      328           return-value skip
+      329           view-as alert-box error .
+      330         undo, return error return-value .
+      331       end.
+      332     end.
+      333   end procedure.
+      334   procedure factord-lock-shift :
+      335     define input  parameter p-obj-type  as character no-undo .
+      336     define input  parameter p-obj-code  as integer   no-undo .
+      337     define input  parameter p-fact-date as date      no-undo .
+      338     define parameter buffer buf_shift-obj for ub.shift-obj .
+      339     define variable v-shift-on      as logical   no-undo .
+      340     define variable v-extra-message as character no-undo .
+      341     define variable v-error as character no-undo .
+      342     do
+      343     on error undo, return error return-value
+      344     :
+      345   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      346   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      347     (input  p-obj-type
+      348     ,input  p-obj-code
+      349     ,input  'shift-on=request'
+      350     ,output v-shift-on
+      351     ) no-error .
+      352       if error-status :error
+      353       then do:
+      354         v-error = substitute("Ошибка при определении атрибута объекта  &1 &2 &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value) .
+      355         undo, return error v-error .
+      356       end.
+      357       if v-shift-on = true
+      358       then do:
+      359         find first buf_shift-obj share-lock
+      360           where buf_shift-obj.obj-type   = p-obj-type
+      361             and buf_shift-obj.obj-code   = p-obj-code
+      362             and buf_shift-obj.shift-date > p-fact-date
+      363           use-index pi
+      364           no-error .
+      365         if not available buf_shift-obj
+      366         or buf_shift-obj.status_ <> 'зкр':U
+      367         then do:
+      368           find last buf_shift-obj
+      369             where buf_shift-obj.obj-type = p-obj-type
+      370               and buf_shift-obj.obj-code = p-obj-code
+      371               and buf_shift-obj.status_  = 'зкр':U
+      372             use-index stts
+      373             no-error .
+      374           if available buf_shift-obj
+      375           then do:
+      376             assign
+      377               v-extra-message =
+      378                     substitute("Дата начала последеней закрытой смены на объекте &1"
+      379                               ,string(buf_shift-obj.shift-date, '99/99/9999':u)
+      380                               )
+      381             .
+      382           end.
+      383           v-error = substitute("Ошибка при блокировке смены объекта  &1 &2 Отсутствует закрытая смена с датой большей чем указанная дата  &5  &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value , p-fact-date) .
+      384           undo, return error v-error .
+      385         end.
+      386       end.
+      387     end.
+      388   end procedure.
+      389   procedure factord-end-day :
+      390     define input  parameter p-fact-date            as date    no-undo .
+      391     define output parameter p-day-end-fact-order   as decimal no-undo .
+      392     do
+      393     on error undo, return error return-value
+      394     :
+      395       if p-fact-date = ?
+      396       then do:
+      397         return error "Не указана фактическая дата" .
+      398       end.
+      399       assign
+      400         p-day-end-fact-order = integer(p-fact-date) + 0.99
+      401       .
+      402     end.
+      403   end procedure.
+      404   procedure factord-to-date :
+      405     define input  parameter p-fact-order as decimal no-undo .
+      406     define output parameter p-fact-date  as date    no-undo .
+      407     define variable v-ref-date  as date      no-undo .
+      408     define variable v-ref-delta as integer   no-undo .
+      409     do
+      410     on error undo, return error return-value
+      411     :
+      412       if p-fact-order = ?
+      413       or p-fact-order = 0
+      414       then do:
+      415         return error "Не указан fact-order" .
+      416       end.
+      417       assign
+      418         v-ref-date  = date(1, 1, 2000)
+      419       .
+      420       assign
+      421         v-ref-delta = integer(truncate(p-fact-order, 0)) - integer(v-ref-date)
+      422       .
+      423       assign
+      424         p-fact-date = v-ref-date + v-ref-delta
+      425       .
+      426     end.
+      427   end procedure.
+      428   procedure factord-to-fact-num :
+      429     define input  parameter p-fact-order as decimal no-undo .
+      430     define output parameter p-fact-num   as integer no-undo .
+      431     define variable v-fact-order-trunc as decimal no-undo .
+      432     do
+      433     on error undo, return error return-value
+      434     :
+      435       if p-fact-order = ?
+      436       or p-fact-order = 0
+      437       then do:
+      438         return error "Не указан fact-order" .
+      439       end.
+      440       assign
+      441        v-fact-order-trunc = truncate(p-fact-order, 2)
+      442       .
+      443       assign
+      444         p-fact-num = (p-fact-order - v-fact-order-trunc ) * 10000000000
+      445       .
+      446     end.
+      447   end procedure.
+      448   procedure factord-to-shift-num :
+      449     define input  parameter p-fact-order as decimal no-undo .
+      450     define output parameter p-shift-num   as integer no-undo .
+      451     define variable  p-shift-numd  as decimal   no-undo .
+      452     define variable v-fact-order-trunc as decimal no-undo .
+      453     do
+      454     on error undo, return error return-value
+      455     :
+      456       if p-fact-order = ?
+      457       or p-fact-order = 0
+      458       then do:
+      459         return error "Не указан fact-order" .
+      460       end.
+      461       assign
+      462        v-fact-order-trunc = truncate(p-fact-order, 2)  - truncate(p-fact-order,0)
+      463       .
+      464       if v-fact-order-trunc < 0.5 then do:
+      465         v-fact-order-trunc = v-fact-order-trunc + 0.5.
+      466       end.
+      467       assign
+      468         p-shift-numd = (( v-fact-order-trunc  * 100 - 50 ) + 1 ) / 2
+      469         .
+      470        assign
+      471         p-shift-num = truncate (p-shift-numd , 0)
+      472       .
+      473     end.
+      474   end procedure.
+      475   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      476   procedure cur-time :
+      477      define output parameter p-today as date      no-undo .
+      478      define output parameter p-time  as integer   no-undo .
+      479     do
+      480     on error undo, return error
+      481     :
+      482       define variable v-date1 as date      no-undo .
+      483       define variable v-date2 as date      no-undo .
+      484       define variable v-time  as integer   no-undo .
+      485       assign
+      486         v-date1 = today
+      487         v-time  = time
+      488         v-date2 = today
+      489       .
+      490       if v-date1 <> v-date2
+      491       then do:
+      492         assign
+      493           v-date1 = today
+      494           v-time  = v-time
+      495         .
+      496       end.
+      497       assign
+      498         p-today = v-date1
+      499         p-time  = v-time
+      500       .
+      501     end.
+      502   end.
+      503   function cur-time-date returns character
+      504   :
+      505     return string(today, '99/99/9999':U) .
+      506   end.
+      507   function cur-time-mjd returns decimal
+      508   :
+      509     define variable v-date as date      no-undo .
+      510     define variable v-time as integer   no-undo .
+      511     run cur-time in this-procedure
+      512       (output v-date
+      513       ,output v-time
+      514       ) .
+      515     return integer(v-date) - 2400002 + (v-time / 86400) .
+      516   end.
+      517   function cur-time-get-ending-index returns integer
+      518   (input p-number as integer
+      519   )
+      520   :
+      521     if p-number < 0
+      522     or p-number = ?
+      523     then do:
+      524       return 1 .
+      525     end.
+      526     define variable v-rest as integer   no-undo .
+      527     assign
+      528       p-number = p-number modulo 100
+      529     .
+      530     if p-number < 20
+      531     then do:
+      532       assign
+      533         v-rest = p-number
+      534       .
+      535     end.
+      536     else do:
+      537       assign
+      538         v-rest = p-number modulo 10
+      539       .
+      540     end.
+      541     case v-rest :
+      542       when 1
+      543       then do:
+      544         return 2 .
+      545       end.
+      546       when 2 or
+      547       when 3 or
+      548       when 4
+      549       then do:
+      550         return 3 .
+      551       end.
+      552       otherwise do:
+      553         return 1 .
+      554       end.
+      555     end case .
+      556   end.
+      557   procedure cur-time-mjd-to-date :
+      558      define input  parameter i-mjd-diff as decimal no-undo.
+      559      define output parameter o-Date     as date    no-undo.
+      560      define output parameter o-Time     as integer no-undo.
+      561      define variable v-day-number as integer   no-undo .
+      562      if    i-mjd-diff < 0
+      563         or i-mjd-diff = ?
+      564      then do:
+      565         return "?" .
+      566      end.
+      567      assign
+      568         v-day-number = truncate(i-mjd-diff,0).
+      569         o-Date = date(v-day-number + 2400002).
+      570         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      571     .
+      572   end.
+      573   function cur-time-mjd-to-string returns character
+      574   (input p-mjd-diff as decimal
+      575   )
+      576   :
+      577     define variable v-day-number as integer   no-undo .
+      578     define variable v-seconds    as integer   no-undo .
+      579     define variable v-hour       as integer   no-undo .
+      580     define variable v-min        as integer   no-undo .
+      581     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      582     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      583     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      584     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      585     if p-mjd-diff < 0
+      586     or p-mjd-diff = ?
+      587     then do:
+      588       return "?" .
+      589     end.
+      590     assign
+      591       v-day-number = integer(truncate(p-mjd-diff,0))
+      592       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      593     .
+      594     if v-seconds > 86400
+      595     then do:
+      596       assign
+      597         v-seconds = 86400 - 1
+      598       .
+      599     end.
+      600     if v-seconds < 0
+      601     then do:
+      602       assign
+      603         v-seconds = 0
+      604       .
+      605     end.
+      606     assign
+      607       v-hour = truncate(v-seconds / 3600, 0)
+      608     .
+      609     assign
+      610       v-seconds = v-seconds modulo 3600
+      611     .
+      612     assign
+      613       v-min = truncate(v-seconds / 60, 0)
+      614     .
+      615     assign
+      616       v-seconds = v-seconds modulo 60
+      617     .
+      618     return
+      619         (if v-day-number <> 0
+      620           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      621           else ""
+      622         )
+      623       + (if v-day-number <> 0 or v-hour <> 0
+      624           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      625           else ""
+      626         )
+      627       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      628           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      629           else ""
+      630         )
+      631       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      632       .
+      633   end.
+      634   function cur-time-string returns character
+      635   :
+      636     define variable v-date as date      no-undo .
+      637     define variable v-time as integer   no-undo .
+      638     run cur-time in this-procedure
+      639       (output v-date
+      640       ,output v-time
+      641       ) .
+      642     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      643   end.
+      644   function cur-time-string-sec returns character
+      645   :
+      646     define variable v-date as date      no-undo .
+      647     define variable v-time as integer   no-undo .
+      648     run cur-time in this-procedure
+      649       (output v-date
+      650       ,output v-time
+      651       ) .
+      652     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      653   end.
+      654   function cur-time-custom  returns character
+      655   (input p-prefix as character
+      656   ,input p-date-format as character
+      657   ,input p-delimiter as character
+      658   ,input p-time-format as character
+      659   ,input p-suffix as character
+      660   )
+      661   :
+      662     define variable v-date as date      no-undo .
+      663     define variable v-time as integer   no-undo .
+      664     run cur-time in this-procedure
+      665       (output v-date
+      666       ,output v-time
+      667       ) .
+      668     return
+      669       p-prefix
+      670       + string(v-date, p-date-format)
+      671       + p-delimiter
+      672       + string(v-time, p-time-format)
+      673       + p-suffix
+      674       .
+      675   end.
+      676   function cur-time-print  returns character
+      677   :
+      678     define variable v-date as date      no-undo .
+      679     define variable v-time as integer   no-undo .
+      680     run cur-time in this-procedure
+      681       (output v-date
+      682       ,output v-time
+      683       ) .
+      684     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      685   end.
+      686   function cur-time-datetime returns datetime
+      687   :
+      688     define variable v-char as character no-undo .
+      689     define variable v-datetime as datetime no-undo .
+      690     v-char = cur-time-string().
+      691     v-datetime = datetime(v-char).
+      692     return  v-datetime.
+      693   end.
+      694   function cur-time-string-msec returns character
+      695   :
+      696     define variable v-date as datetime  no-undo .
+      697     v-date = now.
+      698     return string(v-date) .
+      699   end.
+      700   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      701   define variable v-waitfram-action01         as character   no-undo .
+      702   define variable v-waitfram-action02         as character   no-undo .
+      703   define variable v-waitfram-action03         as character   no-undo .
+      704   define variable mWaitFramTextBeg            as character   no-undo.
+      705   define variable mWaitFramTextEnd            as character   no-undo.
+      706   define variable mWaitFramView               as logical     no-undo.
+      707   define variable mWaitProcEvent              as logical     no-undo init yes.
+      708   define variable mWaitFramInterval           as integer     no-undo init 1 .
+      709   define variable mWaitFramStop               as logical     no-undo.
+      710   define variable mWaitFramStopUser           as logical     no-undo.
+      711   define variable mWaitFramStopTimeOut        as logical     no-undo.
+      712   define variable mWaitFramStartProc          as datetime-tz no-undo.
+      713   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+      714   define button B-WaitFramStop auto-end-key
+      715        label "Стоп"
+      716        size 10 by 1 tooltip "Остоновить процесс".
+      717   define button B-viewProcInfo
+      718        label "Информация"
+      719        size 15 by 1 tooltip "Информация о процесс".
+      720   define frame waitfram
+      721     v-waitfram-action01 format "x(72)" no-label skip
+      722     v-waitfram-action02 format "x(72)" no-label skip
+      723     v-waitfram-action03 format "x(72)" no-label skip
+      724     B-viewProcInfo
+      725     B-WaitFramStop at row 4 col 30
+      726     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+      727     .
+      728   define new global shared variable mBatchMode as logical no-undo init ?.
+      729   define variable mFramBachModHandle as handle no-undo.
+      730   mFramBachModHandle = frame waitfram:handle.
+      731   define variable mFameOldVis as logical no-undo.
+      732   define variable mVisCUrentVin as logical no-undo.
+      733   if session:batch-mode
+      734   then
+      735      mBatchMode = yes.
+      736   if mBatchMode = ? then do:
+      737     mVisCUrentVin = current-window:visible.
+      738     mFameOldVis = mFramBachModHandle:visible.
+      739     mFramBachModHandle:visible  = yes.
+      740     mBatchMode = mFramBachModHandle:visible ne yes.
+      741     mFramBachModHandle:visible = mFameOldVis.
+      742     current-window:visible = mVisCUrentVin.
+      743   end.
+      744    if  log-manager:logfile-name ne ?
+      745     then DO:
+      746         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      747         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      748         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+      749     end.
+      750   on choose of B-WaitFramStop in frame waitfram
+      751   do:
+      752     mWaitFramStop = yes.
+      753     mWaitFramStopUser = yes.
+      754   end.
+      755   function waitfram-check-timeout returns logical():
+      756      define variable vtime as int64 no-undo.
+      757      if mWaitFramStopTimeOut
+      758      then
+      759         return yes.
+      760      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      761      if     mWaitFramTimeOut ne ?
+      762         and mWaitFramTimeOut ne 0
+      763         and mWaitFramTimeOut lt vtime
+      764      then do:
+      765         mWaitFramStopTimeOut = yes.
+      766      end.
+      767      return mWaitFramStopTimeOut.
+      768   end.
+      769   procedure waitfram-hide :
+      770     if not session:batch-mode
+      771     then do
+      772     on error undo, return error return-value
+      773     :
+      774       pause 0 before-hide .
+      775       if not mBatchMode then
+      776         hide frame waitfram .
+      777     if     not mWaitFramView
+      778        and mWaitProcEvent
+      779     then
+      780       process events .
+      781     end.
+      782   end procedure.
+      783   procedure waitfram-show :
+      784     define input  parameter p-message as character no-undo .
+      785     define variable v-left-margin as integer   no-undo .
+      786     if not session:batch-mode
+      787     then do
+      788     on error undo, return error return-value
+      789     :
+      790       if length(p-message) <= 70 then do:
+      791         assign
+      792           v-left-margin = integer((70 - length(p-message)) / 2)
+      793         .
+      794         assign
+      795           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      796         .
+      797         assign
+      798           v-waitfram-action01 = " "
+      799           v-waitfram-action02 = " "
+      800                                    + fill(" ", v-left-margin)
+      801                                    + p-message
+      802           v-waitfram-action03 = " "
+      803         .
+      804       end.
+      805       else do:
+      806         define variable vRindex1 as integer no-undo.
+      807         define variable vRindex2 as integer no-undo.
+      808         vRindex1 = r-index(p-message," ",70).
+      809         if vRindex1 = 0
+      810         then
+      811            vRindex1 = 70.
+      812         if length(p-message)  <= vRindex1 + 70 then do:
+      813           assign
+      814             v-waitfram-action01 = " "
+      815             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+      816             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+      817           .
+      818         end.
+      819         else do:
+      820           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+      821           if vRindex2 <= vRindex1
+      822           then
+      823              vRindex2 = vRindex1 + 70.
+      824           assign
+      825             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+      826             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+      827             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+      828           .
+      829         end.
+      830       end.
+      831       B-viewProcInfo:visible   in frame waitfram = no.
+      832       B-viewProcInfo:sensitive in frame waitfram = no.
+      833       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      834       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      835       if  (   mWaitFramView
+      836          or  mWaitProcEvent)
+      837          and not mBatchMode
+      838       then
+      839          display
+      840             v-waitfram-action01 skip
+      841             v-waitfram-action02 skip
+      842             v-waitfram-action03 skip
+      843          with frame waitfram .
+      844       if     mWaitFramView
+      845          then do:
+      846             if     mWaitFramInterval ne ?
+      847                and not mBatchMode
+      848             then
+      849                wait-for go of frame waitfram pause mWaitFramInterval.
+      850          end.
+      851          else
+      852             if     mWaitProcEvent
+      853                and not mBatchMode
+      854             then
+      855                process events .
+      856     end.
+      857   end procedure.
+      858      procedure waitfram-show-this:
+      859         define input  parameter iInterval as int64 no-undo.
+      860         define variable vtime as int64 no-undo.
+      861         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      862         mWaitFramInterval = iInterval.
+      863         run waitfram-show (substitute("&1&2 &3&4" ,
+      864                                       mWaitFramTextBeg ,
+      865                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+      866                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+      867                                       mWaitFramTextEnd
+      868                                      )
+      869                           ).
+      870      end.
+      871      procedure WaitFramRunPause:
+      872         define input  parameter iInterval as dec no-undo.
+      873         define variable vStart  as datetime-tz no-undo.
+      874         define variable vend    as datetime-tz no-undo.
+      875         define variable vint as int64 no-undo.
+      876         define variable vOk as logical no-undo.
+      877         vStart = now.
+      878         vend   = vStart.
+      879         publish "WaitFramPause" (iInterval,output vOk).
+      880         vend   =  now.
+      881         vint = vend - vStart.
+      882         vint = iInterval - vint / 1000.
+      883         if     not mWaitFramStop
+      884            and (   vint > 0
+      885                 or (    not vOk
+      886                     and iInterval eq ?
+      887                     )
+      888                 )
+      889         then
+      890            run waitfram-show-this (iInterval).
+      891         vend   =  now.
+      892         vint = vend - vStart.
+      893         vint = iInterval - vint / 1000.
+      894         if     not mWaitFramStop
+      895            and vint > 0
+      896         then do:
+      897            run gbl/pause.p (vint * 1000).
+      898         end.
+      899         if iInterval ne ?
+      900         then
+      901            publish "WaitFramStop".
+      902         waitfram-check-timeout().
+      903      end.
+      904      procedure WaitFramWaitFor:
+      905         define input  parameter iInterval as dec no-undo.
+      906         assign
+      907            mWaitFramStartProc   = now
+      908            mWaitFramStopUser    = no
+      909            mWaitFramStopTimeOut = no
+      910         .
+      911         block-wait:
+      912         do while not mWaitFramStop:
+      913            run WaitFramRunPause (iInterval).
+      914            if  waitfram-check-timeout()
+      915            then do:
+      916               leave block-wait.
+      917            end.
+      918         end.
+      919         run waitfram-hide.
+      920      end.
+      921   procedure waitfram-join :
+      922     define input  parameter p-line-1  as character no-undo .
+      923     define input  parameter p-line-2  as character no-undo .
+      924     define input  parameter p-line-3  as character no-undo .
+      925     define output parameter p-message as character no-undo .
+      926     do
+      927     on error undo, return error return-value
+      928     :
+      929       assign
+      930         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+      931                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+      932                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+      933       .
+      934     end.
+      935   end procedure.
+      936   function waitfram-join-function returns character
+      937     (input p-line-1 as character
+      938     ,input p-line-2 as character
+      939     ,input p-line-3 as character
+      940     ).
+      941     define variable v-message as character no-undo .
+      942     run waitfram-join in this-procedure
+      943       (input  p-line-1
+      944       ,input  p-line-2
+      945       ,input  p-line-3
+      946       ,output v-message
+      947       ) .
+      948     return v-message .
+      949   end function .
+      950   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      951   procedure cli-grplib-get-full-name :
+      952      define input parameter  p-node-code  as integer      no-undo.
+      953      define output parameter p-full-name as character    no-undo.
+      954   do
+      955   on error undo, return error
+      956   :
+      957       define variable v-upper-code    as integer           no-undo.
+      958       define buffer buf_cli-grp       for ub.cli-grp.
+      959       define buffer buf_upper_cli-grp for ub.cli-grp.
+      960       find first buf_cli-grp no-lock
+      961            where buf_cli-grp.node-code = p-node-code
+      962       no-error.
+      963       if not available buf_cli-grp
+      964       then do:
+      965           undo, return error "cli-grplib-get-full-name: Не найдена группа клиентов с кодом " + string( p-node-code ).
+      966       end.
+      967       assign
+      968           p-full-name  = ""
+      969           v-upper-code = 1
+      970       .
+      971       do while buf_cli-grp.upper-code <> 0
+      972       on error undo, return error "grplib-get-full-name: Ошибка составления полного имени группы"
+      973       :
+      974           assign
+      975               p-full-name  = buf_cli-grp.node-name
+      976                            + (if p-full-name <> "" then chr(47) else "")
+      977                            + p-full-name
+      978               v-upper-code = buf_cli-grp.upper-code
+      979           .
+      980           find first buf_cli-grp no-lock
+      981                where buf_cli-grp.node-code = v-upper-code
+      982           no-error.
+      983           if not available buf_cli-grp
+      984           then do:
+      985               undo, return error "cli-grplib-get-full-name: Не найдена группа клиентов с кодом "
+      986                                   + string( v-upper-code )
+      987                                   + ". Ошибка ссылки в дереве товаров для узла p-node-code".
+      988           end.
+      989       end.
+      990       assign
+      991       p-full-name = p-full-name + (if p-full-name = "":U then "":U else chr(47))
+      992       .
+      993   end.
+      994   end .
+      995   procedure cgrplib-get-node-from-full-name :
+      996   define input parameter p-full-name as character no-undo .
+      997   define output parameter p-node-code as integer no-undo .
+      998   define variable v-ii as integer no-undo .
+      999   define variable v-upper-code as integer no-undo .
+     1000   define variable v-root-code as integer no-undo .
+     1001   define variable v-entry as character no-undo .
+     1002   define buffer buf_cli-grp       for ub.cli-grp.
+     1003   do
+     1004   on error undo, return error
+     1005   :
+     1006     find first buf_cli-grp no-lock
+     1007         where buf_cli-grp.upper-code = 0
+     1008     no-error .
+     1009     if not available buf_cli-grp
+     1010     then do:
+     1011         undo, return error substitute("Не найдена корневая группа клиентов (upper-code = 0)").
+     1012     end.
+     1013     else do:
+     1014       assign
+     1015       v-root-code = buf_cli-grp.node-code
+     1016       .
+     1017     end.
+     1018     v-upper-code = v-root-code.
+     1019     do v-ii = 1 to num-entries(p-full-name, chr(47)):
+     1020       assign
+     1021       v-entry = entry(v-ii, p-full-name, chr(47)).
+     1022       if v-entry = '' then leave.
+     1023       find first buf_cli-grp no-lock where
+     1024                 buf_cli-grp.node-name = v-entry
+     1025             and buf_cli-grp.upper-code = v-upper-code
+     1026             no-error.
+     1027       if not available buf_cli-grp then do:
+     1028         undo, return error substitute("Не найдена подгруппа &1 в группе с вн. кодом &2", v-entry, v-upper-code).
+     1029       end.
+     1030       else do:
+     1031         p-node-code = buf_cli-grp.node-code.
+     1032         v-upper-code = buf_cli-grp.node-code.
+     1033       end.
+     1034     end.
+     1035   end.
+     1036   end .
+     1037   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1038   procedure gen-b-code :
+     1039     define input  parameter type-code like ub.code-range.range-type no-undo .
+     1040     define output parameter p-b-code  like ub.bar-code.b-code       no-undo .
+     1041     do
+     1042     on error  undo, return error substitute( "&1 (gen-b-code). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1043     on stop   undo, return error substitute( "&1 (gen-b-code). stop", vss-workfile )
+     1044     on endkey undo, return error substitute( "&1 (gen-b-code). endkey", vss-workfile )
+     1045     :
+     1046       define buffer buf_thbj-attr     for ub.thbj-attr .
+     1047       define buffer buf_sys-ctrl   for ub.sys-ctrl .
+     1048       define buffer buf_code-range for ub.code-range .
+     1049       define variable l-code         as   integer              no-undo .
+     1050       define variable v-db-num       like ub.db.db-num         no-undo .
+     1051       define variable cfg-param-code like ub.thbj-attr.prop-code no-undo .
+     1052       if type-code = 'sslc':U
+     1053       or type-code = 'ssgb':U
+     1054       then do:
+     1055         message
+     1056           "Нельзя генерировать локальный или глобальный взвешиваемый код." skip
+     1057           "Обратитесь к администратору системы."
+     1058           view-as alert-box error .
+     1059         undo, return error (if type-code = 'sslc':U then "loc-ss-code":U else "gbl-ss-code" ) .
+     1060       end.
+     1061       run trg/getpcode.p ( input  type-code
+     1062                      ,output cfg-param-code
+     1063                     ).
+     1064       run get-next-seq( input  type-code,
+     1065                         output l-code
+     1066                       ).
+     1067       find first buf_sys-ctrl no-lock.
+     1068       if type-code = 'sclc':U
+     1069       or type-code = 'pglc':U
+     1070       then do:
+     1071         assign
+     1072           v-db-num = 0
+     1073         .
+     1074       end.
+     1075       else do:
+     1076         assign
+     1077           v-db-num = buf_sys-ctrl.db-num
+     1078         .
+     1079       end.
+     1080       find first buf_code-range no-lock
+     1081         where buf_code-range.db-num     = v-db-num
+     1082           and buf_code-range.range-type = type-code
+     1083           and buf_code-range.stts       = "a"
+     1084         use-index stts
+     1085         no-error .
+     1086       if available buf_code-range
+     1087          and l-code <= buf_code-range.last-code
+     1088          and l-code >= buf_code-range.first-code then do:
+     1089         assign
+     1090           p-b-code = l-code
+     1091         .
+     1092       end.
+     1093       else do:
+     1094         if available buf_code-range
+     1095            and l-code < buf_code-range.last-code then do:
+     1096           message
+     1097             substitute( "Последовательность для создания кодов с типом &1 имеет неверное значение.", type-code ) skip
+     1098             "Обратитесь к администратору системы."
+     1099             view-as alert-box error .
+     1100           undo, return error "sequence":U .
+     1101         end.
+     1102         do transaction
+     1103         on error undo, return error
+     1104         :
+     1105           find first buf_thbj-attr exclusive-lock
+     1106             where buf_thbj-attr.upper-prop-code = 'code-range':U
+     1107               and buf_thbj-attr.prop-code = cfg-param-code
+     1108               and buf_thbj-attr.obj-type   = 'БД':U
+     1109               and buf_thbj-attr.obj-code   = v-db-num
+     1110             no-error .
+     1111           if not available buf_thbj-attr then do:
+     1112             find first buf_thbj-attr exclusive-lock
+     1113               where buf_thbj-attr.upper-prop-code = 'code-range':U
+     1114                 and buf_thbj-attr.prop-code = cfg-param-code
+     1115                 and buf_thbj-attr.obj-type   = ''
+     1116                 and buf_thbj-attr.obj-code   = 0
+     1117               no-error .
+     1118             if not available buf_thbj-attr then do:
+     1119               if not locked buf_thbj-attr then do:
+     1120                 message
+     1121                   substitute( "Отсутствует параметр 'длина диапазона кодов' (&1) для БД &2.", cfg-param-code, buf_sys-ctrl.db-num ) skip
+     1122                   "Обратитесь к администратору системы."
+     1123                   view-as alert-box error .
+     1124               end.
+     1125               undo, return error "config":U .
+     1126             end.
+     1127           end.
+     1128           run get-next-seq( input type-code,
+     1129                             output l-code
+     1130                           ).
+     1131           find first buf_code-range
+     1132             where buf_code-range.db-num     = v-db-num
+     1133               and buf_code-range.range-type = type-code
+     1134               and buf_code-range.stts       = "a"
+     1135             use-index stts
+     1136             no-error .
+     1137           if available buf_code-range
+     1138           and l-code <= buf_code-range.last-code
+     1139           and l-code >= buf_code-range.first-code
+     1140           then do:
+     1141             assign
+     1142               p-b-code = l-code
+     1143             .
+     1144           end.
+     1145           else do:
+     1146             if available buf_code-range then do:
+     1147               assign
+     1148                 buf_code-range.stts = "u"
+     1149               .
+     1150             end.
+     1151             find first buf_code-range
+     1152               where buf_code-range.db-num     = v-db-num
+     1153                 and buf_code-range.range-type = type-code
+     1154                 and buf_code-range.stts       = "f"
+     1155               use-index stts
+     1156               no-error .
+     1157             if not available buf_code-range then do:
+     1158               message
+     1159                 substitute( "Отсутствует свободный диапазон для кодов с типом &1.", type-code ) skip
+     1160                 "Обратитесь к администратору системы"
+     1161                 view-as alert-box error .
+     1162               undo, return error "code-range":U .
+     1163             end.
+     1164             assign
+     1165               buf_code-range.stts           = "a"
+     1166             .
+     1167             if buf_code-range.first-code = 1 then do:
+     1168               run set-seq-cr( input type-code,
+     1169                               input buf_code-range.first-code
+     1170                             ).
+     1171               assign
+     1172                 p-b-code = 1
+     1173               .
+     1174             end.
+     1175             else do:
+     1176               run set-seq-cr( input type-code,
+     1177                               input ( buf_code-range.first-code - 1 )
+     1178                             ).
+     1179               run get-next-seq( input type-code,
+     1180                                 output p-b-code
+     1181                               ).
+     1182             end.
+     1183           end.
+     1184         end.
+     1185       end.
+     1186     end.
+     1187   end procedure.
+     1188   procedure get-next-seq :
+     1189     define input  parameter type-code like ub.code-range.range-type no-undo .
+     1190     define output parameter next-seq  as   integer                  no-undo .
+     1191     do
+     1192     on error  undo, return error substitute( "&1 (get-next-seq). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1193     on stop   undo, return error substitute( "&1 (get-next-seq). stop", vss-workfile )
+     1194     on endkey undo, return error substitute( "&1 (get-next-seq). endkey", vss-workfile )
+     1195     :
+     1196       case type-code:
+     1197         when 'bcgb':U then do:
+     1198           assign
+     1199             next-seq = next-value(s-bcgb-code, ub)
+     1200           .
+     1201         end.
+     1202         when 'scgb':U then do:
+     1203           assign
+     1204             next-seq = next-value(s-scgb-code, ub)
+     1205           .
+     1206         end.
+     1207         when 'sclc':U then do:
+     1208           assign
+     1209             next-seq = next-value(s-sclc-code, ub)
+     1210           .
+     1211         end.
+     1212         when 'pglc':U then do:
+     1213           assign
+     1214             next-seq = next-value(s-pglc-code, ub)
+     1215           .
+     1216         end.
+     1217         when 'dcgb':U then do:
+     1218           assign
+     1219             next-seq = next-value(s-dcgb-code, ub)
+     1220           .
+     1221         end.
+     1222         when 'ctgb':U then do:
+     1223           assign
+     1224             next-seq = next-value(s-ctgb-code, ub)
+     1225           .
+     1226         end.
+     1227         when 'drgb':U then do:
+     1228           assign
+     1229             next-seq = next-value(s-drgb-code, ub)
+     1230           .
+     1231         end.
+     1232         when 'fmgb':U then do:
+     1233           assign
+     1234             next-seq = next-value(s-fmgb-code, ub)
+     1235           .
+     1236         end.
+     1237         when 'pngb':U then do:
+     1238           assign
+     1239             next-seq = next-value(s-pngb-code, ub)
+     1240           .
+     1241         end.
+     1242         when 'cagb':U then do:
+     1243           assign
+     1244             next-seq = next-value(s-cagb-code, ub)
+     1245           .
+     1246         end.
+     1247         when 'fdgb':U then do:
+     1248           assign
+     1249             next-seq = next-value(s-fin-doc, ub)
+     1250           .
+     1251         end.
+     1252       end case.
+     1253     end.
+     1254   end procedure.
+     1255   procedure set-seq-cr :
+     1256     define input parameter type-code like ub.code-range.range-type no-undo .
+     1257     define input parameter set-val   like ub.code-range.first-code no-undo .
+     1258     do
+     1259     on error  undo, return error substitute( "&1 (set-seq-cr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1260     on stop   undo, return error substitute( "&1 (set-seq-cr). stop", vss-workfile )
+     1261     on endkey undo, return error substitute( "&1 (set-seq-cr). endkey", vss-workfile )
+     1262     :
+     1263       case type-code:
+     1264         when 'bcgb':U then do:
+     1265           assign
+     1266             current-value(s-bcgb-code, ub) = set-val
+     1267           .
+     1268         end.
+     1269         when 'scgb':U then do:
+     1270           assign
+     1271             current-value(s-scgb-code, ub) = set-val
+     1272           .
+     1273         end.
+     1274         when 'sclc':U then do:
+     1275           assign
+     1276             current-value(s-sclc-code, ub) = set-val
+     1277           .
+     1278         end.
+     1279         when 'pglc':U then do:
+     1280           assign
+     1281             current-value(s-pglc-code, ub) = set-val
+     1282           .
+     1283         end.
+     1284         when 'dcgb':U then do:
+     1285           assign
+     1286             current-value(s-dcgb-code, ub) = set-val
+     1287           .
+     1288         end.
+     1289         when 'ctgb':U then do:
+     1290           assign
+     1291             current-value(s-ctgb-code, ub) = set-val
+     1292           .
+     1293         end.
+     1294         when 'drgb':U then do:
+     1295           assign
+     1296             current-value(s-drgb-code, ub) = set-val
+     1297           .
+     1298         end.
+     1299         when 'fmgb':U then do:
+     1300           assign
+     1301             current-value(s-fmgb-code, ub) = set-val
+     1302           .
+     1303         end.
+     1304         when 'pngb':U then do:
+     1305           assign
+     1306             current-value(s-pngb-code, ub) = set-val
+     1307           .
+     1308         end.
+     1309         when 'cagb':U then do:
+     1310           assign
+     1311             current-value(s-cagb-code, ub) = set-val
+     1312           .
+     1313         end.
+     1314         when 'fdgb':U then do:
+     1315           assign
+     1316             current-value(s-fin-doc, ub) = set-val
+     1317           .
+     1318         end.
+     1319       end case.
+     1320     end.
+     1321   end procedure.
+     1322   procedure new-bcod-gen-code-range :
+     1323     do
+     1324     on error  undo, return error substitute( "&1 (new-bcod-gen-code-range). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1325     on stop   undo, return error substitute( "&1 (new-bcod-gen-code-range). stop", vss-workfile )
+     1326     on endkey undo, return error substitute( "&1 (new-bcod-gen-code-range). endkey", vss-workfile )
+     1327     :
+     1328       define input parameter p-db-num  like ub.db.db-num             no-undo .
+     1329       define input parameter type-code like ub.code-range.range-type no-undo .
+     1330       define buffer buf_code-range      for ub.code-range .
+     1331       define buffer last_code-range     for ub.code-range .
+     1332       define buffer last-1_code-range   for ub.code-range .
+     1333       define buffer last-2_code-range   for ub.code-range .
+     1334       define buffer last-3_code-range   for ub.code-range .
+     1335       define buffer buf_sys-ctrl        for ub.sys-ctrl .
+     1336       define variable conf-par       as character no-undo .
+     1337       define variable par-type       as character no-undo .
+     1338       define variable cfg-param-code like ub.thbj-attr.prop-code no-undo .
+     1339       define variable v-cre-cdrg as logical   no-undo .
+     1340       define variable v-cre-str  as character no-undo .
+     1341       define variable v-cr1      as integer no-undo .
+     1342       define variable v-cr2      as integer no-undo .
+     1343       define variable v-cr3      as integer no-undo .
+     1344       define variable v-cmax     as integer no-undo .
+     1345       find first buf_sys-ctrl no-lock .
+     1346       if buf_sys-ctrl.db-num <> 0 and type-code <> 'cagb':U then do:
+     1347         undo, return error substitute("&1 &2 &3&4Диапазоны кодов можно создавать только в ГБД&4База данных &5"
+     1348                                       ,vss-workfile
+     1349                                       ,vss-revision
+     1350                                       ,vss-description
+     1351                                       ,chr(10)
+     1352                                       , p-db-num
+     1353                                      ).
+     1354       end.
+     1355       run trg/getpcode.p ( input  type-code
+     1356                      ,output cfg-param-code
+     1357                     ).
+     1358       for each buf_code-range
+     1359         where buf_code-range.db-num     = -1
+     1360           and buf_code-range.range-type = type-code
+     1361           and buf_code-range.stts       = "f"
+     1362       by buf_code-range.first-code
+     1363       on error  undo, return error substitute( "&1 (new-bcod-gen-code-range). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1364       on stop   undo, return error substitute( "&1 (new-bcod-gen-code-range). stop", vss-workfile )
+     1365       on endkey undo, return error substitute( "&1 (new-bcod-gen-code-range). endkey", vss-workfile )
+     1366       :
+     1367         assign
+     1368           buf_code-range.db-num = p-db-num
+     1369         .
+     1370         return .
+     1371       end.
+     1372       assign
+     1373         v-cre-cdrg = TRUE
+     1374       .
+     1375       case type-code:
+     1376         when 'sclc':U
+     1377         or when 'scgb':U
+     1378         or when 'pglc':U
+     1379         then do:
+     1380           find last last-1_code-range no-lock
+     1381             where last-1_code-range.range-type = 'sclc':U
+     1382             no-error .
+     1383           if available last-1_code-range then do:
+     1384             v-cr1 = last-1_code-range.last-code.
+     1385           end.
+     1386           find last last-2_code-range no-lock
+     1387             where last-2_code-range.range-type = 'scgb':U
+     1388             no-error .
+     1389           if available last-2_code-range then do:
+     1390             v-cr2 = last-2_code-range.last-code.
+     1391             end.
+     1392           find last last-3_code-range no-lock
+     1393             where last-3_code-range.range-type = 'pglc':U
+     1394             no-error .
+     1395           if available last-3_code-range then do:
+     1396             v-cr3 = last-3_code-range.last-code.
+     1397           end.
+     1398           v-cmax = maximum(v-cr1, v-cr2, v-cr3)
+     1399           .
+     1400           if v-cmax = v-cr1  then do:
+     1401               find last last_code-range no-lock
+     1402                 where recid( last_code-range ) = recid( last-1_code-range )
+     1403                 .
+     1404             end.
+     1405           if v-cmax = v-cr2  then do:
+     1406               find last last_code-range no-lock
+     1407                 where recid( last_code-range ) = recid( last-2_code-range )
+     1408                 .
+     1409             end.
+     1410           if v-cmax = v-cr3  then do:
+     1411             find last last_code-range no-lock
+     1412               where recid( last_code-range ) = recid( last-3_code-range )
+     1413               .
+     1414           end.
+     1415           if last_code-range.last-code + 1 > 99999 then do:
+     1416             assign
+     1417               v-cre-cdrg = FALSE
+     1418             .
+     1419           end.
+     1420         end.
+     1421         when 'bcgb':U
+     1422         or when 'sslc':U
+     1423         or when 'ssgb':U
+     1424         then do:
+     1425           find last last-1_code-range no-lock
+     1426             where last-1_code-range.range-type = 'sslc':U
+     1427             no-error .
+     1428           if available last-1_code-range then do:
+     1429             v-cr1 = last-1_code-range.last-code.
+     1430           end.
+     1431           find last last-2_code-range no-lock
+     1432             where last-2_code-range.range-type = 'bcgb':U
+     1433             no-error .
+     1434           if available last-2_code-range then do:
+     1435             v-cr2 = last-2_code-range.last-code.
+     1436             end.
+     1437           find last last-3_code-range no-lock
+     1438             where last-3_code-range.range-type = 'ssgb':U
+     1439             no-error .
+     1440           if available last-3_code-range then do:
+     1441             v-cr3 = last-3_code-range.last-code.
+     1442           end.
+     1443           v-cmax = maximum(v-cr1, v-cr2, v-cr3)
+     1444           .
+     1445           if v-cmax = v-cr1  then do:
+     1446               find last last_code-range no-lock
+     1447                 where recid( last_code-range ) = recid( last-1_code-range )
+     1448                 .
+     1449             end.
+     1450           if v-cmax = v-cr2  then do:
+     1451               find last last_code-range no-lock
+     1452                 where recid( last_code-range ) = recid( last-2_code-range )
+     1453                 .
+     1454             end.
+     1455           if v-cmax = v-cr3  then do:
+     1456             find last last_code-range no-lock
+     1457               where recid( last_code-range ) = recid( last-3_code-range )
+     1458               .
+     1459           end.
+     1460         end.
+     1461         otherwise do:
+     1462           find last last_code-range no-lock
+     1463             where last_code-range.range-type = type-code
+     1464             no-error .
+     1465         end.
+     1466       end case.
+     1467       if not available last_code-range then do:
+     1468         undo, return error substitute("&1 &2 &3&4В БД нет ни одного диапазона с типом &5&4Не была проведена инициализация диапазонов!"
+     1469                                       ,vss-workfile
+     1470                                       ,vss-revision
+     1471                                       ,vss-description
+     1472                                       , chr(10)
+     1473                                       , type-code
+     1474                                      ) .
+     1475       end.
+     1476       define variable v-mes6 as character no-undo .
+     1477       define variable v-param-type6 as character no-undo .
+     1478       define variable v-value-character6 as INTEGER no-undo .
+     1479       define variable v-value-date6 as date no-undo .
+     1480       define variable v-value-decimal6 as decimal no-undo .
+     1481       define variable v-value-integer6 AS integer no-undo .
+     1482       define variable v-value-logical6 AS LOGICAL no-undo .
+     1483       define variable v-tth6 as handle no-undo .
+     1484       run adm/shattri.p (
+     1485           input "get":U
+     1486           ,input  'БД':U
+     1487           ,input  p-db-num
+     1488           ,input  'code-range':U
+     1489           ,input  cfg-param-code
+     1490           ,output v-value-character6
+     1491           ,output v-value-date6
+     1492           ,output v-value-decimal6
+     1493           ,output v-value-integer6
+     1494           ,output v-value-logical6
+     1495           ,output v-param-type6
+     1496           ,INPUT-OUTPUT table-handle v-tth6
+     1497           ) no-error .
+     1498       if error-status :error then do:
+     1499         delete object v-tth6.
+     1500         v-mes6 = substitute("Ошибка при получении размера диапазона собственных глобальных кодов&2&1&2&3"
+     1501                            , error-status:get-message(1)
+     1502                            , chr(10)
+     1503                            , return-value ).
+     1504         undo, return error v-mes6.
+     1505       end.
+     1506       delete object v-tth6.
+     1507       if v-cre-cdrg = TRUE then do:
+     1508         create buf_code-range .
+     1509         assign
+     1510           buf_code-range.db-num     = p-db-num
+     1511           buf_code-range.range-type = type-code
+     1512           buf_code-range.stts       = "f"
+     1513           buf_code-range.first-code = last_code-range.last-code + 1
+     1514           buf_code-range.last-code  = last_code-range.last-code + integer(v-value-integer6)
+     1515           v-cre-str = "Свободный диапазон успешно создан"
+     1516         .
+     1517       end.
+     1518       else do:
+     1519         assign
+     1520           v-cre-str = "Нет возможности создать свободный диапазон." + chr(10)
+     1521                       + substitute( "Превышен предел диапазонов c типом &1", type-code )
+     1522         .
+     1523       end.
+     1524     end.
+     1525     return v-cre-str .
+     1526   end procedure.
+     1527   procedure gen-new-code-range-if-neces :
+     1528     define input parameter v-db-num           like ub.db.db-num             no-undo .
+     1529     define input parameter v-range-type       like ub.code-range.range-type no-undo .
+     1530     define input parameter v-cur-code         as   integer                  no-undo .
+     1531     define input parameter v-g#news           as   logical                  no-undo .
+     1532     define input parameter v-g#db-num         like ub.db.db-num             no-undo .
+     1533     define input parameter v-g#news-source-db like ub.db.db-num             no-undo .
+     1534     do
+     1535     on error  undo, return error substitute( "&1 (gen-new-code-range-if-neces). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1536     on stop   undo, return error substitute( "&1 (gen-new-code-range-if-neces). stop", vss-workfile )
+     1537     on endkey undo, return error substitute( "&1 (gen-new-code-range-if-neces). endkey", vss-workfile )
+     1538     :
+     1539       define variable l-code-range-exist as logical   no-undo init false .
+     1540       define variable v-db-for-send      as character no-undo .
+     1541       define buffer buf_code-range  for ub.code-range .
+     1542       define buffer buf1_code-range for ub.code-range .
+     1543       define buffer buf_db          for ub.db .
+     1544       find first buf_code-range
+     1545         where buf_code-range.range-type = v-range-type
+     1546           and buf_code-range.last-code >= v-cur-code
+     1547         use-index last-codei
+     1548         no-error .
+     1549       if
+     1550       (
+     1551          available buf_code-range
+     1552          and
+     1553         (buf_code-range.db-num = v-db-num
+     1554           and
+     1555         buf_code-range.first-code <= v-cur-code
+     1556         )
+     1557       or
+     1558         (
+     1559           v-range-type = 'drgb':U
+     1560           AND
+     1561           v-cur-code = 0
+     1562         )
+     1563      )
+     1564      then do:
+     1565         assign
+     1566           l-code-range-exist = true
+     1567         .
+     1568         if v-g#news
+     1569         and buf_code-range.stts = "f" then do:
+     1570           assign
+     1571             buf_code-range.stts = "u"
+     1572           .
+     1573         end.
+     1574       end.
+     1575       if not l-code-range-exist
+     1576          and v-g#news-source-db <> 0
+     1577       then do:
+     1578         undo, return error substitute("&1 &2 &3&4Отсутствует диапазон кодов для БД &5 Тип диапазона кодов &6 Код &7"
+     1579                                       ,vss-workfile
+     1580                                       ,vss-revision
+     1581                                       ,vss-description
+     1582                                       ,chr(10)
+     1583                                       ,v-db-num
+     1584                                       ,v-range-type
+     1585                                       ,v-cur-code
+     1586                                      ).
+     1587       end.
+     1588       if (not l-code-range-exist
+     1589           or ( v-cur-code >= int( (buf_code-range.first-code + buf_code-range.last-code) / 2 ) )
+     1590          )
+     1591       and ( not can-find (first buf1_code-range no-lock
+     1592                           where buf1_code-range.db-num = v-db-num
+     1593                             and buf1_code-range.range-type = v-range-type
+     1594                             and buf1_code-range.stts = "f"
+     1595                          )
+     1596           )
+     1597       then do:
+     1598         if v-g#db-num = 0 then do:
+     1599           run new-bcod-gen-code-range in this-procedure
+     1600             (input v-db-num,
+     1601              input v-range-type
+     1602             ) no-error .
+     1603           if error-status :error then do:
+     1604             undo, return error substitute("Ошибка при создании нового свободного диапазона &1 Тип диапазона кодов &2 Код &3:&4&5 &6"
+     1605                                           , substitute("&1 &2 &3", vss-workfile, vss-revision, vss-description)
+     1606                                           ,v-db-num
+     1607                                           ,v-range-type
+     1608                                           ,v-cur-code
+     1609                                           ,chr(10)
+     1610                                           ,error-status:get-message(1)
+     1611                                           ,return-value
+     1612                                          ).
+     1613           end.
+     1614         end.
+     1615         else do:
+     1616           if v-range-type = 'sclc':U
+     1617           or v-range-type = 'pglc':U
+     1618           then do:
+     1619             assign
+     1620               v-db-for-send = "":U
+     1621             .
+     1622             if v-g#db-num = 0 then do:
+     1623               for each buf_db no-lock
+     1624                 where buf_db.db-num > 0
+     1625                   and buf_db.db-num <> v-g#news-source-db
+     1626               on error  undo, return error substitute( "&1 (gen-new-code-range-if-neces). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1627               :
+     1628                 assign
+     1629                   v-db-for-send = v-db-for-send + chr(1) + string( buf_db.db-num )
+     1630                 .
+     1631               end.
+     1632               assign
+     1633                 v-db-for-send = right-trim( v-db-for-send, chr(1) )
+     1634               .
+     1635             end.
+     1636             else do:
+     1637               if not v-g#news then do:
+     1638                 assign
+     1639                   v-db-for-send = "0":U
+     1640                 .
+     1641               end.
+     1642             end.
+     1643             run nws/cr-route.p ( input 'send-cmd':U
+     1644                           ,input ("command":U + chr(1) + "create":U + chr(1) +
+     1645                                  "code-range":U + chr(1) +
+     1646                                  (if v-range-type = 'sclc':U
+     1647                                   then string( current-value(s-sclc-code, ub))
+     1648                                   else string( current-value(s-pglc-code, ub))
+     1649                                   ) + chr(1) +
+     1650                                   v-range-type)
+     1651                           ,input ?
+     1652                           ,input v-db-for-send
+     1653                           ) no-error .
+     1654             if error-status :error then do:
+     1655               undo, return error return-value.
+     1656             end.
+     1657           end.
+     1658         end.
+     1659       end.
+     1660     end.
+     1661   end procedure.
+     1662   procedure cre-loc-sc-code-range :
+     1663     define input parameter v-cur-code as integer no-undo .
+     1664   define input parameter p-cdrg-type as character no-undo .
+     1665     do
+     1666     on error  undo, return error substitute( "&1 (cre-loc-sc-code-range). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1667     on stop   undo, return error substitute( "&1 (cre-loc-sc-code-range). stop", vss-workfile )
+     1668     on endkey undo, return error substitute( "&1 (cre-loc-sc-code-range). endkey", vss-workfile )
+     1669     :
+     1670       define buffer buf_code-range for ub.code-range .
+     1671       find first buf_code-range
+     1672            where buf_code-range.range-type = p-cdrg-type
+     1673              and buf_code-range.first-code >= v-cur-code
+     1674            no-error .
+     1675       if not available buf_code-range then do:
+     1676         run new-bcod-gen-code-range in this-procedure
+     1677           ( input 0,
+     1678             input p-cdrg-type
+     1679           ) no-error .
+     1680         if error-status :error then do:
+     1681           undo, return error substitute( "Ошибка при создании нового свободного диапазона локальных весовых или штучных кодов&1"
+     1682                                          + "Код &2&1&3 &4"
+     1683                                         , chr(10)
+     1684                                         , v-cur-code
+     1685                                         , error-status:get-message(1)
+     1686                                         , return-value
+     1687                                        ) .
+     1688         end.
+     1689       end.
+     1690     end.
+     1691   end procedure.
+     1692   procedure mark-used-if-need :
+     1693   define input parameter p-cur-code as integer no-undo .
+     1694   define input parameter p-range-type like ub.code-range.range-type no-undo .
+     1695   define input parameter p-db-num like ub.code-range.db-num no-undo .
+     1696     do
+     1697     on error  undo, return error substitute( "&1 (mark-used-if-need). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     1698     on stop   undo, return error substitute( "&1 (mark-used-if-need). stop", vss-workfile )
+     1699     on endkey undo, return error substitute( "&1 (mark-used-if-need). endkey", vss-workfile )
+     1700     :
+     1701       DEFINE VARIABLE v-db-num like ub.code-range.db-num no-undo .
+     1702       define buffer buf_code-range for ub.code-range .
+     1703       assign
+     1704       v-db-num = if p-range-type = 'sclc':U
+     1705                  then 0
+     1706                  else p-db-num
+     1707       .
+     1708   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1709   define buffer locK-batchprocess7 for ub.batchprocess.
+     1710   run gbl/lock-prc.p
+     1711       (input 'lscc':U
+     1712       ,input 0
+     1713       ,input 0
+     1714       ,input 0
+     1715       ,input ""
+     1716       ,input ""
+     1717       ,input ""
+     1718       ,input (
+     1719               ",,,Вкл/выкл лок. вес. кодов"
+     1720              )
+     1721       ,input true
+     1722       ,buffer lock-batchprocess7
+     1723       ) no-error .
+     1724     if error-status :error then do:
+     1725       message
+     1726         vss-workfile vss-revision vss-description skip
+     1727         "В данный момент идет процесс вкл/выкл лок. вес. кодов" skip
+     1728         view-as alert-box error .
+     1729       undo, return error .
+     1730     end.
+     1731       find first buf_code-range
+     1732            where buf_code-range.range-type = p-range-type
+     1733              and buf_code-range.first-code >= p-cur-code
+     1734              and buf_code-range.last-code <= p-cur-code
+     1735              and buf_code-range.db-num = v-db-num
+     1736            no-error .
+     1737       if not available buf_code-range then do:
+     1738         message
+     1739           vss-workfile vss-revision vss-description skip
+     1740           "Ошибка при создании поиске диапазона" skip
+     1741           "База данных" p-db-num skip
+     1742           "Код" p-cur-code skip
+     1743           "Тип" p-range-type
+     1744           error-status :get-message(1) skip
+     1745           return-value skip
+     1746           view-as alert-box error .
+     1747         undo, return error .
+     1748       end.
+     1749       if buf_code-range.stts = "f":U then do:
+     1750         assign
+     1751         buf_code-range.stts = "u":U
+     1752         .
+     1753       end.
+     1754     end.
+     1755   end procedure.
+     1756   define new global shared variable g#attr-lib  as handle no-undo .
+     1757   define variable v-attr-lib-variable as handle no-undo .
+     1758   define  variable p-extra-to as integer no-undo .
+     1759   define variable v-call-proc as handle no-undo.
+     1760   define variable v-func-list as character no-undo.
+     1761   v-call-proc = this-procedure:instantiating-procedure.
+     1762   if valid-handle(v-call-proc) then do:
+     1763     v-func-list = v-call-proc:INTERNAL-ENTRIES.
+     1764     if can-do(v-func-list, "get-param") then do:
+     1765       run value("get-param") in v-call-proc (output p-extra-to).
+     1766     end.
+     1767   end.
+     1768   define variable v-today as date      no-undo.
+     1769   define variable v-time  as integer   no-undo.
+     1770   define variable glog as logical no-undo .
+     1771   define variable v-cntxt-db-num         like ub.sys-ctrl.db-num   no-undo.
+     1772   define variable v-cntxt-userid         as   character            no-undo.
+     1773   define buffer buf_sys-ctrl for DICTDB.sys-ctrl.
+     1774   define variable v-is-1c-erp  as logical no-undo.
+     1775   define variable country-path as char no-undo.
+     1776   define variable menu-grp-path as character no-undo .
+     1777   define temp-table for-country      no-undo like ub.country .
+     1778   define temp-table temp_fbr-gds-grp no-undo like ub.fbr-gds-grp.
+     1779   define buffer buf_currency          for DICTDB.currency .
+     1780   define buffer buf_curr-accnt        for DICTDB.curr-accnt .
+     1781   define buffer buf_curr-bank         for DICTDB.curr-bank .
+     1782   define buffer buf_units             for DICTDB.units .
+     1783   define buffer buf_cli-grp           for DICTDB.cli-grp .
+     1784   define buffer buf_clients           for DICTDB.clients .
+     1785   define buffer buf_clients-attr      for DICTDB.clients-attr .
+     1786   define buffer buf_firm              for DICTDB.firm .
+     1787   define buffer buf_cash-pay          for DICTDB.cash-pay .
+     1788   define buffer buf_wealth            for DICTDB.wealth .
+     1789   define buffer buf_pay-type          for DICTDB.pay-type .
+     1790   define buffer buf_global-state      for DICTDB.global-state .
+     1791   define buffer buf_trn-reason        for DICTDB.trn-reason .
+     1792   disable triggers for load of DICTDB.country .
+     1793   disable triggers for load of DICTDB.currency .
+     1794   disable triggers for load of DICTDB.curr-accnt .
+     1795   disable triggers for load of DICTDB.curr-bank .
+     1796   disable triggers for load of DICTDB.units .
+     1797   disable triggers for load of DICTDB.tax .
+     1798   disable triggers for load of DICTDB.tax-rate .
+     1799   disable triggers for load of DICTDB.tax-rate-attr .
+     1800   disable triggers for load of DICTDB.tax-rate-value .
+     1801   disable triggers for load of DICTDB.tax-units .
+     1802   disable triggers for load of DICTDB.tax-rate-gds-grp .
+     1803   disable triggers for load of DICTDB.fbr-gds-grp .
+     1804   disable triggers for load of DICTDB.hist-nws-option .
+     1805   disable triggers for load of DICTDB.cli-grp .
+     1806   disable triggers for load of DICTDB.clients .
+     1807   disable triggers for load of DICTDB.clients-attr .
+     1808   disable triggers for load of DICTDB.firm .
+     1809   disable triggers for load of DICTDB.cash-pay .
+     1810   disable triggers for load of DICTDB.wealth .
+     1811   disable triggers for load of DICTDB.pay-type .
+     1812   disable triggers for load of DICTDB.criterion-analysis .
+     1813   disable triggers for load of DICTDB.global-state .
+     1814   disable triggers for load of DICTDB.trn-reason .
+     1815   disable triggers for load of DICTDB.CashBook .
+     1816   define stream errstream.
+     1817   find first buf_sys-ctrl.
+     1818   if buf_sys-ctrl.db-num <> 0 then do:
+     1819     message "Данная утилита может работать только в ГБД.".
+     1820     return.
+     1821   end.
+     1822   assign
+     1823   v-cntxt-db-num = buf_sys-ctrl.db-num
+     1824   v-cntxt-userid = userid("ub")
+     1825   .
+     1826   glog = no.
+     1827   message
+     1828   "Инициализация рублей в справочнике и курсов для них," skip
+     1829   "единиц измерения, ставок налогов и др. информации ?   Вы уверены ?"
+     1830   view-as alert-box question buttons OK-Cancel update glog.
+     1831   if glog <> true then return.
+     1832   v-is-1c-erp = (p-extra-to = 1).
+     1833   run waitfram-show in this-procedure ("Инициализация валют").
+     1834   find buf_currency where buf_currency.curr-code = 0 no-error.
+     1835   if not available buf_currency then do:
+     1836     create buf_currency.
+     1837     assign
+     1838       buf_currency.curr-code = 0
+     1839     .
+     1840   end.
+     1841   assign
+     1842     buf_currency.curr-name = "Рубль России"
+     1843     buf_currency.curr-abbr = "руб"
+     1844     buf_currency.part-name = "копейка"
+     1845     buf_currency.part-abbr = "коп"
+     1846     buf_currency.okv-code  = 643
+     1847     buf_currency.curr-name-one =  "рубль":U
+     1848     buf_currency.curr-name-three = "рубля":U
+     1849     buf_currency.curr-name-five = "рублей":U
+     1850     buf_currency.part-name-one  = "копейка":U
+     1851     buf_currency.part-name-three = "копейки":U
+     1852     buf_currency.part-name-five = "копеек":U
+     1853   .
+     1854   run waitfram-show in this-procedure ("Инициализация курсов валют").
+     1855     run cur-time in this-procedure ( output v-today
+     1856                                    , output v-time
+     1857                                    ).
+     1858   find buf_curr-accnt where buf_curr-accnt.curr-code = 0 no-error.
+     1859   if not available buf_curr-accnt then do:
+     1860     create buf_curr-accnt.
+     1861     assign
+     1862       buf_curr-accnt.curr-code = 0
+     1863       buf_curr-accnt.exch-date = v-today
+     1864     .
+     1865   end.
+     1866   assign
+     1867     buf_curr-accnt.exch-rate = 1
+     1868     buf_curr-accnt.exch-scale = 1
+     1869   .
+     1870   find buf_curr-bank where buf_curr-bank.curr-code = 0 no-error.
+     1871   if not available buf_curr-bank then do:
+     1872     create buf_curr-bank.
+     1873      assign
+     1874        buf_curr-bank.curr-code = 0
+     1875        buf_curr-bank.exch-date = v-today
+     1876      .
+     1877   end.
+     1878   assign
+     1879     buf_curr-bank.exch-rate = 1
+     1880     buf_curr-bank.exch-scale = 1
+     1881   no-error.
+     1882   if not v-is-1c-erp then do:
+     1883     run waitfram-show in this-procedure ("Инициализация справочника стран").
+     1884     country-path = search("cmp/countris.txt").
+     1885     if country-path = ? then do:
+     1886       message "Нет найден файл импорта для справочника стран countris.txt"
+     1887                       "Справочник стран не будет заполнен!"
+     1888                       view-as alert-box.
+     1889     end.
+     1890     else do:
+     1891       run import-countries in this-procedure (input country-path) .
+     1892     end.
+     1893   end.
+     1894   menu-grp-PATH = search("cmp/menu-grp.txt").
+     1895   if menu-grp-path = ? then do:
+     1896       message
+     1897       "Отсутствует файл для импорта справочника глобальных групп меню menu-grp.txt" skip
+     1898       "Справочник глобальных групп меню не будет заполнен."
+     1899       view-as alert-box.
+     1900   end.
+     1901   else do:
+     1902     run waitfram-show in this-procedure ("Инициализация справочника глобальных групп меню").
+     1903     run import-menu-grps in this-procedure .
+     1904   end.
+     1905   if not v-is-1c-erp then do:
+     1906     if p-sys-key <> "raimbek":U then do:
+     1907     run waitfram-show in this-procedure ("Инициализация единиц измерения").
+     1908     run cre-unit in this-procedure ("шт", "штука", 'шту':U).
+     1909     run cre-unit in this-procedure ("пар", "пара", 'шту':U).
+     1910     run cre-unit in this-procedure ("кг", "килограмм", 'вес':U).
+     1911     run cre-unit in this-procedure ("м", "метр", 'дро':U).
+     1912     run cre-unit in this-procedure ("уп", "упаковка", 'шту':U).
+     1913     end.
+     1914   end.
+     1915   run waitfram-show in this-procedure ("Инициализация категорий налогов").
+     1916   run cre-tax in this-procedure (1, "НДС", '%':U, yes, ('шту':U + chr(44) + 'вес':U + chr(44) + 'сер':U + chr(44) + 'дро':U + chr(44) + 'топ':U), no).
+     1917   run cre-tax in this-procedure (2, "НП", '%':U, no, ('шту':U + chr(44) + 'вес':U + chr(44) + 'сер':U + chr(44) + 'дро':U + chr(44) + 'топ':U), no).
+     1918   run cre-tax in this-procedure (3, "Доп.компонента", 'abs':U, no, 'сте':U, yes).
+     1919   run cre-tax in this-procedure (4, "Акциз", 'abs':U, no, 'топ':U, yes).
+     1920   run waitfram-show in this-procedure ("Инициализация ставок налогов").
+     1921   if p-sys-key <> "raimbek":U then do:
+     1922     run cre-tax-rate in this-procedure (1, 1, "НДС 1").
+     1923     run cre-tax-rate in this-procedure (1, 2, "НДС 2").
+     1924     run cre-tax-rate in this-procedure (1, 3, "НДС 3").
+     1925     run cre-tax-rate in this-procedure (1, 4, "НДС 4").
+     1926     run cre-tax-rate-value in this-procedure (1, 1, 20, v-today, v-time).
+     1927     run cre-tax-rate-value in this-procedure (1, 2, 10, v-today, v-time).
+     1928     run cre-tax-rate-value in this-procedure (1, 3, 0,  v-today, v-time).
+     1929     run cre-tax-rate-value in this-procedure (1, 4, 0,  v-today, v-time).
+     1930   end.
+     1931   run cre-tax-rate in this-procedure (2, 22, "НП 22").
+     1932   run cre-tax-rate-value in this-procedure (2, 22, 0, v-today, v-time).
+     1933   run cre-tax-rate-attr in this-procedure (1, 4).
+     1934   run waitfram-show in this-procedure ("Заполнение налогов на группу товаров").
+     1935   run add-tax-gds-grp in this-procedure  no-error .
+     1936   if p-sys-key <> "raimbek":U then do:
+     1937     if not v-is-1c-erp then do:
+     1938     run waitfram-show in this-procedure ("Инициализация групп клиентов" ) .
+     1939     run cre-cli-grp in this-procedure ( "Свои объекты, фирмы" ) .
+     1940     run cre-cli-grp in this-procedure ( "Производители и поставщики" ) .
+     1941     run cre-cli-grp in this-procedure ( "Покупатели" ) .
+     1942     run cre-cli-grp in this-procedure ( "Персонал" ) .
+     1943     end.
+     1944     run waitfram-show in this-procedure ("Инициализация клиентов").
+     1945     if v-is-1c-erp then do:
+     1946       run cre-cli2 in this-procedure .
+     1947     end.
+     1948     else do:
+     1949       run cre-cli in this-procedure ( "Реализация в магазине", "Покупатели" ) .
+     1950     end.
+     1951   end.
+     1952   else do:
+     1953     if not v-is-1c-erp then do:
+     1954     run waitfram-show in this-procedure ("Инициализация групп клиентов" ) .
+     1955     run cre-cli-grp in this-procedure ( "Группа по умолчанию" ) .
+     1956     end.
+     1957   end.
+     1958   if v-is-1c-erp then do:
+     1959     run waitfram-show in this-procedure ("Инициализация видов оплаты").
+     1960     run cre-pay-type in this-procedure ( 1, "Наличные" ) .
+     1961     run cre-pay-type in this-procedure ( 2, "Безналичные" ) .
+     1962     run cre-pay-type in this-procedure ( 3, "Возврат поставщику" ) .
+     1963     run cre-pay-type in this-procedure ( 4, "Оплата по консигнации" ) .
+     1964   end .
+     1965   else do :
+     1966     if p-sys-key <> "raimbek":U then do:
+     1967     run waitfram-show in this-procedure ("Инициализация видов оплаты").
+     1968     run cre-pay-type in this-procedure ( 1, "Наличные" ) .
+     1969     run cre-pay-type in this-procedure ( 2, "Безналичные" ) .
+     1970     run cre-pay-type in this-procedure ( 3, "Возврат поставщику" ) .
+     1971     run cre-pay-type in this-procedure ( 4, "Кредит" ) .
+     1972     run waitfram-show in this-procedure ("Инициализация МЦ").
+     1973     run cre-wth in this-procedure ( 1, 0, YES, "Наличные", '=sum':U ) .
+     1974     run waitfram-show in this-procedure ("Инициализация типов кассовых платежей").
+     1975     run cre-cash-pay in this-procedure (  1, 0, 1, 1, "Наличные",          TRUE, FALSE ) .
+     1976     run cre-cash-pay in this-procedure ( 20, 0, 1, 0, "Оплата по кредиту", FALSE, TRUE ).
+     1977     end.
+     1978     else do:
+     1979     run waitfram-show in this-procedure ("Инициализация видов оплаты").
+     1980     run cre-pay-type in this-procedure ( 4, "Наличные" ) .
+     1981     run cre-pay-type in this-procedure ( 5, "Безналичные" ) .
+     1982     end.
+     1983   end .
+     1984   if v-is-1c-erp then do:
+     1985     run waitfram-show in this-procedure ("Причины создания документов").
+     1986     run cre-trn-reason in this-procedure (19, "Истечение срока годности (кафе)") .
+     1987     run cre-trn-reason in this-procedure (20, "Потеря товарного вида актуальности (товары)") .
+     1988     run cre-trn-reason in this-procedure (22, "Зачистка резервуара (топлива)") .
+     1989     run cre-trn-reason in this-procedure (23, "Возврат товара поставщику") .
+     1990     run cre-trn-reason in this-procedure (24, "Ввод первоначальных остатков") .
+     1991     dynamic-current-value( "s-trn-reason":U, LDBNAME("DICTDB":U) ) = 24 .
+     1992   end .
+     1993   run waitfram-show in this-procedure ("Инициализация критериев анализа ABC и XYZ").
+     1994     run utl/abc-utl.p  .
+     1995   run waitfram-show in this-procedure ("Инициализация глобальных настроек ценообразования").
+     1996   for each buf_global-state exclusive-lock :
+     1997       delete buf_global-state.
+     1998   end.
+     1999       create buf_global-state.
+     2000       assign
+     2001         buf_global-state.db-num-chg = 1
+     2002       .
+     2003   run waitfram-show in this-procedure ("Инициализация настроек опций истории и маршрутизации").
+     2004   do:
+     2005   define variable v-codes1 as character no-undo .
+     2006   define variable v-labels1 as character no-undo .
+     2007   define variable v-groups1 as character no-undo .
+     2008   assign
+     2009   v-codes1 = 'goods':U + chr(4) + 'gds-obj-attr':U + chr(4) +
+     2010             'gds-host-attr':U + chr(4) + 'goods-attr':U + chr(4) +
+     2011             'fbr-gds-obj':U + chr(4) + 's-coeff':U + chr(4) +
+     2012             'prod-bc':U + chr(4) + 'bar-code':U + chr(4) +
+     2013             'varianty-delivery-gds-obj':U + chr(4) + 'gds-season':U + chr(4) +
+     2014             'dis-gds-rule':U + chr(4) + 'assortment-matrix-goods':U + chr(4) +
+     2015             'gds-obj-prop':U + chr(4) + 'ext-artic':U
+     2016   v-labels1 = 'Товар':U + chr(4) + 'Атр-т тов. на объекте':U + chr(4) +
+     2017           'Атр-т тов. на фирме':U + chr(4) + 'Атр-т товара':U + chr(4) +
+     2018           'Атрибут РЕСТОРАНа':U + chr(4) + 'Сезонный коэфф':U + chr(4) +
+     2019           'ДопБК':U + chr(4) + 'Бар-код':U + chr(4) +
+     2020           'Варианты доставки':U + chr(4) + 'Сезон товара':U + chr(4) +
+     2021           'Скидка Товара на объ.':U + chr(4) + 'Содержимое ассортиментных матр':U + chr(4) +
+     2022           'Индикаторы':U + chr(4) + 'Внешний артикул товара':U
+     2023   v-groups1 = fill(('goods':U + chr(4)), num-entries(v-codes1, chr(4) ) )
+     2024   .
+     2025   run create-hist-nws-option in this-procedure ( input v-codes1
+     2026                                                 ,input v-labels1
+     2027                                                 ,input v-groups1) .
+     2028   assign
+     2029   v-codes1 = 'cash-pay':U + chr(4) + 'cash-pay-attr':U + chr(4) + 'dis-cp-rule':U
+     2030   v-labels1 = 'Касс.платеж':U + chr(4) + 'Аттр.касс.пл-жа':U + chr(4) + 'Скидки на платеж':U
+     2031   v-groups1 = fill(('cash-pay':U + chr(4)), num-entries(v-codes1, chr(4) ) )
+     2032   v-groups1 = right-trim(v-groups1, chr(4) )
+     2033   .
+     2034   run create-hist-nws-option in this-procedure ( input v-codes1
+     2035                                                 ,input v-labels1
+     2036                                                 ,input v-groups1) .
+     2037   assign
+     2038   v-codes1 = 'cash-desk':U + chr(4) + 'cash-desk-attr':U
+     2039   v-labels1 = 'Касса':U + chr(4) + 'Аттр.кассы':U
+     2040   v-groups1 = fill(('cash-desk':U + chr(4)), num-entries(v-codes1, chr(4) ) )
+     2041   v-groups1 = right-trim(v-groups1, chr(4) )
+     2042   .
+     2043   run create-hist-nws-option in this-procedure ( input v-codes1
+     2044                                                 ,input v-labels1
+     2045                                                 ,input v-groups1) .
+     2046   assign
+     2047   v-codes1 = 'ext-classif':U
+     2048   v-labels1 = 'Внешний классификатор':U
+     2049   v-groups1 = fill(('ext-classif':U + chr(4)), num-entries(v-codes1, chr(4) ) )
+     2050   v-groups1 = right-trim(v-groups1, chr(4) )
+     2051   .
+     2052   run create-hist-nws-option in this-procedure ( input v-codes1
+     2053                                                 ,input v-labels1
+     2054                                                 ,input v-groups1) .
+     2055   assign
+     2056   v-codes1 = 'contract-specif':U
+     2057   v-labels1 = 'Спецификация к дог-ру':U
+     2058   v-groups1 = fill(('contract-specif':U + chr(4)), num-entries(v-codes1, chr(4) ) )
+     2059   v-groups1 = right-trim(v-groups1, chr(4) )
+     2060   .
+     2061   run create-hist-nws-option in this-procedure ( input v-codes1
+     2062                                                 ,input v-labels1
+     2063                                                 ,input v-groups1) .
+     2064   end.
+     2065   if not v-is-1c-erp then do:
+     2066   run waitfram-show in this-procedure ("Заполнение справочника регионов РФ").
+     2067   run utl/reg-cre.p.
+     2068   run waitfram-show in this-procedure ("Создание кассовой книги по основному виду деятельности.").
+     2069   run cre-CashBook in this-procedure .
+     2070   end.
+     2071   run waitfram-hide in this-procedure .
+     2072   message "Инициализация закончена.".
+     2073   procedure cre-unit:
+     2074   def input param u-n as char no-undo.
+     2075   def input param l-n as char no-undo.
+     2076   def input param tp as char no-undo.
+     2077     find buf_units where buf_units.unit-name = u-n no-error.
+     2078     if not avail buf_units then do:
+     2079         find buf_units where buf_units.unit-name = (u-n + ".") no-error.
+     2080     end.
+     2081     if available buf_units then do:
+     2082       if buf_units.type = "" then do:
+     2083         message
+     2084         "Для единицы измерения:" buf_units.unit-name "тип не задан." "Подставляем:" tp skip (2)
+     2085         "Внимание!!! Проверьте все остальные единицы измерения. Возможно, Вы забыли запустить утилиту:"
+     2086         "Администратор / Утилиты / Смена версии / Типы единиц измерения. Это может привести к серьезным ошибкам в работе системы!".
+     2087         buf_units.type = tp.
+     2088       end.
+     2089       if buf_units.type <> tp then do:
+     2090         message
+     2091         "Для единицы измерения:" buf_units.unit-name "тип:" buf_units.type "не совпадает с рекомендуемым:" tp skip (2)
+     2092         "Это может привести к серьезным ошибкам в работе системы! Тип заменяется на рекомендуемый"
+     2093         view-as alert-box WARNING.
+     2094         buf_units.type = tp.
+     2095       end.
+     2096     end.
+     2097     else do:
+     2098       create buf_units.
+     2099       assign
+     2100         buf_units.unit-name = u-n
+     2101         buf_units.long-name = l-n
+     2102         buf_units.type = tp
+     2103         buf_units.stts = 0.
+     2104     end.
+     2105   end procedure.
+     2106   procedure import-countries private:
+     2107   define input parameter p-country-path as character no-undo .
+     2108   define buffer buf_country for DICTDB.country .
+     2109     input from value(p-country-path).
+     2110     empty temp-table for-country.
+     2111     _repeat:
+     2112     REPEAT:
+     2113         CREATE for-country.
+     2114         IMPORT for-country NO-ERROR.
+     2115         if error-status:error then next _repeat.
+     2116         if for-country.alpha1 = '':U then do:
+     2117           delete for-country.
+     2118           next _repeat.
+     2119         end.
+     2120         IF NOT (CAN-FIND(FIRST DICTDB.country where DICTDB.country.num-code = for-country.num-code) OR
+     2121                 CAN-FIND(FIRST DICTDB.country where DICTDB.country.alpha1   = for-country.alpha1))
+     2122                     and for-country.num-code > 0
+     2123         then do:
+     2124             create buf_country.
+     2125             ASSIGN
+     2126               buf_country.alpha1     = for-country.alpha1
+     2127               buf_country.alpha2     = for-country.alpha2
+     2128               buf_country.long-name  = for-country.long-name
+     2129               buf_country.num-code   = for-country.num-code
+     2130               buf_country.short-name = for-country.short-name
+     2131             .
+     2132         end.
+     2133         delete for-country.
+     2134     END.
+     2135     empty temp-table for-country.
+     2136     INPUT CLOSE.
+     2137   end procedure.
+     2138   procedure cre-tax:
+     2139   def input param taxcode like DICTDB.tax.tax-code no-undo.
+     2140   def input param l-n as char no-undo.
+     2141   def input param tp as char no-undo.
+     2142   def input param tocashdesk as logical no-undo.
+     2143   def input param unittypes as char no-undo.
+     2144   def input param individ like DICTDB.tax.individual no-undo.
+     2145   DEFINE VARIABLE jj         as integer no-undo .
+     2146   DEFINE VARIABLE vunit-type like DICTDB.units.type no-undo .
+     2147   DEFINE VARIABLE p1         as logical no-undo .
+     2148   DEFINE VARIABLE p2         as logical no-undo .
+     2149   define buffer buf_tax               for DICTDB.tax .
+     2150   define buffer b_tax-unit for DICTDB.tax-units.
+     2151     find buf_tax where buf_tax.tax-code = taxcode no-error.
+     2152     if available buf_tax then do:
+     2153       if buf_tax.tax-type = "" then do:
+     2154         message "Для налога:" buf_tax.tax-name "тип не задан." "Подставляем:" tp
+     2155                         .
+     2156         buf_tax.tax-type = tp.
+     2157       end.
+     2158       if buf_tax.tax-type <> tp then do:
+     2159         message
+     2160         "Для налога:" buf_tax.tax-name "тип:" buf_tax.tax-type "не совпадает с рекомендуемым:" tp skip (2)
+     2161         "Это может привести к серьезным ошибкам в работе системы! Тип заменяется на рекомендуемый"
+     2162         view-as alert-box WARNING.
+     2163         buf_tax.tax-type = tp.
+     2164       end.
+     2165       if buf_tax.to-cashdesk <> tocashdesk then do:
+     2166         message
+     2167         "Для налога:" buf_tax.tax-name "флаг ~"отправлять на кассу~":" buf_tax.to-cashdesk "не совпадает с рекомендуемым:" tocashdesk skip (2)
+     2168         "Значение флага ~"отправлять на кассу~" заменено на:" tocashdesk
+     2169         view-as alert-box WARNING.
+     2170         buf_tax.to-cashdesk = tocashdesk .
+     2171       end.
+     2172       do jj = 1 to num-entries(unittypes):
+     2173         assign
+     2174         vunit-type =entry(jj, unittypes)
+     2175         p1 = no
+     2176         p2 = no
+     2177         .
+     2178         find first b_tax-unit No-LOCK WHERE
+     2179                             b_tax-unit.tax-code = taxcode AND
+     2180                             b_tax-unit.type = vunit-type AND
+     2181                             unittypes <> 'сте':U no-error.
+     2182         if not avail b_tax-unit then p1 = yes.
+     2183         IF can-find(first b_tax-unit No-LOCK WHERE
+     2184                           b_tax-unit.tax-code = taxcode AND
+     2185                           LOOKUP(b_tax-unit.type, unittypes) = 0 )
+     2186                     AND
+     2187         unittypes <> 'сте':U then do:
+     2188           p2 = yes.
+     2189         end.
+     2190        glog = yes.
+     2191        if p1 or p2 then do:
+     2192           message
+     2193           "Для налога:" buf_tax.tax-name "типы единиц измерения: не совпадают с рекомендуемыми:" unittypes skip (2)
+     2194           "Это может привести к серьезным ошибкам в работе системы! Тип заменяется на рекомендуемый"
+     2195           view-as alert-box WARNING.
+     2196           if p1 then do:
+     2197               run add-tax-units in this-procedure (taxcode, vunit-type).
+     2198           end.
+     2199           if p2 then do:
+     2200             FOr each b_tax-unit where
+     2201                     b_tax-unit.tax-code = taxcode AND
+     2202                     LOOKUP(b_tax-unit.type, unittypes) = 0:
+     2203               delete b_tax-unit.
+     2204             end.
+     2205           end.
+     2206         end.
+     2207       end.
+     2208     end.
+     2209     else do:
+     2210       create buf_tax.
+     2211       assign
+     2212         buf_tax.tax-code = taxcode
+     2213         buf_tax.tax-name = l-n
+     2214         buf_tax.tax-type = tp
+     2215         buf_tax.to-cashdesk = tocashdesk
+     2216         buf_tax.individual = individ
+     2217         buf_tax.status_ = 'тек':U
+     2218         .
+     2219       _jj:
+     2220       do jj = 1 to num-entries(unittypes):
+     2221         vunit-type =entry(jj, unittypes).
+     2222         if not (vunit-type = 'шту':U  OR
+     2223                 vunit-type = 'дро':U OR
+     2224                 vunit-type = 'сер':U OR
+     2225                 vunit-type = 'вес':U OR
+     2226                 vunit-type = 'топ':U
+     2227                     )  then do:
+     2228             NEXT _JJ.
+     2229           end.
+     2230         run add-tax-units in this-procedure (taxcode, vunit-type).
+     2231       END.
+     2232     end.
+     2233   end procedure.
+     2234   procedure cre-tax-rate:
+     2235   def input param taxcode  like DICTDB.tax.tax-code       no-undo.
+     2236   def input param ratecode like DICTDB.tax-rate.rate-code no-undo.
+     2237   def input param ratename like DICTDB.tax-rate.rate-name no-undo.
+     2238   define buffer buf_tax-rate          for DICTDB.tax-rate .
+     2239     find buf_tax-rate where buf_tax-rate.rate-code = ratecode no-error.
+     2240     if available buf_tax-rate then do:
+     2241       if NOT buf_tax-rate.tax-code = taxcode then do:
+     2242         message "Для ставки налога с кодом " buf_tax-rate.rate-code "код категории налога не совпадает с рекомендуемым." skip
+     2243         "Подставляем:" taxcode
+     2244         view-as alert-box.
+     2245                         .
+     2246         buf_tax-rate.tax-code = taxcode.
+     2247       end.
+     2248     end.
+     2249     else do:
+     2250       create buf_tax-rate.
+     2251       assign
+     2252         buf_tax-rate.tax-code = taxcode
+     2253         buf_tax-rate.rate-code = ratecode
+     2254         buf_tax-rate.rate-name = ratename
+     2255         buf_tax-rate.status_ = 'тек':U
+     2256         .
+     2257     end.
+     2258   end procedure.
+     2259   procedure cre-tax-rate-value:
+     2260   def input param taxcode   like DICTDB.tax.tax-code              no-undo.
+     2261   def input param ratecode  like DICTDB.tax-rate.rate-code        no-undo.
+     2262   def input param ratevalue like DICTDB.tax-rate-value.rate-value no-undo.
+     2263   def input param p-today   as date no-undo .
+     2264   def input param p-time    as integer no-undo .
+     2265   DEFINE VARIABLE var-day-end-fact-order as decimal no-undo .
+     2266   define buffer buf_tax-rate-value    for DICTDB.tax-rate-value .
+     2267     run factord-end-day in this-procedure (input p-today, output var-day-end-fact-order).
+     2268     find LAST  buf_tax-rate-value where
+     2269                buf_tax-rate-value.rate-code   = ratecode  AND
+     2270                buf_tax-rate-value.tax-code    = taxcode AND
+     2271                buf_tax-rate-value.host-code   = 0 AND
+     2272                buf_tax-rate-value.obj-type    = "" AND
+     2273                buf_tax-rate-value.obj-code    = 0 AND
+     2274                buf_tax-rate-value.fact-order <= var-day-end-fact-order
+     2275                no-error.
+     2276     if not avail buf_tax-rate-value then do:
+     2277       create buf_tax-rate-value.
+     2278       assign
+     2279         buf_tax-rate-value.tax-code = taxcode
+     2280         buf_tax-rate-value.rate-code = ratecode
+     2281         buf_tax-rate-value.rate-value = ratevalue
+     2282         buf_tax-rate-value.fact-date  = p-today
+     2283         buf_tax-rate-value.fact-order = var-day-end-fact-order
+     2284         buf_tax-rate-value.status_ = 'тек':U
+     2285         buf_tax-rate-value.host-code = 0
+     2286         buf_tax-rate-value.obj-type = "":U
+     2287         buf_tax-rate-value.obj-code = 0
+     2288         buf_tax-rate-value.corr-date = p-today
+     2289         buf_tax-rate-value.corr-time = p-time
+     2290         buf_tax-rate-value.corr-user-db-num = v-cntxt-db-num
+     2291         buf_tax-rate-value.corr-user-name = v-cntxt-userid
+     2292         .
+     2293     end.
+     2294   end procedure.
+     2295   procedure cre-tax-rate-attr:
+     2296   def input param taxcode  like DICTDB.tax.tax-code       no-undo.
+     2297   def input param ratecode like DICTDB.tax-rate.rate-code no-undo.
+     2298   define buffer buf_tax-rate-attr          for DICTDB.tax-rate-attr .
+     2299     find buf_tax-rate-attr where buf_tax-rate-attr.rate-code = ratecode no-error.
+     2300     if available buf_tax-rate-attr then do:
+     2301       if NOT buf_tax-rate-attr.tax-code = taxcode then do:
+     2302         message "Для ставки налога с кодом " buf_tax-rate-attr.rate-code "уже есть атрибут ЕНВД." skip
+     2303         "Подставляем:" taxcode
+     2304         view-as alert-box.
+     2305                         .
+     2306         buf_tax-rate-attr.tax-code = taxcode.
+     2307       end.
+     2308     end.
+     2309     else do:
+     2310       create buf_tax-rate-attr.
+     2311       assign
+     2312         buf_tax-rate-attr.tax-code = taxcode
+     2313         buf_tax-rate-attr.rate-code = ratecode
+     2314         buf_tax-rate-attr.attr-code = "envd"
+     2315         .
+     2316     end.
+     2317   end procedure.
+     2318   PROCEDURE add-tax-units:
+     2319   define input parameter partax-code  like DICTDB.tax.tax-code no-undo .
+     2320   define input parameter parunit-type like DICTDB.units.type   no-undo .
+     2321   define buffer buf_tax-units         for DICTDB.tax-units .
+     2322     if not can-find(first buf_tax-units No-LOCK WHERE
+     2323                           buf_tax-units.tax-code = partax-code AND
+     2324                           buf_tax-units.type = parunit-type) then do:
+     2325       create buf_tax-units.
+     2326       assign
+     2327         buf_tax-units.tax-code = partax-code
+     2328         buf_tax-units.type = parunit-type
+     2329       .
+     2330     END.
+     2331   END PROCEDURE.
+     2332   procedure add-tax-gds-grp :
+     2333   DEFINE VARIABLE var-vat-code as character no-undo .
+     2334   DEFINE VARIABLE var-SLT-code as character no-undo .
+     2335   DEFINE VARIABLE vattr-labels as character no-undo .
+     2336   DEFINE VARIABLE vattr-codes as character no-undo .
+     2337   DEFINE VARIABLE vartax-value like DICTDB.tax-rate-value.rate-value no-undo .
+     2338   define variable VATtaxcd as integer no-undo.
+     2339   define variable SLTtaxcd as integer no-undo.
+     2340   define buffer buf_tax-rate-gds-grp  for DICTDB.tax-rate-gds-grp .
+     2341   vattaxcd = integer('1':U).
+     2342   slttaxcd = integer('2':U).
+     2343   if p-sys-key <> "raimbek":U then do:
+     2344     assign
+     2345     vattr-codes = "":U
+     2346     vattr-labels = "":U
+     2347     .
+     2348     for each DICTDB.tax-rate no-lock where
+     2349              DICTDB.tax-rate.tax-code = vattaxcd:
+     2350   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2351   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run pftaxval in g#library
+     2352     (input  recid(DICTDB.tax-rate)
+     2353     ,input  DICTDB.tax-rate.tax-code
+     2354     ,input  DICTDB.tax-rate.rate-code
+     2355     ,input  ?
+     2356     ,input  0
+     2357     ,input  '':U
+     2358     ,input  0
+     2359     ,output vartax-value
+     2360     ) no-error .
+     2361       if error-status:error then do:
+     2362         message return-value view-as alert-box error .
+     2363         return error return-value.
+     2364       end.
+     2365       if vartax-value = ? then NEXT.
+     2366       if v-is-1c-erp then do:
+     2367         var-vat-code = string(tax-rate.rate-code) .
+     2368         leave .
+     2369       end.
+     2370       else assign
+     2371       vattr-labels = vattr-labels +
+     2372                     (if vattr-labels = "":U then "" else chr(44)) +
+     2373                     string(string(tax-rate.rate-code) + " - " + replace(tax-rate.rate-name, chr(44), "":U), "X(25)") +
+     2374                     fill(chr(32), 5) + string(vartax-value, "99.99%":U)
+     2375       vattr-codes = vattr-codes +
+     2376                     (if vattr-codes = "":U then "" else chr(44)) +
+     2377                     string(tax-rate.rate-code)
+     2378       .
+     2379     end.
+     2380     if not v-is-1c-erp then do:
+     2381       run gbl/d-list.w (
+     2382                   INPUT "b-sel":U
+     2383                   ,INPUT "Выберите ставку НДС для групп (по умолчанию)"
+     2384                   ,INPUT vattr-codes
+     2385                   ,INPUT vattr-labels
+     2386                   ,INPUT chr(44)
+     2387                   ,INPUT "":U
+     2388                   ,output var-vat-code).
+     2389       IF var-vat-code = "":u THEN do:
+     2390       message
+     2391       "Вы не выбрали ставку НДС для групп!" skip
+     2392       "Это может привести к непредсказуемым результатам"
+     2393       view-as alert-box error .
+     2394       RETURN ERROR.
+     2395       end.
+     2396     end.
+     2397   end.
+     2398   assign
+     2399   vattr-codes = "":U
+     2400   vattr-labels = "":U
+     2401   .
+     2402   for each tax-rate no-lock where
+     2403            tax-rate.tax-code = slttaxcd:
+     2404   define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2405   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run pftaxval in g#library
+     2406     (input  recid(tax-rate)
+     2407     ,input  tax-rate.tax-code
+     2408     ,input  tax-rate.rate-code
+     2409     ,input  ?
+     2410     ,input  0
+     2411     ,input  '':U
+     2412     ,input  0
+     2413     ,output vartax-value
+     2414     ) no-error .
+     2415     if error-status:error then do:
+     2416       message
+     2417       return-value view-as alert-box error .
+     2418       return error.
+     2419     end.
+     2420     if vartax-value = ? then NEXT.
+     2421     if v-is-1c-erp then do:
+     2422       var-slt-code = string(tax-rate.rate-code) .
+     2423       leave .
+     2424     end.
+     2425     else assign
+     2426     vattr-labels = vattr-labels +
+     2427                   (if vattr-labels = "":U then "" else chr(44)) +
+     2428                   string(string(tax-rate.rate-code) + " - " + replace(tax-rate.rate-name, chr(44), "":U), "X(25)") +
+     2429                   fill(chr(32), 5) + string(vartax-value, "99.99%":U)
+     2430     vattr-codes = vattr-codes +
+     2431                   (if vattr-codes = "":U then "" else chr(44)) +
+     2432                   string(tax-rate.rate-code)
+     2433     .
+     2434   end.
+     2435   if not v-is-1c-erp then do:
+     2436     run gbl/d-list.w (
+     2437                 INPUT "b-sel":U
+     2438                 ,INPUT "Выберите ставку НП для групп (по умолчанию)(если НП не действует, выберите знач=0)"
+     2439                 ,INPUT vattr-codes
+     2440                 ,INPUT vattr-labels
+     2441                 ,INPUT chr(44)
+     2442                 ,INPUT "":U
+     2443                 ,output var-slt-code).
+     2444     IF var-slt-code = "":u THEN do:
+     2445     message
+     2446     "Вы не выбрали ставку НП для групп!" skip
+     2447     "Это может привести к непредсказуемым результатам"
+     2448     view-as alert-box error .
+     2449     RETURN ERROR.
+     2450     end.
+     2451   end .
+     2452   do on error undo, return error :
+     2453     FOR EACH DICTDB.gds-grp No-LOCK:
+     2454       if p-sys-key <> "raimbek":U then do:
+     2455         if not can-find(first buf_tax-rate-gds-grp where
+     2456                               buf_tax-rate-gds-grp.tax-code = vattaxcd AND
+     2457                               buf_tax-rate-gds-grp.node-code = DICTDB.gds-grp.node-code AND
+     2458                               buf_tax-rate-gds-grp.host-code = 0 AND
+     2459                               buf_tax-rate-gds-grp.obj-type = "":U AND
+     2460                               buf_tax-rate-gds-grp.obj-code = 0
+     2461                               ) then do:
+     2462           create buf_tax-rate-gds-grp.
+     2463           assign
+     2464             buf_tax-rate-gds-grp.node-code = DICTDB.gds-grp.node-code
+     2465             buf_tax-rate-gds-grp.tax-code = vattaxcd
+     2466             buf_tax-rate-gds-grp.rate-code = integer(var-vat-code)
+     2467          .
+     2468         end.
+     2469       end.
+     2470       if not can-find(first buf_tax-rate-gds-grp where
+     2471                             buf_tax-rate-gds-grp.tax-code = slttaxcd AND
+     2472                             buf_tax-rate-gds-grp.node-code = DICTDB.gds-grp.node-code AND
+     2473                             buf_tax-rate-gds-grp.host-code = 0 AND
+     2474                             buf_tax-rate-gds-grp.obj-type = "":U AND
+     2475                             buf_tax-rate-gds-grp.obj-code = 0
+     2476                             ) then do:
+     2477         create buf_tax-rate-gds-grp.
+     2478         assign
+     2479            buf_tax-rate-gds-grp.node-code = DICTDB.gds-grp.node-code
+     2480            buf_tax-rate-gds-grp.tax-code = slttaxcd
+     2481            buf_tax-rate-gds-grp.rate-code = integer(var-slt-code)
+     2482         .
+     2483       end.
+     2484     end.
+     2485   end.
+     2486   END PROCEDURE.
+     2487   PROCEDURE get-rate-value:
+     2488   define input parameter partax-code like DICTDB.tax.tax-code no-undo .
+     2489   define input parameter parrate-code like DICTDB.tax-rate.rate-code no-undo .
+     2490   define output parameter parrate-value like DICTDB.tax-rate-value.rate-value no-undo .
+     2491   DEFINE VARIABLE var-fact-order as decimal no-undo .
+     2492   define buffer buf_tax-rate-value    for DICTDB.tax-rate-value .
+     2493      var-fact-order = integer(today) + 0.99.
+     2494      FIND LAST buf_tax-rate-value No-LOCK WHERE
+     2495               buf_tax-rate-value.tax-code = partax-code AND
+     2496               buf_tax-rate-value.rate-code = parrate-code AND
+     2497               buf_tax-rate-value.host-code = 0 AND
+     2498               buf_tax-rate-value.obj-type = "" AND
+     2499               buf_tax-rate-value.host-code = 0 AND
+     2500               buf_tax-rate-value.fact-order <= var-fact-order No-ERROR.
+     2501      if available buf_tax-rate-value then do:
+     2502         assign
+     2503            parrate-value = buf_tax-rate-value.rate-value
+     2504         .
+     2505      end.
+     2506   END PROCEDURE.
+     2507   procedure import-menu-grps :
+     2508   define variable v-shift-node-code like DICTDB.fbr-gds-grp.node-code no-undo .
+     2509   define buffer buf_fbr-gds-grp for DICTDB.fbr-gds-grp.
+     2510     do
+     2511     on error undo, return error
+     2512     :
+     2513       for each buf_fbr-gds-grp  where buf_fbr-gds-grp.node-code <> 1 no-lock:
+     2514         assign
+     2515         v-shift-node-code =  buf_fbr-gds-grp.node-code
+     2516         .
+     2517       end.
+     2518       input from value(menu-grp-path).
+     2519       for each temp_fbr-gds-grp:
+     2520         delete temp_fbr-gds-grp.
+     2521       end.
+     2522       _repeat2:
+     2523       REPEAT:
+     2524           CREATE temp_fbr-gds-grp.
+     2525           IMPORT temp_fbr-gds-grp.node-name temp_fbr-gds-grp.node-code temp_fbr-gds-grp.upper-code temp_fbr-gds-grp.lvl-num NO-ERROR.
+     2526           if error-status:error then do:
+     2527             delete temP_fbr-gds-grp.
+     2528             next  _repeat2.
+     2529           end.
+     2530           if not error-status:error then do:
+     2531             IF NOT CAN-FIND(FIRST buf_fbr-gds-grp where buf_fbr-gds-grp.node-code = (temp_fbr-gds-grp.node-code + v-shift-node-code)
+     2532                                 and buF_fbr-gds-grp.obj-type      = "":U
+     2533                                 AND buF_fbr-gds-grp.obj-code      = 0        )
+     2534               AND ( temp_fbr-gds-grp.upper-code  = 1
+     2535                   or
+     2536                   CAN-FIND(FIRST buf_fbr-gds-grp where buf_fbr-gds-grp.NODE-code = temp_fbr-gds-grp.upper-code +  v-shift-node-code
+     2537                                 and buF_fbr-gds-grp.obj-type      = "":U
+     2538                                 AND buF_fbr-gds-grp.obj-code      = 0           )
+     2539                     )
+     2540             and not can-find(first buf_fbr-gds-grp where
+     2541                                    buF_fbr-gds-grp.obj-type = "":U
+     2542                                AND buF_fbr-gds-grp.obj-code      = 0
+     2543                                and buF_fbr-gds-grp.upper-code = (if temp_fbr-gds-grp.upper-code  = 1
+     2544                                                                 then 1
+     2545                                                                 else  (temp_fbr-gds-grp.upper-code +  v-shift-node-code))
+     2546                              and buf_fbr-gds-grp.node-name = temp_fbr-gds-grp.node-name)
+     2547             then do:
+     2548                 create buf_Fbr-gds-grp.
+     2549                 ASSIGN
+     2550                 buF_fbr-gds-grp.node-code     = temp_fbr-gds-grp.node-code  +  v-shift-node-code
+     2551                 buf_fbr-gds-grp.upper-code    = (if temp_fbr-gds-grp.upper-code  = 1 then 1 else  (temp_fbr-gds-grp.upper-code +  v-shift-node-code))
+     2552                 buF_fbr-gds-grp.node-name     = temp_fbr-gds-grp.node-name
+     2553                 buF_fbr-gds-grp.obj-type      = "":U
+     2554                 buF_fbr-gds-grp.obj-code      = 0
+     2555                 buF_fbr-gds-grp.out-code      = temp_fbr-gds-grp.node-code
+     2556                 buF_fbr-gds-grp.global-code   = temp_fbr-gds-grp.node-code
+     2557                 buF_fbr-gds-grp.lvl-num       = temp_fbr-gds-grp.lvl-num
+     2558                 .
+     2559             end.
+     2560           end.
+     2561           delete temp_fbr-gds-grp.
+     2562       END.
+     2563       for each temp_fbr-gds-grp:
+     2564         delete temp_fbr-gds-grp.
+     2565       end.
+     2566       INPUT CLOSE.
+     2567     end.
+     2568   end procedure.
+     2569   define temp-table tt-db-hn like DICTDB.db
+     2570   field hn-id as integer
+     2571   index pi is unique primary
+     2572   db-num
+     2573   hn-id
+     2574   .
+     2575   procedure create-hist-nws-option :
+     2576   define input parameter p-codes as character no-undo .
+     2577   define input parameter p-labels as character no-undo .
+     2578   define input parameter p-groups as character no-undo .
+     2579   define variable v-ii as integer no-undo .
+     2580   define buffer buf_hist-nws-option for DICTDB.hist-nws-option.
+     2581   do
+     2582   on error undo, return error
+     2583   :
+     2584     do v-ii = 1 to num-entries(p-codes, chr(4) ):
+     2585       find first buf_hist-nws-option where
+     2586             buf_hist-nws-option.db-num = buf_sys-ctrl.db-num
+     2587         and buf_hist-nws-option.table-name = entry(v-ii, p-codes, chr(4) )  no-error.
+     2588       if not available buf_hist-nws-option
+     2589       then do:
+     2590         find last tt-db-hn  where
+     2591                 tt-db-hn.db-num = buf_sys-ctrl.db-num no-error.
+     2592         create buf_hist-nws-option.
+     2593         assign
+     2594         buf_hist-nws-option.db-num =  buf_sys-ctrl.db-num
+     2595         buf_hist-nws-option.hn-id  =  (if available tt-db-hn then tt-db-hn.hn-id + 1 else 1)
+     2596         buf_hist-nws-option.table-name =  entry(v-ii, p-codes, chr(4) )
+     2597         buf_hist-nws-option.option-descr = entry(v-ii, p-labels, chr(4) )
+     2598         buf_hist-nws-option.subject-group = entry( v-ii, p-groups, chr(4))
+     2599         buf_hist-nws-option.host-code = 0
+     2600         buf_hist-nws-option.obj-type = '':U
+     2601         buf_hist-nws-option.obj-code = 0
+     2602         buf_hist-nws-option.hist-to-nws = 0
+     2603         buf_hist-nws-option.nws-to-hist = 0
+     2604         buf_hist-nws-option.hist-from-prim = 0
+     2605         buf_hist-nws-option.get-hist-from-nws = 0
+     2606         .
+     2607         if current-value(s-hn-id, ub) < buf_hist-nws-option.hn-id
+     2608         then do:
+     2609           current-value(s-hn-id, ub) = buf_hist-nws-option.hn-id.
+     2610         end.
+     2611         create tt-db-hn.
+     2612         assign
+     2613         tt-db-hn.db-num = buf_hist-nws-option.db-num
+     2614         tt-db-hn.hn-id = buf_hist-nws-option.hn-id
+     2615         .
+     2616         release tt-db-hn.
+     2617       end.
+     2618     end.
+     2619   end.
+     2620   end procedure.
+     2621   procedure cre-cli-grp :
+     2622   define input parameter p-grp-name as character        no-undo.
+     2623   do
+     2624   on error undo, return error
+     2625   :
+     2626     if not can-find(first buf_cli-grp No-LOCK
+     2627                     WHERE buf_cli-grp.node-name = p-grp-name
+     2628                     )
+     2629     then do:
+     2630         create buf_cli-grp.
+     2631         ASSIGN
+     2632            buf_cli-grp.node-code  = dynamic-next-value( "s-cli-grp":U, LDBNAME("DICTDB":U) )
+     2633            buf_cli-grp.lvl-num    = 1
+     2634            buf_cli-grp.node-name  = p-grp-name
+     2635            buf_cli-grp.upper-code = 1
+     2636            buf_cli-grp.is-term    = TRUE
+     2637         .
+     2638     end.
+     2639   end.
+     2640   end procedure.
+     2641   procedure cre-cli :
+     2642   define input parameter p-obj-name as character        no-undo.
+     2643   define input parameter p-grp-name as character        no-undo.
+     2644   define variable v-name    as character    no-undo.
+     2645   define variable v-obj-code    as integer      no-undo.
+     2646   do
+     2647   on error undo, return error
+     2648   :
+     2649     find first buf_cli-grp
+     2650          WHERE buf_cli-grp.node-name = p-grp-name
+     2651          NO-LOCK
+     2652          NO-ERROR
+     2653          .
+     2654      if NOT AVAILABLE buf_cli-grp
+     2655      then do:
+     2656         undo, return error SUBSTITUTE("cre-cli: Ошибка клиента. Не найдена группа клиентов &1", p-grp-name).
+     2657      end.
+     2658      if not can-find(first buf_clients
+     2659                        WHERE buf_clients.obj-name = p-obj-name
+     2660                        NO-LOCK
+     2661                        )
+     2662      then do:
+     2663         assign
+     2664            v-name = ""
+     2665         .
+     2666         run cli-grplib-get-full-name in this-procedure
+     2667            (input  buf_cli-grp.node-code
+     2668            ,output v-name
+     2669            ).
+     2670         run gen-b-code in this-procedure ( input 'fmgb':U, output v-obj-code) no-error .
+     2671         if error-status :error
+     2672         then do:
+     2673            undo, return error "cre-cli: Ошибка генерации уникального кода для фирмы поставщика." + chr(10) + return-value.
+     2674         end.
+     2675         create buf_firm.
+     2676         assign
+     2677            buf_firm.firm-code      = v-obj-code
+     2678         .
+     2679         create buf_clients.
+     2680         ASSIGN
+     2681            buf_clients.obj-type    = 'орг':U
+     2682            buf_clients.obj-code    = v-obj-code
+     2683            buf_clients.obj-name    = p-obj-name
+     2684            buf_clients.grp-code    = buf_cli-grp.node-code
+     2685            buf_clients.grp-name    = v-name
+     2686         .
+     2687     end.
+     2688   end.
+     2689   end procedure.
+     2690   procedure cre-cli2 private:
+     2691   define variable v-name as character no-undo .
+     2692       run cli-grplib-get-full-name in this-procedure (input 5 , output v-name) .
+     2693       create buf_clients.
+     2694       assign
+     2695         buf_clients.obj-type = 'орг':U
+     2696         buf_clients.obj-code = 800000001
+     2697         buf_clients.obj-name = "Реализация розничная"
+     2698         buf_clients.stts     = 0
+     2699         buf_clients.grp-code = 5
+     2700         buf_clients.grp-name = v-name
+     2701       .
+     2702       create buf_firm.
+     2703       assign
+     2704         buf_firm.firm-code = 800000001
+     2705         buf_firm.ind       = 0
+     2706       .
+     2707       create buf_clients.
+     2708       assign
+     2709         buf_clients.obj-type = 'орг':U
+     2710         buf_clients.obj-code = 800000002
+     2711         buf_clients.obj-name = "Технологический пролив"
+     2712         buf_clients.stts     = 0
+     2713         buf_clients.grp-code = 5
+     2714         buf_clients.grp-name = v-name
+     2715       .
+     2716       create buf_firm.
+     2717       assign
+     2718         buf_firm.firm-code = 800000002
+     2719         buf_firm.ind       = 0
+     2720       .
+     2721           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-write in g#attr-lib
+     2722         (input  'орг':U
+     2723         ,input  800000002
+     2724         ,input  'shftrep2':U
+     2725         ,input  "yes":U
+     2726         ) no-error .
+     2727       if error-status:error then do:
+     2728         message return-value view-as alert-box error .
+     2729         return error return-value.
+     2730       end.
+     2731       create buf_clients.
+     2732       assign
+     2733         buf_clients.obj-type = 'орг':U
+     2734         buf_clients.obj-code = 800000003
+     2735         buf_clients.obj-name = "Отбор проб"
+     2736         buf_clients.stts     = 0
+     2737         buf_clients.grp-code = 5
+     2738         buf_clients.grp-name = v-name
+     2739       .
+     2740       create buf_firm.
+     2741       assign
+     2742         buf_firm.firm-code = 800000003
+     2743         buf_firm.ind       = 0
+     2744       .
+     2745       create buf_clients.
+     2746       assign
+     2747         buf_clients.obj-type = 'орг':U
+     2748         buf_clients.obj-code = 800000004
+     2749         buf_clients.obj-name = "Программа лояльности"
+     2750         buf_clients.stts     = 0
+     2751         buf_clients.grp-code = 5
+     2752         buf_clients.grp-name = v-name
+     2753       .
+     2754       create buf_firm.
+     2755       assign
+     2756         buf_firm.firm-code = 800000004
+     2757         buf_firm.ind       = 0
+     2758       .
+     2759       create buf_clients.
+     2760       assign
+     2761         buf_clients.obj-type = 'орг':U
+     2762         buf_clients.obj-code = 800000005
+     2763         buf_clients.obj-name = "Ввод первоначальных остатков"
+     2764         buf_clients.stts     = 0
+     2765         buf_clients.grp-code = 5
+     2766         buf_clients.grp-name = v-name
+     2767       .
+     2768       create buf_firm.
+     2769       assign
+     2770         buf_firm.firm-code = 800000005
+     2771         buf_firm.ind       = 0
+     2772       .
+     2773       create buf_clients.
+     2774       assign
+     2775         buf_clients.obj-type = 'орг':U
+     2776         buf_clients.obj-code = 800000006
+     2777         buf_clients.obj-name = 'Банк "ВБРР" АО'
+     2778         buf_clients.stts     = 0
+     2779         buf_clients.grp-code = 5
+     2780         buf_clients.grp-name = v-name
+     2781       .
+     2782       create buf_firm.
+     2783       assign
+     2784         buf_firm.firm-code = 800000006
+     2785         buf_firm.ind       = 0
+     2786       .
+     2787       create buf_clients.
+     2788       assign
+     2789         buf_clients.obj-type = 'орг':U
+     2790         buf_clients.obj-code = 800000007
+     2791         buf_clients.obj-name = "Банк ВБРР (агентская выручка)"
+     2792         buf_clients.stts     = 0
+     2793         buf_clients.grp-code = 5
+     2794         buf_clients.grp-name = v-name
+     2795       .
+     2796       create buf_firm.
+     2797       assign
+     2798         buf_firm.firm-code = 800000007
+     2799         buf_firm.ind       = 0
+     2800       .
+     2801       create buf_clients.
+     2802       assign
+     2803         buf_clients.obj-type = 'орг':U
+     2804         buf_clients.obj-code = 800000008
+     2805         buf_clients.obj-name = "Перемещение денежных средств"
+     2806         buf_clients.stts     = 0
+     2807         buf_clients.grp-code = 5
+     2808         buf_clients.grp-name = v-name
+     2809       .
+     2810       create buf_firm.
+     2811       assign
+     2812         buf_firm.firm-code = 800000008
+     2813         buf_firm.ind       = 0
+     2814       .
+     2815        create buf_clients.
+     2816       assign
+     2817         buf_clients.obj-type = 'орг':U
+     2818         buf_clients.obj-code = 800000009
+     2819         buf_clients.obj-name = "Выдача наличных денежных средств"
+     2820         buf_clients.stts     = 0
+     2821         buf_clients.grp-code = 5
+     2822         buf_clients.grp-name = v-name
+     2823       .
+     2824       create buf_firm.
+     2825       assign
+     2826         buf_firm.firm-code = 800000009
+     2827         buf_firm.ind       = 0
+     2828       .
+     2829   end procedure .
+     2830   procedure cre-pay-type :
+     2831   define input parameter p-code as integer        no-undo.
+     2832   define input parameter p-name as character        no-undo.
+     2833   do
+     2834   on error undo, return error
+     2835   :
+     2836      if not can-find(first buf_pay-type
+     2837                      WHERE buf_pay-type.obj-code = p-code
+     2838                      NO-LOCK
+     2839                     )
+     2840      then do:
+     2841         create buf_pay-type.
+     2842         ASSIGN
+     2843            buf_pay-type.obj-code = p-code
+     2844            buf_pay-type.obj-name = p-name
+     2845         .
+     2846      END.
+     2847   end.
+     2848   end procedure.
+     2849   procedure cre-wth :
+     2850   define input parameter p-code as integer          no-undo.
+     2851   define input parameter p-curr-code as integer          no-undo.
+     2852   define input parameter p-is-money as logical          no-undo.
+     2853   define input parameter p-name as character        no-undo.
+     2854   define input parameter p-get-qnty-method as character        no-undo.
+     2855   do
+     2856   on error undo, return error
+     2857   :
+     2858      FIND FIRST buf_currency
+     2859           WHERE buf_currency.curr-code = p-curr-code
+     2860           NO-LOCK
+     2861           NO-ERROR
+     2862           .
+     2863      if NOT AVAILABLE buf_currency
+     2864      then do:
+     2865         undo, return error SUBSTITUTE("cre-wth: Ошибка создания МЦ. Не найдена валюта &1", p-curr-code).
+     2866      end.
+     2867      if not can-find(first buf_wealth
+     2868                      WHERE buf_wealth.wth-code = p-code
+     2869                      NO-LOCK
+     2870                     )
+     2871      then do:
+     2872         CREATE buf_wealth.
+     2873         ASSIGN
+     2874            buf_wealth.wth-code  = p-code
+     2875            buf_wealth.wth-name  = p-name
+     2876            buf_wealth.is-money  = p-is-money
+     2877            buf_wealth.curr-code = p-curr-code
+     2878            buf_wealth.get-qnty-method = p-get-qnty-method
+     2879         .
+     2880      END.
+     2881   end.
+     2882   end procedure.
+     2883   procedure cre-cash-pay :
+     2884   define input parameter p-code       as integer          no-undo.
+     2885   define input parameter p-curr-code  as integer          no-undo.
+     2886   define input parameter p-type       as integer          no-undo.
+     2887   define input parameter p-wth        as integer          no-undo.
+     2888   define input parameter p-name       as character        no-undo.
+     2889   define input parameter p-is-cash    as logical          no-undo.
+     2890   define input parameter p-is-credit  as logical          no-undo.
+     2891   do
+     2892   on error undo, return error
+     2893   :
+     2894      FIND FIRST buf_currency
+     2895           WHERE buf_currency.curr-code = p-curr-code
+     2896           NO-LOCK
+     2897           NO-ERROR
+     2898           .
+     2899      if NOT AVAILABLE buf_currency
+     2900      then do:
+     2901         undo, return error SUBSTITUTE("cre-cash-pay: Ошибка создания типа кассового платежа. Не найдена валюта &1", p-curr-code).
+     2902      end.
+     2903      FIND FIRST buf_pay-type
+     2904           WHERE buf_pay-type.obj-code = p-type
+     2905           NO-LOCK
+     2906           NO-ERROR
+     2907           .
+     2908      if NOT AVAILABLE buf_pay-type
+     2909      then do:
+     2910         undo, return error SUBSTITUTE("cre-cash-pay: Ошибка создания типа кассового платежа. Не найден тип платежа &1", p-type).
+     2911      end.
+     2912      IF p-wth <> 0
+     2913      THEN DO:
+     2914         FIND FIRST buf_wealth
+     2915            WHERE buf_wealth.wth-code   = p-wth
+     2916            NO-LOCK
+     2917            NO-ERROR
+     2918            .
+     2919         if NOT AVAILABLE buf_wealth
+     2920         then do:
+     2921            undo, return error SUBSTITUTE("cre-cash-pay: Ошибка создания типа кассового платежа. Не найдена МЦ &1", p-wth).
+     2922         end.
+     2923      end.
+     2924      if not can-find(first buf_cash-pay
+     2925                      WHERE buf_cash-pay.cdpay-code = p-code
+     2926                        AND buf_cash-pay.curr-code  = p-curr-code
+     2927                      NO-LOCK
+     2928                     )
+     2929      then do:
+     2930         CREATE buf_cash-pay.
+     2931         ASSIGN
+     2932            buf_cash-pay.cdpay-code  = p-code
+     2933            buf_cash-pay.curr-code   = p-curr-code
+     2934            buf_cash-pay.pay-code    = p-type
+     2935            buf_cash-pay.wth-code    = p-wth
+     2936            buf_cash-pay.is-credit   = p-is-credit
+     2937            buf_cash-pay.is-cash     = p-is-cash
+     2938            buf_cash-pay.atr1        = TRUE
+     2939            buf_cash-pay.atr2        = TRUE
+     2940            buf_cash-pay.status_     = 'тек':U
+     2941            buf_cash-pay.is-all-pay  = p-is-cash
+     2942            buf_cash-pay.can-mix     = INTEGER(p-is-cash)
+     2943            buf_cash-pay.has-overpay = INTEGER(p-is-credit)
+     2944         .
+     2945      END.
+     2946   end.
+     2947   end procedure.
+     2948   procedure cre-trn-reason private :
+     2949   define input parameter p-reason-code as integer no-undo .
+     2950   define input parameter p-reason-name as character no-undo .
+     2951   define variable v-rid as recid initial ? no-undo .
+     2952     run ref/trn-rsn1.p
+     2953       ( input-output v-rid
+     2954       , input 'ДОБАВЛЕНИЕ':U
+     2955       , input true
+     2956       , input p-reason-code
+     2957       , input p-reason-name
+     2958       , input ""
+     2959     ) .
+     2960     return .
+     2961   end procedure .
+     2962   procedure cre-CashBook private :
+     2963   define buffer buf_CashBook     for DICTDB.CashBook .
+     2964   define buffer buf_CashBookRule for DICTDB.CashBookRule .
+     2965     create buf_CashBook .
+     2966     assign
+     2967       buf_CashBook.id           = 0
+     2968       buf_CashBook.ext-code     = "0"
+     2969       buf_CashBook.CashBookName = "Основная деятельность"
+     2970       buf_CashBook.RuleOsnPko   = "0"
+     2971       buf_CashBook.RulePril     = "0"
+     2972       buf_CashBook.FlagSepCash  = true
+     2973       buf_CashBook.FlagSepFull  = true
+     2974       buf_CashBook.CorrPko      = "90.01"
+     2975       buf_CashBook.OsnAcct      = "50.02"
+     2976     .
+     2977   end procedure .

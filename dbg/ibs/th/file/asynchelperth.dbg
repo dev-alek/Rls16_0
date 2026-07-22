@@ -1,0 +1,1586 @@
+        1   using Progress.Lang.*.
+        2   block-level on error undo, throw.
+        3   class ibs.th.file.AsyncHelperth:
+        4      define temp-table ttRun no-undo
+        5      field task         as character
+        6      field proc         as character
+        7      field runproc      as character
+        8      field num          as integer
+        9      field item         as integer
+       10      field olditem      as integer
+       11      field fmaxitem     as integer
+       12      field fpid         as integer
+       13      field fmax         as integer
+       14      field favail       as logical
+       15      field runtime      as datetime-tz
+       16      field runnum       as int64
+       17      field fstatus      as char
+       18      field Filelog      as integer
+       19      field fstatusItem  as char
+       20      field fparam       as char
+       21      field UserDB       as logical
+       22      field fuser        as character
+       23      field fpasw        as character
+       24      field StartAfter   as datetime-tz
+       25      field cmd          as char
+       26   index task is unique primary task num
+       27   index taskst task fstatusItem runnum
+       28   index statusItem fstatusItem StartAfter.
+       29   define temp-table ttTimeOutProc no-undo
+       30      field task         as character
+       31      field timeOut      as integer
+       32      index task is unique primary task
+       33   .
+       34      define temp-table ttfile no-undo
+       35      field fnAME as character
+       36      field localPach as character
+       37      field fullpach as character
+       38      field fulllocalpach as character  format "x(25)"
+       39      field fLevel   as int
+       40      field NotNew   as logical
+       41   index localPach localPach fname
+       42   index fulllocalpach fulllocalpach.
+       43      define public property hpApi as handle no-undo
+       44      get.
+       45      private set.
+       46   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       47   method public integer IsProcessRunning
+       48     (PID AS INTEGER) :
+       49     DEFINE VARIABLE IsRunning   AS LOGICAL NO-UNDO INITIAL NO.
+       50     DEFINE VARIABLE hProcess    AS INTEGER NO-UNDO.
+       51     DEFINE VARIABLE ExitCode    AS INTEGER NO-UNDO.
+       52     DEFINE VARIABLE ReturnValue AS INTEGER NO-UNDO.
+       53     define variable rv          as integer no-undo .
+       54     RUN OpenProcess in hpapi
+       55                     ( 1024,
+       56                       0,
+       57                       PID,
+       58                       OUTPUT hProcess).
+       59     IF hProcess NE 0 THEN DO:
+       60        RUN GetExitcodeProcess in hpapi
+       61                     ( hProcess,
+       62                       OUTPUT ExitCode,
+       63                       OUTPUT ReturnValue).
+       64        rv = (if (ExitCode=259) AND (ReturnValue NE 0)
+       65             then  - 1
+       66             else ReturnValue).
+       67        RUN CloseHandle in hpapi (hProcess, OUTPUT ReturnValue).
+       68     END.
+       69     RETURN rv.
+       70   end.
+       71   define temp-table ttfileList no-undo like ttfile.
+       72      define stream sReadDir.
+       73      define stream sReadfile.
+       74      define stream sWriteFile.
+       75   define variable v-path-tls-dir-delim as character no-undo init "\":u.
+       76   define variable mRunProc as integer no-undo.
+       77   define public variable maxproc       as integer no-undo init 10.
+       78   define public variable mShowFrame   as logical    no-undo.
+       79   define public variable SaveFile     as logical    no-undo.
+       80   define public variable paramSession as character  no-undo init " -clientlog  mylog.lg -logginglevel 1".
+       81   define public variable WaitFile     as character  no-undo.
+       82   define public variable DbConnect    as logical    no-undo init yes.
+       83   define public variable SetGblPar    as logical    no-undo init ?.
+       84   define public variable PrintAll     as logical    no-undo.
+       85   define public variable ChangProPath     as logical    no-undo.
+       86   define variable WAIT-FOR-RUN as logical no-undo.
+       87   define variable mAsyncProc as class ibs.th.file.asyncproc no-undo.
+       88   define public property mProcPublish as handle     no-undo
+       89   get.
+       90   set(arg as handle):
+       91      mAsyncProc:mProcPublish = arg.
+       92      mProcPublish = arg.
+       93   end.
+       94      define public property MyParamStart as character  no-undo
+       95      get.
+       96       set (arg as char):
+       97         if arg eq ""
+       98         then
+       99            MyParamStart = " -ininame "  + GetStartupParam("-ininame") +  GetStartupParamAndCode("-pf").
+      100         else if arg ne ?
+      101         then
+      102            MyParamStart = arg.
+      103       end.
+      104       define public property WritelogInter as decimal no-undo
+      105       get:
+      106          return mAsyncProc:WritelogInter.
+      107       end.
+      108       set(arg as decimal):
+      109          mAsyncProc:WritelogInter = arg.
+      110       end.
+      111   define public property ConPar as character  no-undo init ?
+      112   get:
+      113      define variable vconpar as character no-undo.
+      114      if ConPar ne ?
+      115      then
+      116         return ConPar.
+      117      else do:
+      118         get-key-value section "REP-SETS" key "ConPar" value vConPar.
+      119         return vConPar.
+      120      end.
+      121   end.
+      122       set .
+      123   define public property InAsyncProc as logical  no-undo
+      124   get:
+      125      return mAsyncProc:myProcInfo().
+      126   end.
+      127   define public variable MyBachMode as logical no-undo init yes.
+      128      define public property m-prowin32FileName as character no-undo
+      129      get.
+      130      set (arg as char):
+      131         if arg eq ""
+      132         then
+      133            arg = "bin/prowin32.exe".
+      134         arg = search(arg).
+      135         if arg ne ?
+      136         then
+      137            m-prowin32FileName = arg.
+      138      end.
+      139      define variable myPID      as int64     no-undo.
+      140      define variable myCompName as character no-undo.
+      141      define variable myCompUser as character no-undo.
+      142      define variable preWorkDir as character no-undo.
+      143      define public property MyWorkDir as character no-undo
+      144      get():
+      145         return (if MyWorkDir  ne "" then( MyWorkDir + v-path-tls-dir-delim ) else "").
+      146      end.
+      147      set (arg as char):
+      148         if arg ne ?
+      149         then do:
+      150            define variable vi   as integer no-undo.
+      151            if  arg eq "pid_"
+      152            then do:
+      153               if     myPID ne 0
+      154                  and myPID ne ?
+      155               then do:
+      156                  block-cr:
+      157                  do vi = 1 to 1:
+      158                     MyWorkDir = substitute("&1&2_&3" , preWorkDir, string(mypid), string(random(1,9999999))).
+      159                     if objExists( MyWorkDir)
+      160                     then
+      161                        next block-cr.
+      162                     os-create-dir VALUE(MyWorkDir).
+      163                     MyWorkDir = objExists( MyWorkDir,"D").
+      164                     if MyWorkDir ne ?
+      165                     then
+      166                        leave block-cr.
+      167                  end.
+      168               end.
+      169               else
+      170                  MyWorkDir = ?.
+      171            end.
+      172            else
+      173               MyWorkDir = objExists( arg,"D").
+      174            if MyWorkDir ne ?
+      175            then
+      176               Writefile(MyWorkDir + "parentPid.txt", string(mypid) + chr(10)).
+      177          end.
+      178       end.
+      179       define public property myTimeOut as int no-undo
+      180       get.
+      181       set.
+      182       method public datetime-tz getnow():
+      183          return mAsyncProc:getnow().
+      184       end.
+      185       method public datetime-tz getnowday():
+      186          return mAsyncProc:getnowday().
+      187       end.
+      188       define public property myUser as character initial ? no-undo
+      189       get:
+      190          if myUser eq ?
+      191          then do:
+      192             if connected ("ub":U)
+      193             then do:
+      194                define variable vSystemUser as ibs.th.file.asyncparam no-undo.
+      195                define variable vSystemPass as ibs.th.file.asyncparam no-undo.
+      196                vSystemUser = mAsyncProc:getParamObj("SystemUser").
+      197                vSystemPass = mAsyncProc:getParamObj("SystemPass").
+      198                run utl/syspwd.p(input vSystemUser, input vSystemPass)no-error.
+      199                myUser = vSystemUser:valueParam.
+      200             end.
+      201          end.
+      202          return myUser.
+      203       end.
+      204       set.
+      205       define public property myPass as character initial ? no-undo
+      206       get:
+      207          if myPass eq ?
+      208          then do:
+      209             if connected ("ub":U)
+      210             then do:
+      211                define variable vSystemUser as ibs.th.file.asyncparam no-undo.
+      212                define variable vSystemPass as ibs.th.file.asyncparam no-undo.
+      213                vSystemUser = mAsyncProc:getParamObj("SystemUser").
+      214                vSystemPass = mAsyncProc:getParamObj("SystemPass").
+      215                run utl/syspwd.p(input vSystemUser, input vSystemPass)no-error.
+      216                myPass = substitute("nocrypt:&1",vSystemPass:valueParam).
+      217             end.
+      218          end.
+      219          return myPass.
+      220       end.
+      221       set.
+      222       method public void  setCurrentUserPasswd ():
+      223          define variable vSystemUser as ibs.th.file.asyncparam no-undo.
+      224          define variable vSystemPass as ibs.th.file.asyncparam no-undo.
+      225          vSystemUser = mAsyncProc:getParamObj("SystemUser").
+      226          vSystemPass = mAsyncProc:getParamObj("SystemPass").
+      227          run utl/getuserpwdauto.p(input vSystemUser, input vSystemPass) no-error.
+      228          if error-status:error
+      229          then do:
+      230             run utl/getuserpwd.p( input vSystemUser, input vSystemPass) no-error.
+      231             if error-status:error
+      232             then do:
+      233                vSystemUser:valueParam = GetStartupParam("-U").
+      234                vSystemPass:valueParam = GetStartupParam("-P").
+      235             end.
+      236          end.
+      237          myUser = vSystemUser:valueParam.
+      238          myPass = vSystemPass:valueParam.
+      239       end.
+      240       define public property TaskName as character no-undo
+      241       get.
+      242       set.
+      243     define variable MSaveArhive as logical no-undo.
+      244      constructor AsyncHelperth ( ):
+      245         super ().
+      246         define variable vi   as integer   no-undo.
+      247         define variable vrep as character no-undo initial '/,\,:,*,",<,>,|'.
+      248         run gbl\getwindows.p(output hpApi).
+      249         m-prowin32FileName =  search ("bin/prowin32.exe").
+      250         mAsyncProc = new ibs.th.file.asyncproc().
+      251         run utl/getpid.p (output myPID,
+      252                           output myCompName,
+      253                           output myCompUser).
+      254         do vi = 1 to num-entries (vrep):
+      255            assign
+      256               myCompName = replace(myCompName,entry(vi,vrep),"_")
+      257               myCompUser = replace(myCompUser,entry(vi,vrep),"_")
+      258            .
+      259         end.
+      260         preWorkDir = substitute("pid_&1_&2_&3" , myCompName, myCompUser).
+      261         DelDontWorkProc().
+      262      end constructor.
+      263      destructor public AsyncHelperth ( ):
+      264         if     SaveFile
+      265            and not MSaveArhive
+      266         then
+      267            SaveArh().
+      268         delworkdir().
+      269         delete object mAsyncProc.
+      270      end destructor.
+      271      method public character  SaveArh ():
+      272         return SaveArh("").
+      273      end.
+      274      method public character  SaveArh (itext as character ):
+      275         define variable mDir as character no-undo.
+      276         define variable marh as character no-undo.
+      277         MSaveArhive = yes.
+      278         mdir = trim(MyWorkDir,v-path-tls-dir-delim).
+      279         marh = mdir + itext + ".zip".
+      280         run utl\arh7z.p(marh,mdir).
+      281         marh =objExists(marh,"F").
+      282         return marh .
+      283      end.
+      284      define variable mIniFile as character no-undo.
+      285      define variable mFirstrun as logical no-undo init yes.
+      286      method public int64 AsyncProc (
+      287         iProc    as character,
+      288         iParam   as character,
+      289         iCount as int64):
+      290         define variable vprocname as character no-undo.
+      291         iProc = right-trim(iProc,".r").
+      292         iProc = right-trim(iProc,".p").
+      293         vprocname = replace (iProc ,"/",v-path-tls-dir-delim).
+      294         vprocname =   entry(num-entries(vprocname,v-path-tls-dir-delim),vprocname,v-path-tls-dir-delim).
+      295         return AsyncProc(vprocname,iProc,iParam,iCount).
+      296      end.
+      297      define variable mrunnum as int64 no-undo.
+      298      method public logical firstrun():
+      299         if mFirstrun
+      300         or not FolderExists(MyWorkDir)
+      301         then do:
+      302            MyWorkDir = "pid_".
+      303            if MyWorkDir eq ?
+      304            then do:
+      305               publish "PutFileLogAsunc" from mProcPublish ("Не удалось создать рабочий каталог, задание прервано." ).
+      306               return no.
+      307            end.
+      308            mIniFile = " -ininame "  + GetStartupParam("-ininame") +  GetStartupParamAndCode("-pf")  .
+      309            ConPar = substitute(ConPar, substitute ("-U &1 -P &2 ",myUser,myPass)).
+      310            Writefile(MyWorkDir + "prof.pf", substitute('-DESCRIPTION "&2"&1 -LISTINGS .&1 -FILENAME prof.out&1 ',chr(10),TaskName)).
+      311            mFirstrun = no.
+      312         end.
+      313         return true.
+      314      end.
+      315      method public void AddTask (ITask    as character,
+      316                                   iProc    as character,
+      317                                   iParam   as character):
+      318         AddTask(ITask,iProc,iParam, getnowDay()).
+      319      end.
+      320      define variable mTaskNum as int64 no-undo.
+      321      method public void AddTask (ITask    as character,
+      322                                   iProc    as character,
+      323                                   iParam   as character,
+      324                                   iStartTimeAfter as datetime-tz):
+      325         if not firstrun()
+      326         then
+      327            return.
+      328         find last ttrun where ttrun.task eq itask
+      329         no-lock no-error.
+      330         if not available ttrun
+      331         then do:
+      332            if not FileExists  (MyWorkDir + itask + ".txt" )
+      333            then do:
+      334               if FolderExists(MyWorkDir) then do:
+      335                  Writefile(MyWorkDir + itask + ".txt", "InitProc " + string(getnow())).
+      336                  Writefile( getLog(itask),"").
+      337               end.
+      338               else do:
+      339                  run utl\proc-msg.p ("Не удалось запустить процедуру " + iProc +  " Не найден рабочий каталог: " + MyWorkDir) no-error.
+      340                  return error.
+      341               end.
+      342            end.
+      343            else do:
+      344               Writefile (getLog(itask),"Процедура " + iProc + "уже запущена в паралельном режиме." ).
+      345               if valid-handle(mProcPublish)
+      346               then
+      347                  publish "PutFileLogAsunc" from mProcPublish (MyWorkDir + itask + ".txt" ).
+      348               run utl\proc-msg.p ("Процедура " + iProc +  "уже запущена в паралельном режиме." + MyWorkDir + itask) no-error.
+      349               return error.
+      350            end.
+      351         end.
+      352         mTaskNum = mTaskNum + 1 .
+      353         writeStatusProces ("add WaitRun",itask, mtasknum, string(iStartTimeAfter) + " param " + iParam ).
+      354         iProc = right-trim(iProc,".r").
+      355         iProc = right-trim(iProc,".p").
+      356         define variable mProcFile as character no-undo.
+      357         mProcFile = search (iProc + ".r").
+      358         if mProcFile eq ?
+      359         then
+      360            mProcFile = search (iProc + ".p").
+      361         create ttrun.
+      362         assign
+      363            mrunnum = mrunnum + 1
+      364            ttrun.runnum      = mrunnum
+      365            ttrun.task        = itask
+      366            ttrun.proc        = iproc
+      367            ttrun.runproc     = mProcFile
+      368            ttrun.num         = mTaskNum
+      369            ttrun.fparam      = iParam
+      370            ttrun.fstatusItem = "WaitRun"
+      371            ttrun.StartAfter  = iStartTimeAfter
+      372         .
+      373         assign
+      374               ttrun.fuser = myUser
+      375               ttrun.fpasw = myPass
+      376            no-error.
+      377         ttrun.cmd         = CreateComamnd(ttrun.task,ttrun.num,ttrun.Proc).
+      378         for each ttrun where ttrun.task eq itask:
+      379            ttrun.fmaxitem = mTaskNum.
+      380         end.
+      381      end.
+      382      method private void writeStatusProces(iType as char,
+      383                                            iTask as char,
+      384                                            inum  as int64,
+      385                                            iText as char):
+      386         Writefile(MyWorkDir + itask + ".txt", substitute ( "&1 &2  task &3  Num &4 dop &5",iType,getnow(),itask,inum, iText)).
+      387      end.
+      388      method public int64 AsyncProc (
+      389         ITask    as character,
+      390         iProc    as character,
+      391         iParam   as character,
+      392         iCount as int64):
+      393         taskname = ITask.
+      394         define variable vi as integer no-undo.
+      395         do vi = 1 to iCount:
+      396            AddTask (itask,iproc,iparam).
+      397         end.
+      398         AsyncRun().
+      399      end.
+      400      define public variable WAIT-FOR-COMPLETE as logical no-undo.
+      401      define public variable vCountend as integer   no-undo.
+      402      method public logical  WaitForfile ( input ifile as character):
+      403         return WaitForfile(ifile,3).
+      404      end.
+      405      method public logical  WaitForfile ( input ifile as character,ipause as integer ):
+      406         define variable mfilesize    as integer   no-undo.
+      407         if ifile eq ?
+      408         then return yes.
+      409         ifile = objExists(ifile,"F").
+      410         if ifile ne ?
+      411         then do:
+      412            file-information:file-name = ifile.
+      413            mfilesize = file-info:file-size.
+      414            if ipause > 0
+      415            then
+      416               pause ipause no-message.
+      417            file-information:file-name = ifile.
+      418            return mfilesize eq file-info:file-size.
+      419         end.
+      420         else
+      421            return no.
+      422      end.
+      423      method public integer  WaitForOne ( input iSched as character):
+      424        define variable vFile as character no-undo.
+      425        define variable vCount as character  no-undo.
+      426        define variable oCount as integer no-undo.
+      427        define variable vtime as int  no-undo.
+      428        AsyncRun().
+      429        block-ttrun:
+      430        for each ttrun where    (    iSched             ne ?
+      431                                 and ttrun.task         eq iSched
+      432                                 and ttrun.fstatusItem  eq "run")
+      433                             or (    iSched             eq ?
+      434                                 and ttrun.fstatusItem  eq "run")
+      435                             or (    iSched             ne ?
+      436                                 and ttrun.task         eq iSched
+      437                                 and ttrun.fstatusItem  eq "WaitReadLog")
+      438                             or (    iSched             eq ?
+      439                                 and ttrun.fstatusItem  eq "WaitReadLog")
+      440        no-lock:
+      441           vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/procinfo.txt".
+      442           vtime =  (getnow() - ttrun.runtime) / 1000.
+      443           if FileExists(vFile)
+      444           then do:
+      445              input STREAM sReadfile FROM  VALUE(vFile).
+      446              repeat:
+      447                 import stream sReadfile unformatted vCount.
+      448                 if vCount ne ""
+      449                 then do:
+      450                    assign
+      451                       ttrun.fpid = int(entry(1,vCount, "~001"))
+      452                       ttrun.fmaxitem  =  int(entry(2,vCount, "~001"))
+      453                       ttRun.num       =  int(entry(3,vCount, "~001"))
+      454                       ttrun.fmax      = int(entry(4,vCount, "~001"))
+      455                    no-error.
+      456                 end.
+      457              end.
+      458              input STREAM sReadfile close.
+      459           end.
+      460           else if    vtime > 120
+      461           then do:
+      462              vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/endproc.txt".
+      463              if FolderExists (MyWorkDir + ttrun.task + string(ttrun.num))
+      464              then
+      465                 Writefile(vFile, "").
+      466           end.
+      467           PubFileLog (ttrun.task, ttrun.num, no).
+      468           vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/endproc.txt".
+      469           if FileExists(vFile)
+      470           then do:
+      471              PubFileLog (ttrun.task, ttrun.num, yes).
+      472              define variable vFlfileWait as logical no-undo.
+      473              define variable vi as integer no-undo.
+      474              define variable vfileWait as character no-undo.
+      475              vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/procrec.txt".
+      476              if FileExists(vFile)
+      477              then do:
+      478                 input STREAM sReadfile FROM  VALUE(vFile).
+      479                 block-conut-end:
+      480                 repeat:
+      481                    import stream sReadfile unformatted vCount.
+      482                    if vCount ne ""
+      483                    then do:
+      484                       oCount = oCount +  int(vCount) no-error.
+      485                       if not error-status:error
+      486                       then
+      487                          leave block-conut-end.
+      488                    end.
+      489                 end.
+      490                 input STREAM sReadfile close.
+      491              end.
+      492              else do:
+      493                 vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/procrec.txt".
+      494                 if FileExists(vFile)
+      495                 then do:
+      496                    input STREAM sReadfile FROM  VALUE(vFile).
+      497                    block-conut:
+      498                    repeat:
+      499                       import stream sReadfile unformatted vCount.
+      500                       if vCount ne ""
+      501                       then do:
+      502                          oCount = oCount +  int(vCount) no-error.
+      503                          if not error-status:error
+      504                          then
+      505                             leave block-conut.
+      506                       end.
+      507                    end.
+      508                    input STREAM sReadfile close.
+      509                 end.
+      510              end.
+      511              do vi = 1 to num-entries(WaitFile):
+      512                 vfileWait = MyWorkDir + ttrun.task + string(ttrun.num) + "/" + entry(vi,waitFile).
+      513                 vFlfileWait = WaitForfile(vfileWait).
+      514                 if not vFlfileWait
+      515                 then
+      516                    next block-ttrun.
+      517              end.
+      518              vCountEnd = vCountend +   int(vCount) no-error.
+      519              copylog(ttrun.task ,ttrun.num, ttrun.filelog).
+      520             writeStatusProces("Change status", ttrun.task, ttrun.num, ttrun.fstatusItem + " -> " + "WorkEnd").
+      521             if     ttrun.fstatusItem ne "WaitReadLog"
+      522                and ttrun.fstatusItem ne "WorkEnd"
+      523             then
+      524                mRunProc = mRunProc - 1.
+      525             ttrun.fstatusItem = "WorkEnd".
+      526           end.
+      527           else do:
+      528              vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/procstatus.txt".
+      529              if FileExists(vFile)
+      530              then do:
+      531                 define variable vtext as longchar no-undo.
+      532                 copy-lob from file vFile to vtext no-error.
+      533                 if error-status:error
+      534                 then do:
+      535                 end.
+      536                 else do:
+      537                    vtext = replace (vtext,chr(13) + chr(10),chr(10)).
+      538                    if length(vtext) < 32000
+      539                    then
+      540                       ttrun.fstatus = vtext.
+      541                    else
+      542                       ttrun.fstatus = substring (vtext,1,32000).
+      543                 end.
+      544               end.
+      545           end.
+      546        end.
+      547        AsyncRun().
+      548        define variable vnow as datetime-tz no-undo.
+      549        vnow = getnow().
+      550        find first ttrun where    (ttrun.task eq iSched
+      551                                or iSched eq ? )
+      552                                and ttrun.fstatusItem ne "WorkEnd"
+      553                                and ttrun.fstatusItem ne "WorkEndAvailDir"
+      554                                and ttRun.StartAfter <= vnow
+      555        no-lock no-error.
+      556        WAIT-FOR-COMPLETE = not available ttrun.
+      557        find first ttrun where    (ttrun.task eq iSched
+      558                                or iSched eq ? )
+      559                                and ttrun.fstatusItem eq "WaitRun"
+      560        no-lock no-error.
+      561        WAIT-FOR-RUN = available ttrun.
+      562        define buffer buf_run for ttrun.
+      563        find first buf_run where buf_run.task > "" no-lock no-error.
+      564        do while available buf_run:
+      565          define variable vtask as character no-undo.
+      566          vtask = buf_run.task.
+      567          find first ttrun where ttrun.task        eq vtask
+      568                             and ttrun.fstatusItem ne "WorkEnd"
+      569                             and ttrun.fstatusItem ne "WorkEndAvailDir"
+      570          no-lock no-error.
+      571          if not available ttrun
+      572          then do:
+      573             find first ttrun where ttrun.task        eq vtask
+      574                                and ttrun.fstatusItem eq "WorkEnd"
+      575             no-error.
+      576             do while available ttrun:
+      577                if not SaveFile
+      578                then do:
+      579                   os-delete value (MyWorkDir + vtask + string(ttrun.num) + ".bat").
+      580                end.
+      581                writeStatusProces("Delete", ttrun.task, ttrun.num,  "WorkEnd").
+      582                ttrun.fstatusItem = "WorkEndAvailDir".
+      583                find first ttrun where ttrun.task        eq vtask
+      584                                   and ttrun.fstatusItem eq "WorkEnd"
+      585                no-lock no-error.
+      586             end.
+      587             os-delete  value( MyWorkDir + vtask + "/stop.txt") .
+      588             os-delete  value( MyWorkDir + vtask + ".txt") .
+      589             if not FileExists (MyWorkDir + vtask + ".txt")
+      590             then
+      591                publish "EndTaskAsunc" from mProcPublish (vtask ).
+      592           end.
+      593           find first buf_run where buf_run.task > vtask no-lock no-error.
+      594        end.
+      595        return oCount.
+      596      end.
+      597      method public void PubFileLog (iproc as character , iprocnum as integer, iendProc as logical):
+      598         define variable vfile as character no-undo.
+      599         define variable vStr as character no-undo.
+      600         define buffer ttrun for ttrun.
+      601         find first ttrun where ttrun.task eq iproc
+      602                            and ttrun.num eq iprocnum
+      603         no-error.
+      604         if available ttrun
+      605         then do:
+      606            if WritelogInter > 0
+      607               or iendProc
+      608            then do:
+      609               vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/meslogasync.log" + string(ttrun.Filelog + 1).
+      610               do while FileExists(vFile):
+      611                    if valid-handle(mProcPublish)
+      612                    then
+      613                       publish "PutFileLogAsunc" from mProcPublish (vFile ).
+      614                    ttrun.Filelog = ttrun.Filelog + 1.
+      615                    vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/meslogasync.log" + string(ttrun.Filelog + 1).
+      616               end.
+      617            end.
+      618            if iendProc
+      619            then do:
+      620               if FileExists(MyWorkDir + ttrun.task + string(ttrun.num) + "/errorasync.log")
+      621               then do:
+      622                  output stream sWriteFile to value (MyWorkDir + ttrun.task + string(ttrun.num) + "/errorasynctime.log").
+      623                  input STREAM sReadfile FROM  VALUE(MyWorkDir + ttrun.task + string(ttrun.num) + "/errorasync.log").
+      624                  repeat:
+      625                     import stream sReadfile unformatted vStr.
+      626                     if     vStr ne ""
+      627                        and (   PrintAll
+      628                             or not can-do(
+      629   "arj*,~
+      630   Registered*,~
+      631   Long filename*,~
+      632   Creating archive*,Adding  *,~
+      633        1 file(s)*,~
+      634   Processing archive*,~
+      635   Archive created*,~
+      636   Extracting*,~
+      637   7-Zip*,~
+      638   Everything is Ok,~
+      639   Files:*,~
+      640   Size:*,~
+      641   Compressed:*,~
+      642   Scanning,~
+      643   Compressing *,~
+      644   *Load Data Definitions,~
+      645   *Loading Definitions.  Press CTRL-BREAK to terminate load process.,~
+      646         DatTable:*,~
+      647            Index:*,~
+      648         Sequence:*,~
+      649   Phase 1 of Load completed.  Working.  Please wait ...~
+      650   ",vStr)
+      651                             )
+      652                     then
+      653                        put stream sWriteFile unformatted substitute ("&1 &2",mAsyncProc:getnow(), vStr) skip.
+      654                  end.
+      655                  input stream sReadfile close.
+      656                  output stream sWriteFile close.
+      657                  publish "PutFileLogAsunc" from mProcPublish (MyWorkDir + ttrun.task + string(ttrun.num) + "/errorasynctime.log" ).
+      658               end.
+      659            end.
+      660         end.
+      661      end.
+      662      method public character  getLog (iSched as character):
+      663         if iSched eq ?
+      664         then
+      665            iSched = taskname.
+      666          return MyWorkDir + iSched + "meslogasync.log".
+      667      end.
+      668      method public character  getProcDir (iSched as character):
+      669         if iSched eq ?
+      670         then
+      671            iSched = taskname.
+      672          return MyWorkDir + iSched .
+      673      end.
+      674      method public logical copylog ( input iSched as character,input iItem as integer, input ilogFile as integer  ):
+      675         if iSched eq ?
+      676         then
+      677            iSched = taskname.
+      678         define variable vStr as character no-undo.
+      679         define variable vlogMan as character no-undo.
+      680         output stream sWriteFile to value (getLog(iSched)) append.
+      681         define variable vi as integer no-undo.
+      682         do vi = 1 to ilogFile:
+      683            vlogMan = "".
+      684            if FileExists(MyWorkDir + iSched + string (iItem) + "/meslogasync.log" + string(vi))
+      685               then
+      686            do:
+      687               input STREAM sReadfile FROM  VALUE(MyWorkDir + iSched + string (iItem) + "/meslogasync.log" + string(vi)).
+      688               repeat:
+      689                  import stream sReadfile unformatted vStr.
+      690                  put stream sWriteFile unformatted vStr skip.
+      691               end.
+      692               input stream sReadfile close.
+      693            end.
+      694         end.
+      695         define variable vindex as integer no-undo.
+      696         if FileExists(MyWorkDir + iSched + string (iItem) + "/errorasynctime.log")
+      697            then
+      698         do:
+      699            input STREAM sReadfile FROM  VALUE(MyWorkDir + iSched + string (iItem) + "/errorasynctime.log").
+      700            repeat:
+      701               import stream sReadfile unformatted vStr.
+      702               vindex = index (vstr,"").
+      703               if vindex > 0
+      704               then do:
+      705                  vlogMan = substring(vstr,vindex + length ("") ).
+      706               end.
+      707               put stream sWriteFile unformatted vStr skip.
+      708            end.
+      709            input stream sReadfile close.
+      710            if FileExists(vlogMan)
+      711               then
+      712            do:
+      713               publish "PutFileLogAsunc" from mProcPublish (vlogMan).
+      714               input STREAM sReadfile FROM  VALUE(vlogMan).
+      715               repeat:
+      716                  import stream sReadfile unformatted vStr.
+      717                  put stream sWriteFile unformatted vStr skip.
+      718               end.
+      719               input stream sReadfile close.
+      720            end.
+      721         end.
+      722         output stream sWriteFile close.
+      723      end.
+      724      define public variable mStop as logical no-undo.
+      725      method public logical WaitFor ( input iSched as character, input ipInterval as int64):
+      726          define variable vCountOld as integer init -1 no-undo.
+      727          define variable vCount as integer no-undo.
+      728          define variable vOK as logical no-undo initial true.
+      729         define variable vStart  as datetime-tz no-undo.
+      730         vStart = getnow().
+      731          vCountend = 0.
+      732          WAIT-FOR-COMPLETE = false.
+      733          mstop = no.
+      734          if FolderExists(MyWorkDir) then
+      735             Writefile(MyWorkDir + "Stop.txt", "").
+      736          do while not WAIT-FOR-COMPLETE:
+      737             WAIT-FOR-COMPLETE = true.
+      738             vCount = vCountEnd + WaitForOne(iSched) .
+      739             if (not WAIT-FOR-COMPLETE
+      740              and not FileExists(MyWorkDir + "Stop.txt")
+      741              or (    myTimeOut    ne 0
+      742                  and myTimeOut    ne ?
+      743                  and iSched       ne ?
+      744                  and vCountOld    = vCount
+      745                  and dec(getnow() - vStart) / 1000 > myTimeOut
+      746                 )) or mstop
+      747             then do:
+      748                if WaitForStop (iSched)
+      749                then do:
+      750                   mstop = no.
+      751                   vOK = false.
+      752                   WAIT-FOR-COMPLETE = true.
+      753                end.
+      754             end.
+      755             else
+      756                vCountOld = vCount.
+      757             if not WAIT-FOR-COMPLETE
+      758             then
+      759                AsyncRunpause(ipInterval).
+      760          end.
+      761          return vOK.
+      762      end method.
+      763      method public logical SendStop ( input iSched as character):
+      764         for each ttrun where    ttrun.task eq iSched
+      765                                 or iSched eq ?
+      766         no-lock:
+      767            os-delete value (MyWorkDir + ttrun.task + string(ttrun.num) + "/stop.txt") recursive.
+      768         end.
+      769      end.
+      770      method public logical DelShedDirEndProc ( input iSched as character):
+      771         find first ttrun where    ttrun.fstatusItem eq "WorkEndAvailDir"
+      772                                  and (   ttrun.task eq iSched
+      773                                       or iSched eq ?)
+      774         no-lock no-error.
+      775         do while available ttrun:
+      776            os-delete value (MyWorkDir + ttrun.task + string(ttrun.num)) recursive.
+      777            delete ttrun.
+      778            find first ttrun where    ttrun.fstatusItem eq "WorkEndAvailDir"
+      779                                  and (   ttrun.task eq iSched
+      780                                       or iSched eq ?)
+      781            no-lock no-error.
+      782         end.
+      783      end.
+      784      method public logical WaitStopEnd ( input iSched as character):
+      785         return WaitStopEnd(iSched,3).
+      786      end.
+      787      method public logical WaitStopEnd ( input iSched as character,ipause as integer ):
+      788         define variable vfile as character no-undo.
+      789         define variable vi as integer no-undo.
+      790         define variable vfileWait as character no-undo.
+      791         define variable vFlfileWait as logical no-undo.
+      792         define variable vOk as logical no-undo init true.
+      793         for each ttrun where    ttrun.task eq iSched
+      794                              or iSched eq ?
+      795         no-lock:
+      796            vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/endproc.txt".
+      797            if FileExists(vFile)
+      798            then do:
+      799               writeStatusProces("Change status", ttrun.task, ttrun.num, ttrun.fstatusItem + " -> " + "WaitReadLog").
+      800               if     ttrun.fstatusItem ne "WaitReadLog"
+      801                  and ttrun.fstatusItem ne "WorkEnd"
+      802               then
+      803                  mRunProc = mRunProc - 1.
+      804               ttrun.fstatusItem = "WaitReadLog".
+      805            end.
+      806            else do:
+      807               vOk = no.
+      808            end.
+      809         end.
+      810         return vOk.
+      811      end.
+      812      method public logical EndStopEnd ( input iSched as character):
+      813         define variable vtask as character no-undo.
+      814         define variable vFile as character no-undo.
+      815         for each ttrun where    ttrun.task eq iSched
+      816                              or iSched eq ?
+      817         no-lock break by ttrun.task:
+      818            vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/endproc.txt".
+      819            if not FileExists(vFile)
+      820            then do:
+      821               if termprc(MyWorkDir,ttrun.task , ttrun.num, ttRun.fpid)
+      822               then do:
+      823                  writeStatusProces("Change status", ttrun.task, ttrun.num, ttrun.fstatusItem + " -> " + "WaitReadLog").
+      824                  if     ttrun.fstatusItem ne "WaitReadLog"
+      825                     and ttrun.fstatusItem ne "WorkEnd"
+      826                  then
+      827                     mRunProc = mRunProc - 1.
+      828                  ttrun.fstatusItem = "WaitReadLog".
+      829               end.
+      830            end.
+      831            PubFileLog(ttrun.task, ttrun.num, yes).
+      832            if not SaveFile
+      833            then
+      834               os-delete value (MyWorkDir + ttrun.task + string(ttrun.num)) recursive.
+      835            os-delete   value(MyWorkDir + ttrun.task + string(ttrun.num) + ".bat").
+      836            vtask = if last-of(ttrun.task) then ttrun.task else "".
+      837            delete ttrun.
+      838            if vtask ne ""
+      839            then do:
+      840               os-delete value (MyWorkDir + vtask + ".txt") recursive.
+      841               if not FileExists (MyWorkDir + vtask + ".txt")
+      842               then
+      843                  publish "EndTaskAsunc" from mProcPublish (vtask ).
+      844            end.
+      845         end.
+      846         os-delete value (MyWorkDir + iSched + ".txt") recursive.
+      847      end.
+      848      method public logical WaitForStop ( input iSched as character):
+      849         sendStop (iSched).
+      850         pause 3 no-message.
+      851         WaitStopEnd(iSched).
+      852         EndStopEnd (iSched).
+      853         return yes.
+      854   end.
+      855      method public void AsyncRunpause (input iInterval as int64):
+      856        define variable vStart  as datetime-tz no-undo.
+      857        define variable vend    as datetime-tz no-undo.
+      858        define variable vint as int64 no-undo.
+      859        vStart = getnow().
+      860        vend   = vStart.
+      861        if valid-handle(mProcPublish)
+      862        then
+      863           publish "MyPause" from mProcPublish (iInterval ).
+      864        vend   =  getnow().
+      865        vint = vend - vStart.
+      866        vint = iInterval - vint / 1000.
+      867        if not mStop
+      868           and vint > 0
+      869        then
+      870           pause vint no-message.
+      871      end.
+      872      method private character  CreateComamnd (
+      873         iSched     as character,
+      874         iSchedNum  as integer ,
+      875         iProc      as character
+      876        ):
+      877         define variable v-cmd-comm  as character no-undo.
+      878         define variable isRcode  as logical no-undo.
+      879         define variable mProcFile as character no-undo.
+      880         define variable mAsuncProc as character no-undo.
+      881         mProcFile = search (iProc + ".r").
+      882         if mProcFile <> ?
+      883         then
+      884            isRcode = true.
+      885         else
+      886            mProcFile = search (iProc + ".p").
+      887         mAsuncProc = "utl\proc-async".
+      888         if ChangProPath
+      889         then
+      890            mAsuncProc = mAsuncProc + "-propath".
+      891         if isRcode
+      892         then
+      893            mAsuncProc = mAsuncProc + ".r".
+      894         else
+      895            mAsuncProc = mAsuncProc + ".p".
+      896         mAsuncProc = search(mAsuncProc).
+      897         if MyParamStart ne ""
+      898         then
+      899            mIniFile = MyParamStart.
+      900         define variable vSesPar as character no-undo.
+      901            if lookup("-debugalert", paramSession, " ") eq 0
+      902            then
+      903               paramSession = paramSession + " " + GetStartupParamEx("-debugalert").
+      904            vSesPar =  substitute(" &1",paramSession).
+      905            v-cmd-comm = substitute ("&1 &2  &3  -p &4 &5",    m-prowin32FileName, if MyBachMode then "-b" else "", mIniFile, mAsuncProc,vsespar).
+      906         return v-cmd-comm.
+      907      end.
+      908      method public int64 AsyncRun ():
+      909         define buffer ttrun for ttrun.
+      910         define variable vFile as character no-undo.
+      911         for each ttrun where ttrun.fstatusItem eq "Run":
+      912            vFile = MyWorkDir + ttrun.task + string(ttrun.num) + "/endproc.txt".
+      913            if FileExists(vFile)
+      914            then do:
+      915               writeStatusProces("Change status", ttrun.task, ttrun.num, ttrun.fstatusItem + " -> " + "WaitReadLog").
+      916               if     ttrun.fstatusItem ne "WaitReadLog"
+      917                  and ttrun.fstatusItem ne "WorkEnd"
+      918               then
+      919                  mRunProc = mRunProc - 1.
+      920               ttrun.fstatusItem = "WaitReadLog".
+      921            end.
+      922         end.
+      923         block-run:
+      924         for each ttrun where ttrun.fstatusItem eq "WaitRun":
+      925            if mRunProc >= maxproc
+      926            then
+      927               leave block-run.
+      928            AsyncRun(ttrun.task, ttrun.num).
+      929         end.
+      930      end.
+      931      method private void AsyncRun (
+      932         iSched     as character,
+      933         iSchedNum  as integer
+      934        ):
+      935         define variable vtask as character no-undo.
+      936         define variable vi as integer no-undo.
+      937         define buffer ttrun for ttrun.
+      938         define variable vnow as datetime-tz no-undo.
+      939         vnow = getnow().
+      940         find first ttrun where ttrun.task eq iSched
+      941                            and ttrun.num  eq iSchednum
+      942                            and ttrun.StartAfter <= vnow
+      943         no-lock no-error.
+      944         if available ttrun
+      945         then do:
+      946            vtask = iSched + string (iSchednum).
+      947            os-delete value (MyWorkDir + vTask) recursive.
+      948            if not  FolderExists  ( MyWorkDir + vTask)
+      949            then do:
+      950               os-create-dir VALUE(MyWorkDir + vTask ).
+      951               if not  FolderExists  ( MyWorkDir + vTask)
+      952               then
+      953                  return.
+      954            end.
+      955            os-copy value(MyWorkDir + "assemblies.xml" )
+      956                    value(MyWorkDir + vTask + v-path-tls-dir-delim + "assemblies.xml").
+      957               mAsyncProc:SavePARAM(?,?).
+      958               mAsyncProc:SavePARAM("numSession",string(ttrun.num)).
+      959               mAsyncProc:SavePARAM("countSession",string(ttrun.fmaxitem)).
+      960               mAsyncProc:SavePARAM("procedure",ttrun.runproc).
+      961               mAsyncProc:SavePARAM("WritelogInter",string(WritelogInter)).
+      962                  mAsyncProc:SavePARAM("user",ttrun.fuser).
+      963                  mAsyncProc:SavePARAM("password",ttrun.fpasw).
+      964                  mAsyncProc:SavePARAM("DbConnect",string(DbConnect)).
+      965                  if SetGblPar ne ?
+      966                  then
+      967                     mAsyncProc:SavePARAM("SetGblPar",string(SetGblPar)).
+      968               do vi = 1 to num-entries(ttrun.fParam, chr(4) ):
+      969                  mAsyncProc:SavePARAM("ParamProc_" + string(vi),entry(vi,ttrun.fParam, chr(4) )).
+      970               end.
+      971               mAsyncProc:SavefilePARAM(MyWorkDir + vTask + v-path-tls-dir-delim + "param.txt").
+      972               Writefile(MyWorkDir + vTask + v-path-tls-dir-delim + "propath.txt", propath).
+      973               os-delete value(MyWorkDir + vTask + v-path-tls-dir-delim +  "meslogasync.log").
+      974               Writefile(MyWorkDir + vTask + v-path-tls-dir-delim +  "meslogasync.log", "error Ошибка запуска сессии.").
+      975               if FolderExists(MyWorkDir + vTask) then
+      976                  Writefile(MyWorkDir + vTask + v-path-tls-dir-delim + "stop.txt","").
+      977               else return.
+      978            define variable vruncomand as character no-undo.
+      979            vruncomand =  vtask + " & " + ttrun.cmd + " & copy /y param.txt endproc.txt & del /F stop.txt & exit".
+      980            define variable isRcode as logical no-undo.
+      981            isRcode = search ("cmp\vertag.enc") ne ?.
+      982            if ( not isRcode or session:debug-alert )
+      983            then do:
+      984               Writefile(MyWorkDir + vtask + ".bat", "cd " + replace (vruncomand,"&","~n":U)).
+      985            end.
+      986            vruncomand =  "cd " + MyWorkDir + vruncomand.
+      987            os-command no-wait value (vruncomand  ).
+      988            writeStatusProces("Change status", ttrun.task, ttrun.num, ttrun.fstatusItem + " -> " + "Run").
+      989            ttrun.fstatusItem = "Run".
+      990            ttrun.runtime     = getnow().
+      991            mRunProc = mRunProc + 1.
+      992         end.
+      993      end.
+      994      method public void delworkdir():
+      995         if MyWorkDir ne ""
+      996         then
+      997         os-delete   value(trim(MyWorkDir,v-path-tls-dir-delim )) RECURSIVE.
+      998      end method.
+      999      method public character GetStartupParamAndCode (input iParam as character  ):
+     1000         def var vText as char no-undo.
+     1001         vText = GetStartupParam ( iParam).
+     1002         if vText eq ?
+     1003         then
+     1004            return "".
+     1005         else
+     1006            return " " + iParam + " " + vText.
+     1007      end.
+     1008      method public character GetStartupParamEx (input iParam as character  ):
+     1009         define variable vText as character no-undo.
+     1010         vtext = GetStartupParam(iParam).
+     1011         if vtext ne ?
+     1012         then
+     1013            return iParam + " " + vtext.
+     1014         else
+     1015            return "".
+     1016      end.
+     1017      method public character GetStartupParam (input iParam as character  ):
+     1018      define variable vStartupParameters as character no-undo.
+     1019      vStartupParameters = session:startup-parameters.
+     1020      define variable vNumStartupParameters as integer no-undo.
+     1021      define variable vList as character no-undo init ?.
+     1022      vNumStartupParameters = num-entries( vStartupParameters ).
+     1023      define variable i as integer no-undo.
+     1024         block-par:
+     1025      do i = 1 to vNumStartupParameters:
+     1026         define variable vParameter as character no-undo.
+     1027         vParameter = entry( i, vStartupParameters ).
+     1028         if vParameter begins iParam then
+     1029         do:
+     1030            vList  = "".
+     1031            vList  = entry(2,vParameter,' ') no-error.
+     1032         end.
+     1033      end.
+     1034         return vList.
+     1035      end method.
+     1036     method public void  creatTTForProc (input iDir as char ):
+     1037      define var vPureName  as char    no-undo.
+     1038      define var vFullPath  as char    no-undo.
+     1039      define var vFileType  as char    no-undo.
+     1040      repeat preselect each ttfile:
+     1041          find next ttfile.
+     1042            delete ttfile.
+     1043         end.
+     1044      repeat preselect each ttfilelist:
+     1045          find next ttfilelist.
+     1046            delete ttfilelist.
+     1047      end.
+     1048     for each ttrun:
+     1049         ttrun.favail = no.
+     1050     end.
+     1051      iDir = trim(idir,v-path-tls-dir-delim).
+     1052      input STREAM sReadDir FROM os-dir(iDir).
+     1053      repeat:
+     1054         import stream sReadDir vPureName vFullPath vFileType.
+     1055         if vPureName begins  "."   then next.
+     1056         if vFileType =  "d" then do:
+     1057            create ttfile.
+     1058            assign
+     1059               ttfile.fnAME       = vPureName
+     1060               ttfile.fullpach    = iDir
+     1061               ttfile.fulllocalpach = trim(ttfile.localPach + v-path-tls-dir-delim + ttfile.fnAME,v-path-tls-dir-delim)
+     1062               ttfile.fLevel      = num-entries(ttfile.fulllocalpach,v-path-tls-dir-delim)
+     1063               .
+     1064         end.
+     1065         else if     vFileType =  "F"
+     1066                 and can-do ("txt",entry(num-entries(vPureName,"."),vPureName,"."))
+     1067         then do:
+     1068            create ttfilelist.
+     1069            assign
+     1070            ttfilelist.fnAME         = vPureName
+     1071            ttfilelist.fullpach      = iDir
+     1072            ttfilelist.fulllocalpach = trim(ttfilelist.localPach + v-path-tls-dir-delim + ttfilelist.fnAME,v-path-tls-dir-delim)
+     1073            ttfilelist.fLevel        = num-entries(ttfilelist.fulllocalpach,v-path-tls-dir-delim)
+     1074               .
+     1075         end.
+     1076      end.
+     1077      input STREAM sReadfile close.
+     1078      define variable vProc   as character no-undo.
+     1079      define variable vLength as integer no-undo.
+     1080      define variable vDir    as character no-undo.
+     1081      define variable vFile   as character no-undo.
+     1082      define variable vCount  as character no-undo.
+     1083      for each ttfilelist:
+     1084         assign
+     1085            vProc = entry(1,ttfilelist.fnAME,".")
+     1086            vLength = length (vProc)
+     1087         .
+     1088         for each ttfile where ttfile.fnAME  begins vProc:
+     1089            vdir = ttfile.fullpach + v-path-tls-dir-delim + ttfile.fnAME + v-path-tls-dir-delim.
+     1090            find first ttrun where ttrun.task = vProc
+     1091                               and ttRun.num  = int(substring(ttfile.fnAME,vLength + 1 ))
+     1092                               no-error.
+     1093            vFile = vdir + "endproc.txt".
+     1094            if not FileExists(vFile)
+     1095            then do:
+     1096               if not available ttrun
+     1097               then do:
+     1098                   create ttRun.
+     1099                   assign
+     1100                      ttrun.task = vProc
+     1101                      ttRun.num  = int(substring(ttfile.fnAME,vLength + 1))
+     1102                    no-error.
+     1103               end.
+     1104               ttRun.favail = yes.
+     1105               vFile = vdir + "procinfo.txt".
+     1106               if FileExists(vFile)
+     1107               then do:
+     1108                  input STREAM sReadfile FROM  VALUE(vFile).
+     1109                  repeat:
+     1110                     import stream sReadfile unformatted vCount.
+     1111                     if vCount ne ""
+     1112                     then do:
+     1113                        assign
+     1114                           ttrun.fpid = int(entry(1,vCount, "~001"))
+     1115                           ttrun.fmaxitem  =  int(entry(2,vCount, "~001"))
+     1116                           ttRun.num       =  int(entry(3,vCount, "~001"))
+     1117                           ttrun.fmax      = int(entry(4,vCount, "~001"))
+     1118                        no-error.
+     1119                     end.
+     1120                  end.
+     1121                  input STREAM sReadfile close.
+     1122               end.
+     1123                vFile = vdir + "procrec.txt".
+     1124                if FileExists(vFile)
+     1125                then do:
+     1126                  input STREAM sReadfile FROM  VALUE(vFile).
+     1127                  repeat:
+     1128                     import stream sReadfile unformatted vCount.
+     1129                     if vCount ne ""
+     1130                     then do:
+     1131                        assign
+     1132                           ttrun.olditem = ttrun.item
+     1133                           ttrun.item =  int(vCount)
+     1134                        no-error.
+     1135                     end.
+     1136                  end.
+     1137                  input STREAM sReadfile close.
+     1138               end.
+     1139               vFile = vdir + "procstatus.txt".
+     1140                if FileExists(vFile)
+     1141                then do:
+     1142                  define variable vtext as longchar no-undo.
+     1143                  copy-lob from file vFile to vtext no-error.
+     1144                  if error-status:error
+     1145                  then do:
+     1146                  end.
+     1147                  else do:
+     1148                     vtext = replace (vtext,chr(13) + chr(10),chr(10)).
+     1149                     if length(vtext) < 32000
+     1150                     then
+     1151                        ttrun.fstatus = vtext.
+     1152                     else
+     1153                        ttrun.fstatus = substring (vtext,1,32000).
+     1154                  end.
+     1155               end.
+     1156            end.
+     1157            else do:
+     1158                if available ttrun
+     1159                then
+     1160                   delete ttrun.
+     1161            end.
+     1162         end.
+     1163      end.
+     1164      repeat preselect each ttrun where ttrun.favail = no:
+     1165          find next ttrun .
+     1166            delete ttrun .
+     1167      end.
+     1168   end method.
+     1169   method public handle  getqueryttrun():
+     1170       define variable hQuery   as handle  no-undo .
+     1171       create query hQuery.
+     1172       hQuery:set-buffers(buffer ttrun:HANDLE).
+     1173       hQuery:query-prepare("FOR EACH ttrun").
+     1174       hQuery:query-open.
+     1175       return hQuery.
+     1176   end.
+     1177   method public void  Stopprc(input iDir as char ):
+     1178       if avail ttrun
+     1179       then
+     1180          Stopprc(iDir,ttrun.task,ttrun.num).
+     1181   end.
+     1182   method public void  Stopprc(input iDir as character,iProc as character,iNum as integer ):
+     1183      os-delete value(substitute("&1\&2&3\stop.txt",iDir,iProc,if iNum  ne 0 then string(iNum) else "")) .
+     1184   end.
+     1185   method public void  termprc(input iDir as char ):
+     1186      if avail ttrun
+     1187      then
+     1188         termprc(iDir,ttrun.task,ttrun.num).
+     1189   end.
+     1190   method public void  termprc(input iDir as character,iProc as character,iNum as integer ):
+     1191      if avail ttrun
+     1192      then do:
+     1193         termprc(iDir, iProc, iNum, ttrun.fpid).
+     1194      end.
+     1195   end.
+     1196   method public logical  termprc(input iDir as character,iProc as character,iNum as integer, iPid as integer ):
+     1197      define variable vOk as logical no-undo.
+     1198      define variable vdir as character no-undo.
+     1199      vdir = substitute("&1\&2&3",iDir,iProc,if iNum  ne 0 then string(iNum) else "").
+     1200      if termprc(iPid)
+     1201      then do:
+     1202         vOk = true.
+     1203         if FolderExists (vdir)
+     1204         then do:
+     1205            Writefile(substitute("&1\endproc.txt",vdir ), "").
+     1206         end.
+     1207      end.
+     1208      if iPid eq 0
+     1209      then
+     1210      do:
+     1211         if FolderExists (vdir)
+     1212         then do:
+     1213            Writefile(substitute("&1\endproc.txt",vdir ), "").
+     1214         end.
+     1215      end.
+     1216      return vOk.
+     1217   end.
+     1218   method public logical  termprc(iPid as integer):
+     1219      define variable vOk as logical no-undo.
+     1220      if iPid > 0 then do:
+     1221         run gbl/termprc.p
+     1222             ( input iPid
+     1223             ) no-error .
+     1224         if error-status :error
+     1225         then do:
+     1226            message
+     1227               substitute( "Ошибка при остановке сессии : &1", iPid ) skip
+     1228               error-status :get-message(1) skip
+     1229               return-value skip
+     1230               view-as alert-box error .
+     1231         end.
+     1232         else
+     1233            vok = true.
+     1234      end.
+     1235      return vOk.
+     1236   end.
+     1237      method public logical isWorkShed():
+     1238         return isWorkShed(?).
+     1239      end.
+     1240      method public logical isWorkShed(iSched as character ):
+     1241         define variable vnow as datetime-tz no-undo.
+     1242         vnow = getnow().
+     1243         find first ttRun where ttrun.fstatusItem ne "WorkEnd"
+     1244                            and ttrun.fstatusItem ne "WorkEndAvailDir"
+     1245                            and ttRun.StartAfter  <= vnow
+     1246                            and (   ttRun.task        eq iSched
+     1247                                 or iSched            eq ?)
+     1248         no-lock no-error.
+     1249         return available ttRun.
+     1250      end.
+     1251      method public character getListWorkShed():
+     1252         return getListWorkShed(?).
+     1253      end.
+     1254      method public character getListWorkShed(iSched as character ):
+     1255         define variable vnow as datetime-tz no-undo.
+     1256         define variable vList as character no-undo.
+     1257         vnow = getnow().
+     1258         for each ttRun where ttrun.fstatusItem ne "WorkEnd"
+     1259                          and ttrun.fstatusItem ne "WorkEndAvailDir"
+     1260                          and ttRun.StartAfter  <= vnow
+     1261                          and (   ttRun.task        eq iSched
+     1262                               or iSched            eq ?)
+     1263         no-lock:
+     1264            vList = vList + "," + string(ttrun.num) + ". " + ttrun.task.
+     1265         end.
+     1266         if vList ne ""
+     1267         then
+     1268            vList = substring (vList,2).
+     1269         return vList.
+     1270      end.
+     1271      method public character getListTask ():
+     1272         define variable vList as character no-undo.
+     1273         define variable vTask as character no-undo.
+     1274         find first ttRun where ttRun.task > ""
+     1275         no-lock no-error.
+     1276         do while available ttRun:
+     1277            vtask = ttRun.task.
+     1278            vlist = vlist + "," + vtask.
+     1279            find first ttRun where ttRun.task > vtask
+     1280            no-lock no-error.
+     1281         end.
+     1282         if vlist ne ""
+     1283         then
+     1284            vlist = substring (vList,2).
+     1285         return vList.
+     1286      end.
+     1287      method public char getStatus (iSched as character  ):
+     1288         define buffer ttrun for ttrun.
+     1289         define buffer buf_ttrun for ttrun.
+     1290         if iSched eq ?
+     1291         then do:
+     1292            find first ttrun no-error.
+     1293            find first buf_ttrun where buf_ttrun.task ne ttrun.task no-error.
+     1294            define variable vmanyproc as logical no-undo.
+     1295            vmanyproc = available buf_ttrun.
+     1296         end.
+     1297         define variable vStat as character no-undo.
+     1298         define variable vAvialTask as logical no-undo.
+     1299         for each ttrun where    (    iSched            ne ?
+     1300                                 and ttrun.task         eq iSched
+     1301                                 and ttrun.fstatusItem  eq "run")
+     1302                             or (    iSched             eq ?
+     1303                                 and ttrun.fstatusItem  eq "run")
+     1304         no-lock:
+     1305            vAvialTask = yes.
+     1306            if ttrun.fstatus ne "" and ttrun.fstatus ne ?
+     1307            then
+     1308               vStat = vStat + " "
+     1309                             + (if vmanyproc       then ttrun.task + (if ttrun.fmax ne 1 then "_" else ": ") else "")
+     1310                             + (if ttrun.fmax ne 1 then string(ttrun.num) + ": " else "")
+     1311                             + ttrun.fstatus no-error.
+     1312         end.
+     1313         if not vAvialTask
+     1314         then do:
+     1315            if iSched ne ?
+     1316            then do:
+     1317               find first buf_ttrun where    buf_ttrun.task        eq iSched
+     1318                                         and buf_ttrun.fstatusItem eq "waitrun"
+     1319               no-error.
+     1320               vStat = if available buf_ttrun then "Процесс ожидает запуска." else "Процесс был завершен." + iSched.
+     1321               define variable vi as integer no-undo.
+     1322               for each ttrun where ttrun.fstatusItem eq "run"
+     1323               no-lock:
+     1324                  vi = vi + 1.
+     1325               end.
+     1326               vStat = substitute (" &1 Выполняется &2 процессов.",vStat,vi).
+     1327               vi = 0.
+     1328               for each ttrun where ttrun.fstatusItem eq "WaitRun"
+     1329                                and ttrun.runnum < buf_ttrun.runnum
+     1330               no-lock:
+     1331                  vi = vi + 1.
+     1332               end.
+     1333               vStat = substitute (" &1 Ожидает выполнения &2 до этого процесса.",vStat,vi).
+     1334            end.
+     1335         end.
+     1336         return vStat.
+     1337      end method.
+     1338   define variable v-waitfram-action01         as character no-undo .
+     1339   define variable v-waitfram-action02         as character no-undo .
+     1340   define variable v-waitfram-action03         as character no-undo .
+     1341   define variable v-waitfram-prev-left-margin as integer   no-undo init 0 .
+     1342   define variable mText                       as character no-undo.
+     1343   define button B-stop auto-end-key
+     1344        label "Стоп"
+     1345        size 10 by 1 tooltip "Остоновить процесс".
+     1346   define button B-viewProcInfo
+     1347        label "Информация"
+     1348        size 15 by 1 tooltip "Информация о процесс".
+     1349   define frame waitfram
+     1350     v-waitfram-action01 format "x(72)" no-label skip
+     1351     v-waitfram-action02 format "x(72)" no-label skip
+     1352     v-waitfram-action03 format "x(72)" no-label skip
+     1353     B-viewProcInfo
+     1354     B-stop at row 4 col 30
+     1355     with view-as dialog-box side-labels three-d cancel-button b-stop
+     1356     .
+     1357   on choose of B-stop in frame waitfram
+     1358   do:
+     1359     mStop = yes.
+     1360   end.
+     1361   on choose of B-viewProcInfo in frame waitfram
+     1362   do:
+     1363     run ref/runprocview.p (MyWorkDir,MyWorkDir).
+     1364   end.
+     1365   method private void waitfram-hide () :
+     1366     do
+     1367     on error undo, return error return-value
+     1368     :
+     1369       pause 0 before-hide .
+     1370       hide frame waitfram .
+     1371     end.
+     1372   end method.
+     1373   define public variable MstarstProc as datetime-tz no-undo.
+     1374   method public void waitfram-show (input iInterval as int64  ):
+     1375      define variable vtime as int64 no-undo.
+     1376      vtime = ( getnow() - MstarstProc ) / 1000 .
+     1377      waitfram-show(substitute("&1 Прошло: &2 сек" ,mText , string( vtime)), iInterval).
+     1378   end method.
+     1379   method private void waitfram-show (input p-message as character,input iInterval as int64  ):
+     1380     define variable v-left-margin as integer   no-undo .
+     1381     do
+     1382     on error undo, return error return-value
+     1383     :
+     1384       if length(p-message) <= 70 then do:
+     1385         assign
+     1386           v-left-margin = integer((70 - length(p-message)) / 2)
+     1387         .
+     1388         assign
+     1389           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+     1390         .
+     1391         if abs(v-left-margin - v-waitfram-prev-left-margin) > 5 then do:
+     1392           assign
+     1393             v-waitfram-prev-left-margin = v-left-margin
+     1394           .
+     1395         end.
+     1396         assign
+     1397           v-waitfram-action01 = " "
+     1398           v-waitfram-action02 = " "
+     1399                                    + fill(" ", v-waitfram-prev-left-margin)
+     1400                                    + p-message
+     1401           v-waitfram-action03 = " "
+     1402         .
+     1403       end.
+     1404       else do:
+     1405         if length(p-message) <= 140 then do:
+     1406           assign
+     1407             v-waitfram-action01 = " "
+     1408             v-waitfram-action02 = " " + substring(p-message,   1, 70)
+     1409             v-waitfram-action03 = " " + substring(p-message,  71, 70)
+     1410           .
+     1411         end.
+     1412         else do:
+     1413           assign
+     1414             v-waitfram-action01 = " " + substring(p-message,   1, 70)
+     1415             v-waitfram-action02 = " " + substring(p-message,  71, 70)
+     1416             v-waitfram-action03 = " " + substring(p-message, 141, 70)
+     1417           .
+     1418         end.
+     1419       end.
+     1420       B-viewProcInfo:visible in frame waitfram = session:debug-alert.
+     1421       B-viewProcInfo:sensitive in frame waitfram = session:debug-alert.
+     1422       display
+     1423         v-waitfram-action01 skip
+     1424         v-waitfram-action02 skip
+     1425         v-waitfram-action03 skip
+     1426         with frame waitfram .
+     1427       B-stop:sensitive   in frame waitfram = yes.
+     1428        wait-for go of frame waitfram pause iInterval.
+     1429     end.
+     1430   end method.
+     1431   method public logical WaitFor ( input iSched as character, input ipInterval as int64,input itext as character ):
+     1432    define variable vFlag as logical no-undo.
+     1433     mText = itext.
+     1434     MstarstProc = getnow().
+     1435        mShowFrame = yes.
+     1436     vFlag = WaitFor(iSched,ipInterval).
+     1437     return vFlag.
+     1438     finally:
+     1439        mtext = "".
+     1440        waitfram-hide().
+     1441        mShowFrame = no.
+     1442     end finally.
+     1443     end.
+     1444     method public void setTimeOutTask(iTask as character, iTimeOut as integer ):
+     1445        find first ttTimeOutProc where ttTimeOutProc.task eq iTask no-error.
+     1446        if not available ttTimeOutProc
+     1447        then do:
+     1448           create ttTimeOutProc.
+     1449           ttTimeOutProc.task = iTask.
+     1450        end.
+     1451        ttTimeOutProc.timeOut = iTimeOut.
+     1452     end.
+     1453     method public void delTimeOutTask(iTask as character):
+     1454        find first ttTimeOutProc where ttTimeOutProc.task eq iTask no-error.
+     1455        if available ttTimeOutProc
+     1456        then do:
+     1457           delete ttTimeOutProc.
+     1458        end.
+     1459     end.
+     1460     method public integer getTimeOutTask(iTask as character):
+     1461        find first ttTimeOutProc where ttTimeOutProc.task eq iTask no-error.
+     1462        return if available ttTimeOutProc then ttTimeOutProc.timeOut else ?.
+     1463     end.
+     1464     method public logical isAvailWorkShed(iSched as character ):
+     1465         define variable vnow as datetime-tz no-undo.
+     1466         vnow = getnow().
+     1467         for each ttRun where       ttRun.task        eq iSched
+     1468                                 or iSched            eq ?
+     1469         no-lock:
+     1470            if      ttrun.fstatusItem ne "WaitRun"
+     1471               or (     ttrun.fstatusItem eq "WaitRun"
+     1472                    and ttRun.StartAfter  <= vnow)
+     1473            then
+     1474               return yes.
+     1475         end.
+     1476         return no.
+     1477      end.
+     1478   method public character objExists
+     1479   (input  ifolder as character,
+     1480    input  iType   as character  ):
+     1481       define variable vFileType as character no-undo init "D,F".
+     1482       define variable vi        as integer no-undo.
+     1483       define variable vtype as character no-undo.
+     1484       if iType ne ?
+     1485       then
+     1486          vFileType = iType.
+     1487       do vi = 1 to num-entries(vFileType):
+     1488          file-information:file-name = ".\" + right-trim(replace(ifolder,"/","\"),"\").
+     1489          vtype = file-information:file-type.
+     1490          if entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+     1491             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+     1492             index(vtype , entry(vi,vFileType )) > 0
+     1493          then return file-information:full-pathname .
+     1494          file-information:file-name = right-trim(replace(ifolder,"/","\"),"\").
+     1495          vtype = file-information:file-type.
+     1496          if file-information:file-name <> "" and
+     1497             entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+     1498             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+     1499             index( vtype, entry(vi,vFileType )) > 0
+     1500          then return file-information:full-pathname .
+     1501       end.
+     1502       return ? .
+     1503   end.
+     1504   method public character SearchFile
+     1505   (input  ifile as character):
+     1506      return objExists(ifile,?).
+     1507   end.
+     1508   method public character SearchPFile
+     1509   (input inFile as char):
+     1510        define variable oFile       as character no-undo.
+     1511        define variable vFileSearch as character no-undo.
+     1512        define variable vNumEntry   as integer no-undo.
+     1513        if inFile = "" then return ?.
+     1514        vNumEntry = num-entries(inFile,".").
+     1515        vFileSearch = inFile.
+     1516        if    vNumEntry > 0
+     1517           and (   entry(vNumEntry,inFile,".") eq "p"
+     1518                or entry(vNumEntry,inFile,".") eq "w")
+     1519        then do:
+     1520           entry(vNumEntry,vFileSearch, ".") = "r".
+     1521           oFile = search(vFileSearch ).
+     1522           if oFile eq ?
+     1523           then
+     1524              oFile = search(inFile).
+     1525        end.
+     1526        else
+     1527           oFile = search(vFileSearch).
+     1528        return oFile.
+     1529     end.
+     1530      method public logical FolderExists  (input  ifolder as character ):
+     1531         return objExists(ifolder,"D") ne ?.
+     1532      end.
+     1533      method public logical FileExists  (input  ifolder as character ):
+     1534         return objExists(ifolder,"F") ne ?.
+     1535      end.
+     1536      method public logical  objExists  (input  ifile as character):
+     1537         return    (objExists(ifile,"D") ne ?) or ( objExists(ifile,"F") ne ?) .
+     1538      end.
+     1539      define stream sReadDir.
+     1540      method public logical  DelDontWorkProc  ():
+     1541         define variable vPureName as character no-undo.
+     1542         define variable vFileType as character no-undo.
+     1543         define variable vFullPath as character no-undo.
+     1544         define variable vFile     as character no-undo.
+     1545         define variable vPid      as integer no-undo.
+     1546         input STREAM sReadDir FROM os-dir(".").
+     1547         repeat:
+     1548            import stream sReadDir vPureName vFullPath vFileType.
+     1549            if     vFileType =  "d"
+     1550               and vPureName begins  preWorkDir
+     1551            then do:
+     1552               file-info:file-name = vFullPath.
+     1553               if file-info:full-pathname <> ?
+     1554               and ( ( file-info:file-create-date = today
+     1555                    and file-info:file-create-time < time + 120
+     1556                  )
+     1557                  or (    file-info:file-create-date < today
+     1558                      and time > 120)
+     1559                )
+     1560               then do:
+     1561                  vFile = vFullPath + "/parentPid.txt".
+     1562                  if FileExists(vFile)
+     1563                  then do:
+     1564                     input STREAM sReadfile FROM  VALUE(vFile).
+     1565                     repeat:
+     1566                        import stream sReadfile vPid.
+     1567                     end.
+     1568                     input STREAM sReadfile close.
+     1569                     if IsProcessRunning( vpid ) <> -1
+     1570                     then do:
+     1571                        os-delete value(vFullPath) recursive.
+     1572                     end.
+     1573                  end.
+     1574                  else if vPureName begins  "pid_"
+     1575                  then
+     1576                     os-delete value(vFullPath) recursive.
+     1577               end.
+     1578            end.
+     1579         end.
+     1580         input STREAM sReadDir close.
+     1581      end.
+     1582      method public char Writefile (ifile as char,itext as char):
+     1583         define variable verror as character no-undo.
+     1584         verror = mAsyncProc:Writefile(ifile, itext).
+     1585      end.
+     1586   end class.

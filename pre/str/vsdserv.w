@@ -1,0 +1,46 @@
+using ibs.th.str.mercury.*.
+define input parameter vsdsubObj as class vsdsub.
+DEFINE BUTTON Btn_Cancel AUTO-END-KEY
+     LABEL "Выход"
+     SIZE 15 BY 1.13
+     BGCOLOR 8 .
+DEFINE QUERY BROWSE-2 FOR
+      vsd-attr SCROLLING.
+DEFINE BROWSE BROWSE-2
+  QUERY BROWSE-2 NO-LOCK DISPLAY
+      vsd-attr.attr-code FORMAT "x(8)":U WIDTH 26
+      vsd-attr.attr-value FORMAT "x(8)":U WIDTH 50.13
+    WITH NO-ROW-MARKERS SEPARATORS SIZE 79.5 BY 11.75 ROW-HEIGHT-CHARS .58 FIT-LAST-COLUMN.
+DEFINE FRAME Dialog-Frame
+     Btn_Cancel AT ROW 1.38 COL 2
+     BROWSE-2 AT ROW 3 COL 2 WIDGET-ID 200
+     SPACE(0.49) SKIP(0.20)
+    WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+         SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+         TITLE "Служебные"
+         CANCEL-BUTTON Btn_Cancel WIDGET-ID 100.
+ASSIGN
+       FRAME Dialog-Frame:SCROLLABLE       = FALSE
+       FRAME Dialog-Frame:HIDDEN           = TRUE.
+ON WINDOW-CLOSE OF FRAME Dialog-Frame
+DO:
+  APPLY "END-ERROR":U TO SELF.
+END.
+IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+MAIN-BLOCK:
+DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+   ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+  RUN enable_UI.
+  WAIT-FOR GO OF FRAME Dialog-Frame.
+END.
+RUN disable_UI.
+PROCEDURE disable_UI :
+  HIDE FRAME Dialog-Frame.
+END PROCEDURE.
+PROCEDURE enable_UI :
+  ENABLE Btn_Cancel BROWSE-2
+      WITH FRAME Dialog-Frame.
+  VIEW FRAME Dialog-Frame.
+  OPEN QUERY BROWSE-2 FOR EACH vsd-attr       WHERE vsd-attr.db-num = vsdsubObj:DbNum  AND vsd-attr.ID = vsdsubObj:ID NO-LOCK INDEXED-REPOSITION.
+END PROCEDURE.

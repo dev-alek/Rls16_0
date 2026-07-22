@@ -1,0 +1,181 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.bge.1crn.enum-recipe-status.
+        3   using ibs.th.bge.1crn.enum-recipe-type.
+        4   using ibs.th.bge.1crn.subjects.*.
+        5   block-level on error undo, throw.
+        6   class ibs.th.bge.1crn.import.imprecipe implements ibs.th.bge.1crn.import.iimpsubject:
+        7     define property Msg as character no-undo
+        8       get.
+        9       set.
+       10     method public logical Excute( subjectObj as class ibs.th.bge.1crn.subjects.isubject ):
+       11       define variable v-mode       as character no-undo .
+       12       define variable objImp       as class recipe no-undo.
+       13       define variable v-gds-list   as class ibs.th.bge.1crn.subjects.subjects no-undo . // imp:recipe-gds[]
+       14       define variable v-recipe-gd  as class recipe-gd no-undo .
+       15       define variable v-retfl      as logical no-undo .
+       16       define variable v-db-num     as integer no-undo .
+       17       define variable v-recipe-code as character no-undo .
+       18       define variable v-recipe-name as character no-undo .
+       19       define variable v-gds-code    as integer no-undo .
+       20       define variable v-stts        as integer no-undo init 0 .
+       21       define buffer buf_recipe     for ub.recipe .
+       22       define buffer buf_recipe-gds for ub.recipe-gds .
+       23       define buffer buf_fbr-line   for ub.fbr-line .
+       24       define buffer buf_fbr-doc    for ub.fbr-doc .
+       25       define buffer buf_fbr-gds-obj for ub.fbr-gds-obj .
+       26       objImp = cast (subjectObj, recipe).
+       27       assign
+       28         v-recipe-code = objImp:recipe-code
+       29         v-recipe-name = objImp:recipe-name
+       30         v-gds-code    = integer(objImp:gd-code)
+       31         Msg           = "":U
+       32       .
+       33       if v-recipe-code > "" then . else undo, throw new Progress.Lang.AppError("Не задан ид. рецепта") .
+       34       if objImp:del-f > 0 then do:
+       35         find first buf_fbr-line no-lock
+       36              where buf_fbr-line.recipe-code = v-recipe-code no-error.
+       37         if available buf_fbr-line then do:
+       38           find first buf_fbr-doc no-lock
+       39                where buf_fbr-doc.doc-code = buf_fbr-line.doc-code no-error.
+       40           if available buf_fbr-doc then
+       41             Msg = substitute( "Удаление рецепта [&1] невозможно: рецепт используется в производственных операциях." +
+       42                               " Документ: &2 &3 от &4",
+       43                               v-recipe-code, ub.fbr-doc.doc-type, ub.fbr-doc.doc-code, ub.fbr-doc.doc-date ) .
+       44           else Msg = substitute( "Удаление рецепта [&1] невозможно: рецепт используется в производственных операциях." +
+       45                                  " Документ: [&2]",
+       46                               v-recipe-code, buf_fbr-line.doc-code ) .
+       47           v-retfl = false .
+       48           return false.
+       49         end .
+       50         Msg = "физическое удаление рецептов не предусмотрено".
+       51         v-retfl = false .
+       52         return false.
+       53       end.
+       54       find first buf_recipe no-lock where buf_recipe.recipe-code = v-recipe-code no-error .
+       55       if available buf_recipe then do:
+       56         if v-recipe-name > "" then . else v-recipe-name = buf_recipe.recipe-name .
+       57         assign
+       58           v-mode = 'ИЗМЕНЕНИЕ':U
+       59         .
+       60       end .
+       61       else do:
+       62         assign
+       63           v-mode = 'ДОБАВЛЕНИЕ':U
+       64         .
+       65       end .
+       66       if objImp:status_ = enum-recipe-status:enclose
+       67       then do :
+       68         assign
+       69           v-recipe-name = "ЗАКРЫТ." + v-recipe-name
+       70           v-stts = 2
+       71         .
+       72       end .
+       73       define variable proc-fbrlib   as class ibs.th.str.fbrlib no-undo .
+       74       proc-fbrlib = new ibs.th.str.fbrlib () .
+       75       proc-fbrlib:create-new-recipe
+       76       (input v-mode
+       77       ,input v-recipe-code
+       78       ,input mapRecipeTypes (objImp:recipe-type)
+       79       ,input v-recipe-name
+       80       ,input objImp:recipe-num
+       81       ,input v-gds-code
+       82       ,input objImp:qnty-netto
+       83       ,input objImp:qnty
+       84       ,input objImp:weight
+       85       ,input v-stts
+       86       ) .
+       87       if objImp:main = 1  then do:
+       88           run gbl/getdbnum.p (output v-db-num).
+       89           find first ub.clients no-lock where ub.clients.db-num = v-db-num
+       90                                     and ub.clients.obj-type = 'маг':U
+       91                                     and ub.clients.stts = 0 .
+       92           proc-fbrlib:fbrlib-set-default-recipe(
+       93                 input ub.clients.obj-type
+       94               , input ub.clients.obj-code
+       95               , input v-gds-code
+       96           ).
+       97           for each buf_fbr-gds-obj exclusive-lock
+       98              where buf_fbr-gds-obj.obj-type = ub.clients.obj-type
+       99                and buf_fbr-gds-obj.obj-code = ub.clients.obj-code
+      100                and buf_fbr-gds-obj.gds-code = v-gds-code
+      101           on error undo, return error
+      102           :
+      103               assign
+      104                   buf_fbr-gds-obj.default-recipe-code = v-recipe-code
+      105               .
+      106           end.
+      107       end.
+      108       define variable v-rgds  as character no-undo .
+      109       define variable v-ii    as integer no-undo .
+      110       define variable v-rowid as rowid no-undo .
+      111       assign
+      112         v-gds-list = objImp:recipe-gds
+      113         v-rgds     = ""
+      114       .
+      115       if valid-object (v-gds-list) then do :
+      116       do v-ii = 1 to v-gds-list:Get(v-ii):
+      117         v-recipe-gd = cast (v-gds-list:SubjectObjCurr, recipe-gd) .
+      118         v-gds-code = integer (v-recipe-gd:gd-code) .
+      119         v-rowid = proc-fbrlib:create-new-recipe-gds
+      120         (input v-recipe-code
+      121         ,input v-gds-code
+      122         ,input v-recipe-gd:qnty-net
+      123         ,input v-recipe-gd:qnty-gross
+      124         ,input v-recipe-gd:lf
+      125         ,input v-recipe-gd:gds-recipe-code
+      126         ,input v-recipe-gd:wst
+      127         ) .
+      128         if (v-mode = 'ИЗМЕНЕНИЕ':U) then v-rgds = v-rgds + "," + string(v-rowid) .
+      129       end .
+      130       v-rgds = substring(v-rgds, 2) .
+      131       if (v-mode = 'ИЗМЕНЕНИЕ':U) and (v-rgds > "") then do:
+      132         for each buf_recipe-gds exclusive-lock
+      133            where buf_recipe-gds.recipe-code = v-recipe-code
+      134              and can-do (  v-rgds,  string(rowid(buf_recipe-gds))  ) = false:
+      135           assign
+      136             buf_recipe-gds.nws-self    = yes
+      137           .
+      138           delete buf_recipe-gds .
+      139         end.
+      140       end.
+      141       end .
+      142       else do :
+      143         Msg = substitute(
+      144           "Ошибка импорта рецепта [&1]: отсутствуют товары в рецепте - в секции &2 отсутствуют элементы &3",
+      145           v-recipe-code, "recipe-gds", "recipe-gd" ) .
+      146           v-retfl = false .
+      147           return false.
+      148       end .
+      149       v-retfl = true .
+      150       catch exAppErrors as class Progress.Lang.AppError :
+      151         Msg = exAppErrors:ReturnValue .
+      152         if Msg = "" then Msg = exAppErrors:GetMessage(1) .
+      153         v-retfl = false.
+      154         undo, throw exAppErrors .
+      155       end catch .
+      156       catch exProErrors as class Progress.Lang.ProError :
+      157         Msg = exProErrors:GetMessage(1) .
+      158         v-retfl = false.
+      159         undo, throw exProErrors .
+      160       end catch .
+      161       catch exAnyErrors as class Progress.Lang.Error:
+      162         Msg = "Unexpected error occurred..." .
+      163         v-retfl = false.
+      164         undo, throw exAnyErrors .
+      165       end catch .
+      166       finally :
+      167         if valid-object(proc-fbrlib) then delete object proc-fbrlib .
+      168         return v-retfl.
+      169       end finally .
+      170     end method.
+      171     method private character mapRecipeTypes (p-recipe-type as enum-recipe-type) :
+      172       define variable v-th-recipe-type as character no-undo .
+      173       case p-recipe-type :
+      174         when enum-recipe-type:enmanufacturing then v-th-recipe-type = 'производство':U .
+      175         when enum-recipe-type:engathering     then v-th-recipe-type = 'комплектация':U .
+      176         when enum-recipe-type:enalternative   then v-th-recipe-type = 'альтернатива':U .
+      177         otherwise v-th-recipe-type = "":U .
+      178       end case .
+      179       return v-th-recipe-type .
+      180     end method .
+      181   end class.

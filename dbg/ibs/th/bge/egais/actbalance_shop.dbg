@@ -1,0 +1,416 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.bge.egais.*.
+        3   block-level on error undo, throw.
+        4   class ibs.th.bge.egais.ActBalance_shop inherits EGAISUTM:
+        5   define temp-table tt-act-header
+        6       field num           as character        label "№ акта"      format "X(30)"
+        7       field date_         as date             label "Дата акта"
+        8       field is-sent       as logical
+        9       field answer_       as character        label "Ответ"       format "X(1500)"
+       10       field type_         as character        label "Основание"   format "X(35)"
+       11       field RegID         as character        label "Рег. номер"  format "X(50)"
+       12       index pi as primary unique
+       13           num
+       14   .
+       15   define temp-table tt-gds-act
+       16       field num           as character                label "№ акта"
+       17       field position_     as integer                  label "№ пп"                    format ">>>9"
+       18       field gds-code      like ub.goods.gds-code      label "Код товара   "
+       19       field part-code     like ub.parts.part-code     label "Партия"
+       20       field doc-code      as character                label "№ накладной TH"
+       21       field doc-date      like ub.trn-doc.fact-date   label "Дата TH"
+       22       field alc-code      as character                label "Алкогольный код"         format "X(21)"
+       23       field gds-name      like ub.goods.gds-name      label "Наименование товара"     format "X(35)"
+       24       field qnty          as decimal                  label "Количество"
+       25       field egais-name    as character
+       26       index pi as primary unique
+       27           position_
+       28       index code
+       29           gds-code doc-code
+       30   .
+       31   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       32     define stream outstr.
+       33     define private buffer buf_clob-bind for ub.clob-bind.
+       34     define private buffer buf_clob-data for ub.clob-data.
+       35     define private buffer buf_gds for ub.goods.
+       36     define private buffer buf_trn-doc for ub.trn-doc.
+       37     define private buffer buf_doc-attr for ub.doc-attr.
+       38     define private buffer buf_doc-line for ub.doc-line.
+       39     define private buffer buf_clients for ub.clients.
+       40     define private buffer buf_ext-classif for ub.ext-classif.
+       41     define private variable parameters     as character no-undo.
+       42     define private variable inFileName     as character no-undo.
+       43     define private variable inData         as character no-undo.
+       44     define private variable outData        as character no-undo.
+       45     define private variable cmd            as character no-undo.
+       46     define private variable urlResp        as character no-undo.
+       47     define private variable v-uniq-key-rec as character no-undo.
+       48     define private variable v-Answer       as character no-undo.
+       49     define private variable v-RegID        as character no-undo.
+       50     define private variable ticket2        as logical   no-undo.
+       51     define variable v-FS-RAR  as character no-undo .
+       52     define variable ObjType   as character no-undo .
+       53     define variable ObjCode   as integer   no-undo .
+       54     define variable Obj       as character no-undo .
+       55     define variable v-ext-sys as integer   no-undo .
+       56     DEFINE VARIABLE good AS LOGICAL NO-UNDO.
+       57     define property inNum as character no-undo
+       58       get.
+       59       set.
+       60     constructor public ActBalance_shop (inOjType as char, inObjCode as int, inFSRAR as char, inExtSys as integer):
+       61       super (inOjType, inObjCode).
+       62       ObjCode = inObjCode.
+       63       ObjType = inOjType.
+       64       Obj = "*-" + substring(ObjType,1,1) + string(ObjCode) + "-*" .
+       65       v-FS-RAR = inFSRAR.
+       66       v-ext-sys = inExtSys.
+       67       IsSent.
+       68     end constructor.
+       69     method public override handle GetHndlTable(inTableType as int, inAbIndenty as char) :
+       70       define variable hRoot as handle  no-undo.
+       71       define variable hDoc  as handle  no-undo.
+       72       define variable ii    as integer no-undo.
+       73           define variable v-type as character no-undo .
+       74       assign
+       75         parameters = inNum
+       76         StatusErr = false
+       77         Msg       = ""
+       78         .
+       79       case inTableType:
+       80         when 3 then
+       81           do:
+       82             empty temp-table tt-act-header.
+       83             for each buf_clob-bind where buf_clob-bind.field-name_ = 'egais-ab_shop':U:
+       84               if entry(1, buf_clob-bind.descr, chr(4)) matches Obj
+       85               then .
+       86               else next .
+       87               create tt-act-header.
+       88               assign
+       89                   tt-act-header.num       = (entry (1, buf_clob-bind.descr, chr(4)))
+       90                   tt-act-header.date_     = date (entry (2, buf_clob-bind.descr, chr(4)))
+       91                   tt-act-header.is-sent   = logical (entry (3, buf_clob-bind.descr, chr(4)))
+       92               .
+       93               assign tt-act-header.answer_   = (entry (4, buf_clob-bind.descr, chr(4))) no-error .
+       94               assign tt-act-header.type_   = (entry (5, buf_clob-bind.descr, chr(4))) no-error .
+       95                           assign tt-act-header.RegID     = (entry (6, buf_clob-bind.descr, chr(4))) no-error .
+       96               end.
+       97             return buffer tt-act-header:handle.
+       98           end.
+       99         when 2 then
+      100         do :
+      101                   v-Answer = "" .
+      102           v-RegID = "" .
+      103           create x-document hDoc.
+      104           create x-noderef  hRoot.
+      105           ReplyID = "" .
+      106           IsSent.
+      107           if ReplyID = "" or ReplyID = ?
+      108           then do:
+      109             StatusErr = true.
+      110             Msg = "Не найден запрос в журнале запросов или код запроса пуст".
+      111             return ?.
+      112           end.
+      113           if ConPar = "" or ConPar = ?
+      114           then do:
+      115             StatusErr = true.
+      116             Msg = "Не заданы настройки соединения для EGAIS".
+      117             return ?.
+      118           end.
+      119           ticket2 = false .
+      120           GetSubjectOfRequestUTM().
+      121           if StatusErr
+      122             then return ?.
+      123           file-info:file-name = search (inFileName).
+      124           if search (inFileName) = ? or file-info:file-size = 0
+      125           then do:
+      126             assign
+      127               StatusErr = true
+      128               Msg = "Не удалось получить данные от UTM"
+      129             .
+      130             return ?.
+      131           end.
+      132           if not WriteDbStatus ( 4, parameters , ReplyId, true )
+      133           then do:
+      134             assign
+      135               StatusErr = true
+      136               Msg = "Не удалось записать данные о запросе в БД. Запрос не выполен."
+      137             .
+      138             undo, return ?.
+      139           end.
+      140           hDoc:load ("file", inFileName, false).
+      141           hDoc:get-document-element(hRoot) .
+      142           GetChildren(hRoot, 1).
+      143           DELETE OBJECT hDoc no-error.
+      144           DELETE OBJECT hRoot no-error.
+      145           ticket2 = true .
+      146           if num-entries(urlResp, chr(4)) = 2 then do :
+      147               create x-document hDoc.
+      148               create x-noderef  hRoot.
+      149               GetSubjectOfRequestUTM().
+      150               if StatusErr
+      151                 then return ?.
+      152               file-info:file-name = search (inFileName).
+      153               if search (inFileName) = ? or file-info:file-size = 0
+      154               then do:
+      155                 assign
+      156                   StatusErr = true
+      157                   Msg = "Не удалось получить данные от UTM"
+      158                 .
+      159                 return ?.
+      160               end.
+      161               hDoc:load ("file", inFileName, false).
+      162               hDoc:get-document-element(hRoot) .
+      163               GetChildren(hRoot, 1).
+      164               DELETE OBJECT hDoc no-error.
+      165               DELETE OBJECT hRoot no-error.
+      166           end.
+      167           find last buf_clob-bind exclusive-lock where buf_clob-bind.field-name_ = 'egais-ab_shop':U and buf_clob-bind.uniq-key-rec = inAbIndenty .
+      168           v-type = (entry (5, buf_clob-bind.descr, chr(4))) no-error .
+      169                   if v-type = ? then v-type = "" .
+      170                   if num-entries (buf_clob-bind.descr, chr(4)) = 3 then
+      171               assign buf_clob-bind.descr = buf_clob-bind.descr + chr(4) + v-Answer + chr(4) + v-type + chr(4) + v-RegID .
+      172           else if num-entries (buf_clob-bind.descr, chr(4)) = 4 then
+      173                           assign entry(4, buf_clob-bind.descr, chr(4)) = v-Answer
+      174                                      buf_clob-bind.descr = buf_clob-bind.descr + chr(4) + v-type + chr(4) + v-RegID .
+      175                   else if num-entries (buf_clob-bind.descr, chr(4)) = 5 then
+      176               assign entry(4, buf_clob-bind.descr, chr(4)) = v-Answer
+      177                                      entry(5, buf_clob-bind.descr, chr(4)) = v-type
+      178                                      buf_clob-bind.descr = buf_clob-bind.descr + chr(4) + v-RegID .
+      179                   else if num-entries (buf_clob-bind.descr, chr(4)) = 6 then
+      180               assign entry(4, buf_clob-bind.descr, chr(4)) = v-Answer
+      181                                      entry(5, buf_clob-bind.descr, chr(4)) = v-type
+      182                                      entry(6, buf_clob-bind.descr, chr(4)) = v-RegID .
+      183           release buf_clob-bind .
+      184           find first tt-act-header where tt-act-header.num = inAbIndenty .
+      185           assign tt-act-header.answer_ = v-Answer
+      186                  tt-act-header.RegID   = v-RegID .
+      187           return buffer tt-act-header:handle.
+      188         end.
+      189       end case.
+      190     end.
+      191     method override public logical SendRequestUTM ():
+      192       def var ii        as int    no-undo.
+      193       def var xml-cont  as char   no-undo.
+      194       def var respValue as handle no-undo.
+      195       assign
+      196         parameters = inNum
+      197         StatusErr = false
+      198         Msg       = ""
+      199         .
+      200       IsSent.
+      201       do trans:
+      202         os-delete "RespActChargeOn_Shop0.xml".
+      203         assign
+      204           inFileName = "RespActChargeOn_Shop0.xml"
+      205           .
+      206         find first tt-act-header where tt-act-header.num = inNum no-error.
+      207         if available (tt-act-header)
+      208           then
+      209         do:
+      210             cmd = substitute ("&1 --connect-timeout &5 -F xml_file=@&2 &3/opt/in/ActChargeOnShop_v2 >&4", search ("exe/curl.exe"), search ("ActChargeOnShop_v2.xml"), ConPar, inFileName, TimeOut).
+      211             os-command silent value (cmd).
+      212             file-info:file-name = search (inFileName).
+      213             if search (inFileName) <> ? and file-info:file-size > 0
+      214               then
+      215             do:
+      216               respValue = ParseRequest (inFileName).
+      217               if respValue = ?
+      218                 then
+      219               do:
+      220                 assign
+      221                   StatusErr = true
+      222                   Msg       = "Не удалось разобрать данные от UTM"
+      223                   .
+      224                 undo, return false.
+      225               end.
+      226               if not StatusErr
+      227                 then
+      228                 ReplyId = respValue:node-value.
+      229               else
+      230               do:
+      231                 assign
+      232                   StatusErr = true
+      233                   Msg       = respValue:node-value
+      234                   .
+      235                 undo, return false.
+      236               end.
+      237             end.
+      238             else
+      239             do:
+      240               assign
+      241                 StatusErr = true
+      242                 Msg       = "Не удалось отправить акт постановки на баланс в UTM"
+      243                 .
+      244               undo, return false.
+      245             end.
+      246             if not WriteDbStatus (4, parameters , ReplyId, false)
+      247             then do:
+      248               assign
+      249                 StatusErr = true
+      250                 Msg = "Не удалось записать данные о запросе в БД. Запрос не выполен."
+      251               .
+      252               undo, return false.
+      253             end.
+      254         end.
+      255       end.
+      256     end.
+      257     method override protected logical GetIsSent ():
+      258       find last ub.esys-all-attr no-lock
+      259                   where ub.esys-all-attr.table-name = "esys-pck-sent"
+      260                   and ub.esys-all-attr.attr-code = "egais"
+      261                   and ub.esys-all-attr.key2       = 4
+      262                   and ub.esys-all-attr.attr-value = parameters
+      263                   no-error.
+      264       if available (ub.esys-all-attr )
+      265       then do:
+      266         ReplyId = ub.esys-all-attr.key7.
+      267         return true.
+      268       end.
+      269       return false.
+      270     end.
+      271     method protected handle ParseRequest (inFileName as char):
+      272       define variable hRoot as handle  no-undo.
+      273       define variable hDoc  as handle  no-undo.
+      274       define variable hRow  as handle  no-undo.
+      275       define variable hText as handle  no-undo.
+      276       define variable ii    as integer no-undo.
+      277       create x-document hDoc.
+      278       create x-noderef  hRoot.
+      279       create x-noderef  hRow.
+      280       create x-noderef htext .
+      281       hDoc:load ("file", inFileName, false).
+      282       hDoc:encoding = "UTF-8".
+      283       hDoc:get-document-element(hRoot) .
+      284       do ii = 1 to hRoot:num-children:
+      285         hRoot:get-child(hRow,ii).
+      286         case hRow:name:
+      287           when "url" then
+      288             do:
+      289               hRow:get-child (hText, 1) no-error.
+      290               return hText.
+      291             end.
+      292           when "error" then
+      293             do:
+      294               hRow:get-child (hText, 1) no-error.
+      295               StatusErr = true.
+      296               return hText.
+      297             end.
+      298           otherwise
+      299             do:
+      300               return ?.
+      301             end.
+      302         end case.
+      303       end.
+      304     end.
+      305     method private void GetChildren(hParent AS HANDLE, level AS INTEGER):
+      306           DEFINE VARIABLE i AS INTEGER NO-UNDO.
+      307           DEFINE VARIABLE hNoderef AS HANDLE NO-UNDO.
+      308           DEFINE VARIABLE hText AS HANDLE NO-UNDO.
+      309           define variable v-ok as logical no-undo .
+      310           CREATE X-NODEREF hNoderef.
+      311           CREATE X-NODEREF hText .
+      312           REPEAT i = 1 TO hParent:NUM-CHILDREN:
+      313               good = hParent:GET-CHILD(hNoderef,i).
+      314               IF NOT good THEN
+      315                   LEAVE.
+      316               IF hNoderef:SUBTYPE <> "element" THEN
+      317                   NEXT.
+      318               hNoderef:GET-CHILD(hText, 1) no-error .
+      319               IF hNoderef:NAME = "tc:RegID"    THEN do :
+      320                   v-RegID  = hText:node-value no-error.
+      321                   if v-RegID = ? then v-RegID = "" .
+      322               end.
+      323               IF hNoderef:NAME = "tc:Conclusion"
+      324               OR hNoderef:NAME = "tc:OperationResult" THEN
+      325               DO :
+      326                   if hText:node-value = "Rejected" then v-RegID = v-RegID + CHR(5) + "R" .
+      327                   if hText:node-value = "Accepted" then v-RegID = v-RegID + CHR(5) + "A" .
+      328               END.
+      329               IF hNoderef:NAME = "tc:Comments" THEN do :
+      330                   if trim(v-Answer) = '' or v-Answer = chr(10) then v-Answer = hText:node-value .
+      331                   else v-Answer = v-Answer + chr(10) + hText:node-value .
+      332               end.
+      333               IF hNoderef:NAME = "tc:OperationResult" THEN v-ok = (hText:node-value = "Accepted") .
+      334               IF hNoderef:NAME = "tc:OperationComment" THEN v-Answer = v-Answer + chr(10) + hText:node-value .
+      335               GetChildren(hNoderef, (level + 1)).
+      336           END.
+      337           DELETE OBJECT hNoderef.
+      338           DELETE OBJECT hText.
+      339     END.
+      340     method public override character GetSubjectOfRequestUTM() :
+      341       define variable response as character no-undo .
+      342       if not ticket2 then do :
+      343           urlResp = GetURLUTM(ReplyId).
+      344       end.
+      345       if StatusErr and Msg <> "" and Msg <> ? then return ? .
+      346       if urlResp = "" or urlResp = ?
+      347       then do:
+      348         StatusErr = true.
+      349         Msg = "Еще не получен ответ от сервера EGAIS по запросу " + ReplyId + chr(10) + "Либо ответ уже автоматически удалён".
+      350         return ?.
+      351       end.
+      352       if not ticket2 then do :
+      353           os-delete "RespActChargeOnShop.xml".
+      354           assign
+      355             inFileName = "RespActChargeOnShop.xml"
+      356             response = entry(1,urlResp,chr(4))
+      357           .
+      358       end.
+      359       else do :
+      360           os-delete "RespActChargeOnShop2.xml".
+      361           assign
+      362             inFileName = "RespActChargeOnShop2.xml"
+      363           .
+      364           response = entry(2,urlResp,chr(4)) no-error .
+      365       end.
+      366       if trim(response) <> "" then do :
+      367           cmd = substitute ("&1 --connect-timeout &2 -X GET &3 >&4", search ("exe/curl.exe"), TimeOut, response, inFileName).
+      368           os-command silent value (cmd).
+      369       end.
+      370     end.
+      371     method protected override character GetURLUTM (inReplyId as char):
+      372       define variable hRoot as handle  no-undo.
+      373       define variable hDoc  as handle  no-undo.
+      374       define variable hRow  as handle  no-undo.
+      375       define variable hText as handle  no-undo.
+      376       define variable ii    as integer no-undo.
+      377       define variable files as character no-undo.
+      378       create x-document hDoc.
+      379       create x-noderef  hRoot.
+      380       create x-noderef  hRow.
+      381       create x-noderef  hText.
+      382       assign
+      383         inFileName = "ReceiptListOfQuery.xml"
+      384       .
+      385       if search ("ReceiptListOfQuery.xml") <> ? then os-delete value (inFileName).
+      386       if search (inFileName) <> ? then os-delete value (inFileName).
+      387       cmd = substitute ("&1 --connect-timeout &2 -X GET &3/opt/out?refresh=true >&4",search ("exe/curl.exe"), TimeOut, ConPar, inFileName).
+      388       os-command silent value (cmd).
+      389       file-info:file-name = search (inFileName).
+      390       if search (inFileName) = ? or file-info:file-size = 0
+      391       then do:
+      392         assign
+      393           StatusErr = true
+      394           Msg = "Не удалось получить данные от UTM"
+      395         .
+      396         return ?.
+      397       end.
+      398       hDoc:load ("file", inFileName, false).
+      399       hDoc:get-document-element(hRoot) .
+      400       do ii = 1 to hRoot:num-children:
+      401         hRoot:get-child(hRow,ii).
+      402         case hRow:name:
+      403           when "url" then
+      404             do:
+      405               if hRow:get-attribute("replyId") = ReplyId
+      406               then do:
+      407                 hRow:get-child (hText, 1) no-error.
+      408                 files = files + chr(4) + hText:node-value.
+      409               end.
+      410             end.
+      411         end case.
+      412       end.
+      413       files = trim(files, chr(4)) .
+      414       return files .
+      415     end.
+      416   end class.

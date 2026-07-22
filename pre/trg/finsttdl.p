@@ -1,0 +1,723 @@
+block-level on error undo, throw.
+define input parameter p-host-code like ub.fin-statement.host-code no-undo .
+define input parameter p-sttm-code like ub.fin-statement.sttm-code no-undo .
+define input parameter p-fact-delete as logical no-undo .
+define input parameter p-silence as logical no-undo .
+define variable vss-revision    as character no-undo init "$Revision$":U .
+define variable vss-author      as character no-undo init "$Author$":U .
+define variable vss-date        as character no-undo init "$Date$":U .
+define variable vss-workfile    as character no-undo init "$Workfile$":U .
+define variable vss-archive     as character no-undo init "$Archive$":U .
+define variable vss-description as character no-undo init "Удаление выписки закрытой до факт ".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+define   shared variable g#auto as logical no-undo.
+define   shared variable g#news as logical no-undo.
+define   shared variable g#oxml as logical no-undo.
+define   shared variable g#esys as logical no-undo.
+define   shared variable g#news-source-db as integer no-undo.
+define   shared variable g#esys-source-esys as integer no-undo.
+define   shared variable g#db-num as integer   no-undo .
+define   shared variable g#userid as character no-undo .
+define   shared variable g#passwd as character no-undo .
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure cur-time :
+   define output parameter p-today as date      no-undo .
+   define output parameter p-time  as integer   no-undo .
+  do
+  on error undo, return error
+  :
+    define variable v-date1 as date      no-undo .
+    define variable v-date2 as date      no-undo .
+    define variable v-time  as integer   no-undo .
+    assign
+      v-date1 = today
+      v-time  = time
+      v-date2 = today
+    .
+    if v-date1 <> v-date2
+    then do:
+      assign
+        v-date1 = today
+        v-time  = v-time
+      .
+    end.
+    assign
+      p-today = v-date1
+      p-time  = v-time
+    .
+  end.
+end.
+function cur-time-date returns character
+:
+  return string(today, '99/99/9999':U) .
+end.
+function cur-time-mjd returns decimal
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return integer(v-date) - 2400002 + (v-time / 86400) .
+end.
+function cur-time-get-ending-index returns integer
+(input p-number as integer
+)
+:
+  if p-number < 0
+  or p-number = ?
+  then do:
+    return 1 .
+  end.
+  define variable v-rest as integer   no-undo .
+  assign
+    p-number = p-number modulo 100
+  .
+  if p-number < 20
+  then do:
+    assign
+      v-rest = p-number
+    .
+  end.
+  else do:
+    assign
+      v-rest = p-number modulo 10
+    .
+  end.
+  case v-rest :
+    when 1
+    then do:
+      return 2 .
+    end.
+    when 2 or
+    when 3 or
+    when 4
+    then do:
+      return 3 .
+    end.
+    otherwise do:
+      return 1 .
+    end.
+  end case .
+end.
+procedure cur-time-mjd-to-date :
+   define input  parameter i-mjd-diff as decimal no-undo.
+   define output parameter o-Date     as date    no-undo.
+   define output parameter o-Time     as integer no-undo.
+   define variable v-day-number as integer   no-undo .
+   if    i-mjd-diff < 0
+      or i-mjd-diff = ?
+   then do:
+      return "?" .
+   end.
+   assign
+      v-day-number = truncate(i-mjd-diff,0).
+      o-Date = date(v-day-number + 2400002).
+      o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+  .
+end.
+function cur-time-mjd-to-string returns character
+(input p-mjd-diff as decimal
+)
+:
+  define variable v-day-number as integer   no-undo .
+  define variable v-seconds    as integer   no-undo .
+  define variable v-hour       as integer   no-undo .
+  define variable v-min        as integer   no-undo .
+  define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+  define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+  define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+  define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+  if p-mjd-diff < 0
+  or p-mjd-diff = ?
+  then do:
+    return "?" .
+  end.
+  assign
+    v-day-number = integer(truncate(p-mjd-diff,0))
+    v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+  .
+  if v-seconds > 86400
+  then do:
+    assign
+      v-seconds = 86400 - 1
+    .
+  end.
+  if v-seconds < 0
+  then do:
+    assign
+      v-seconds = 0
+    .
+  end.
+  assign
+    v-hour = truncate(v-seconds / 3600, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 3600
+  .
+  assign
+    v-min = truncate(v-seconds / 60, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 60
+  .
+  return
+      (if v-day-number <> 0
+        then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0
+        then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+        then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+        else ""
+      )
+    + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+    .
+end.
+function cur-time-string returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-string-sec returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+end.
+function cur-time-custom  returns character
+(input p-prefix as character
+,input p-date-format as character
+,input p-delimiter as character
+,input p-time-format as character
+,input p-suffix as character
+)
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return
+    p-prefix
+    + string(v-date, p-date-format)
+    + p-delimiter
+    + string(v-time, p-time-format)
+    + p-suffix
+    .
+end.
+function cur-time-print  returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-datetime returns datetime
+:
+  define variable v-char as character no-undo .
+  define variable v-datetime as datetime no-undo .
+  v-char = cur-time-string().
+  v-datetime = datetime(v-char).
+  return  v-datetime.
+end.
+function cur-time-string-msec returns character
+:
+  define variable v-date as datetime  no-undo .
+  v-date = now.
+  return string(v-date) .
+end.
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure fs-attr-code :
+  do
+  on error undo, return error
+  :
+    define input  parameter p-code           as character no-undo .
+    define output parameter p-type           as character no-undo .
+    define output parameter p-format         as character no-undo .
+    define output parameter p-label          as character no-undo .
+    define output parameter p-user-can-edit  as logical   no-undo .
+    define output parameter p-output-display as logical   no-undo .
+    define output parameter p-other          as character no-undo .
+    case p-code :
+      otherwise do:
+        undo, return error "неизвестный атрибут выписки" + " " + p-code .
+      end.
+    end.
+  end.
+end procedure.
+procedure fs-attr-tooltip :
+  do
+  on error undo, return error
+  :
+    define input  parameter p-code    as character no-undo .
+    define output parameter p-tooltip as character no-undo .
+    define output parameter p-label   as character no-undo .
+    case p-code :
+      otherwise do:
+        undo, return error "неизвестный атрибут выписки" + " " + p-code .
+      end.
+    end.
+  end.
+end procedure.
+procedure fin-statement-attr-write :
+ do
+ on error undo, return error return-value
+ :
+define input parameter p-host-code     like ub.fin-statement-attr.host-code  no-undo .
+define input parameter p-sttm-code  like ub.fin-statement-attr.sttm-code   no-undo .
+define input parameter p-attr-code     like ub.fin-statement-attr.attr-code  no-undo .
+define input parameter p-attr-value    like ub.fin-statement-attr.attr-value no-undo .
+define variable  v-format         as character no-undo .
+define variable  v-label          as character no-undo .
+define variable  v-user-can-edit  as logical   no-undo .
+define variable  v-output-display as logical   no-undo .
+define variable  v-other          as character no-undo .
+define variable  v-type           as character no-undo .
+define buffer buf_fin-statement-attr for ub.fin-statement-attr.
+run fs-attr-code in this-procedure
+                                  (input  p-attr-code
+                                  ,output v-type
+                                  ,output v-format
+                                  ,output v-label
+                                  ,output v-user-can-edit
+                                  ,output v-output-display
+                                  ,output v-other
+                                  ) no-error .
+if error-status :error then do:
+  undo, return error return-value .
+end.
+find first buf_fin-statement-attr  exclusive-lock  where
+          buf_fin-statement-attr.attr-code    = p-attr-code
+      AND buf_fin-statement-attr.host-code    = p-host-code
+      AND buf_fin-statement-attr.sttm-code     = p-sttm-code  no-error .
+  if not available  buf_fin-statement-attr then do:
+      create buf_fin-statement-attr.
+      assign
+      buf_fin-statement-attr.attr-code    = p-attr-code
+      buf_fin-statement-attr.attr-value   = p-attr-value
+      buf_fin-statement-attr.host-code    = p-host-code
+      buf_fin-statement-attr.sttm-code     = p-sttm-code
+      .
+  end.
+  else do:
+        buf_fin-statement-attr.attr-value   = p-attr-value .
+  end.
+ end.
+end procedure.
+procedure fs-attr-exist :
+  do
+  on error undo, return error
+  :
+    define input parameter p-host-code     like ub.fin-statement-attr.host-code  no-undo .
+    define input parameter p-sttm-code  like ub.fin-statement-attr.sttm-code   no-undo .
+    define input parameter p-code          like ub.fin-statement-attr.attr-code  no-undo .
+    define output parameter p-exist   as logical  no-undo .
+    define buffer buf_fin-statement-attr for ub.fin-statement-attr .
+    def var v-type           as character no-undo .
+    def var v-format         as character no-undo .
+    def var v-label          as character no-undo .
+    def var v-user-can-edit  as logical   no-undo .
+    def var v-output-display as logical   no-undo .
+    def var v-other          as character no-undo .
+    run fs-attr-code in this-procedure
+      (input  p-code
+      ,output v-type
+      ,output v-format
+      ,output v-label
+      ,output v-user-can-edit
+      ,output v-output-display
+      ,output v-other
+      ) no-error .
+    if error-status :error then do:
+      undo, return error return-value .
+    end.
+    find first buf_fin-statement-attr exclusive-lock
+      where buf_fin-statement-attr.host-code  = p-host-code
+        and buf_fin-statement-attr.sttm-code  = p-sttm-code
+        and buf_fin-statement-attr.attr-code = p-code
+      no-error .
+    if  available buf_fin-statement-attr then do:
+      p-exist = yes.
+    end.
+  end.
+end procedure.
+procedure fs-attr-delete :
+  do
+  on error undo, return error
+  :
+  define input parameter p-host-code     like ub.fin-statement-attr.host-code  no-undo .
+  define input parameter p-sttm-code  like ub.fin-statement-attr.sttm-code   no-undo .
+  define input parameter p-code          like ub.fin-statement-attr.attr-code  no-undo .
+  define output parameter p-deleted  as logical no-undo.
+    define buffer buf_fin-statement-attr for ub.fin-statement-attr .
+    def var v-type           as character no-undo .
+    def var v-format         as character no-undo .
+    def var v-label          as character no-undo .
+    def var v-user-can-edit  as logical   no-undo .
+    def var v-output-display as logical   no-undo .
+    def var v-other          as character no-undo .
+    run fs-attr-code in this-procedure
+      (input  p-code
+      ,output v-type
+      ,output v-format
+      ,output v-label
+      ,output v-user-can-edit
+      ,output v-output-display
+      ,output v-other
+      ) no-error .
+    if error-status :error then do:
+      undo, return error return-value .
+    end.
+    find first buf_fin-statement-attr exclusive-lock
+      where buf_fin-statement-attr.host-code  = p-host-code
+        and buf_fin-statement-attr.sttm-code  = p-sttm-code
+        and buf_fin-statement-attr.attr-code = p-code
+      no-error NO-WAIT.
+    if not available buf_fin-statement-attr then do:
+      p-deleted = no.
+    end.
+    else do:
+      delete buf_fin-statement-attr no-error .
+      if error-status:error then do:
+        undo, return error return-value .
+      end.
+      p-deleted = yes.
+    end.
+  end.
+end procedure.
+procedure fin-statement-attr-value :
+ do
+ on error undo, return error return-value
+ :
+define input  parameter p-host-code    like ub.fin-statement-attr.host-code    no-undo .
+define input  parameter p-sttm-code like ub.fin-statement-attr.sttm-code     no-undo .
+define input  parameter p-attr-code    like ub.fin-statement-attr.attr-code    no-undo .
+define output parameter p-attr-value   like ub.fin-statement-attr.attr-value   no-undo .
+define variable  v-format         as character no-undo .
+define variable  v-label          as character no-undo .
+define variable  v-user-can-edit  as logical   no-undo .
+define variable  v-output-display as logical   no-undo .
+define variable  v-other          as character no-undo .
+define variable  v-type           as character no-undo .
+define buffer buf_fin-statement-attr for ub.fin-statement-attr.
+run fs-attr-code in this-procedure
+  (input  p-attr-code
+  ,output v-type
+  ,output v-format
+  ,output v-label
+  ,output v-user-can-edit
+  ,output v-output-display
+  ,output v-other
+  ) no-error .
+if error-status :error then do:
+  undo, return error return-value .
+end.
+find first buf_fin-statement-attr no-lock where
+          buf_fin-statement-attr.attr-code    = p-attr-code
+      AND buf_fin-statement-attr.host-code     = p-host-code
+      AND buf_fin-statement-attr.sttm-code = p-sttm-code      no-error .
+  if available  buf_fin-statement-attr then do:
+    assign
+    p-attr-value = buf_fin-statement-attr.attr-value
+    .
+  end.
+  else do:
+    p-attr-value = ? .
+  end.
+ end.
+end procedure.
+procedure fs-attr-news :
+  do
+  on error undo, return error
+  :
+    define input  parameter p-code           as character no-undo .
+    define output parameter p-news           as logical   no-undo .
+    case p-code :
+      otherwise do:
+        undo, return error "неизвестный атрибут выписки " + " " + p-code .
+      end.
+    end.
+  end.
+end procedure.
+procedure c-fin-statement-attr-write :
+ do
+ on error undo, return error return-value
+ :
+define input parameter p-host-code     like ub.c-fin-statement-attr.host-code  no-undo .
+define input parameter p-sttm-code  like ub.c-fin-statement-attr.sttm-code   no-undo .
+define input parameter p-corr-user-db-num  like ub.c-fin-statement-attr.corr-user-db-num   no-undo .
+define input parameter p-chip-num      like ub.c-fin-statement-attr.chip-num   no-undo .
+define input parameter p-attr-code     like ub.c-fin-statement-attr.attr-code  no-undo .
+define input parameter p-attr-value    like ub.c-fin-statement-attr.attr-value no-undo .
+define variable  v-format         as character no-undo .
+define variable  v-label          as character no-undo .
+define variable  v-user-can-edit  as logical   no-undo .
+define variable  v-output-display as logical   no-undo .
+define variable  v-other          as character no-undo .
+define variable  v-type           as character no-undo .
+define buffer buf_c-fin-statement-attr for ub.c-fin-statement-attr.
+run fs-attr-code in this-procedure
+                                  (input  p-attr-code
+                                  ,output v-type
+                                  ,output v-format
+                                  ,output v-label
+                                  ,output v-user-can-edit
+                                  ,output v-output-display
+                                  ,output v-other
+                                  ) no-error .
+if error-status :error then do:
+  undo, return error return-value .
+end.
+find first buf_c-fin-statement-attr  exclusive-lock  where
+          buf_c-fin-statement-attr.attr-code    = p-attr-code
+      AND buf_c-fin-statement-attr.host-code    = p-host-code
+      AND buf_c-fin-statement-attr.sttm-code     = p-sttm-code
+      AND buf_c-fin-statement-attr.corr-user-db-num = p-corr-user-db-num
+      AND buf_c-fin-statement-attr.chip-num         = p-chip-num      no-error .
+  if not available  buf_c-fin-statement-attr then do:
+      create buf_c-fin-statement-attr.
+      assign
+      buf_c-fin-statement-attr.attr-code    = p-attr-code
+      buf_c-fin-statement-attr.attr-value   = p-attr-value
+      buf_c-fin-statement-attr.host-code    = p-host-code
+      buf_c-fin-statement-attr.sttm-code     = p-sttm-code
+      .
+  end.
+  else do:
+        buf_c-fin-statement-attr.attr-value   = p-attr-value .
+  end.
+ end.
+end procedure.
+procedure c-fin-statement-attr-value :
+ do
+ on error undo, return error return-value
+ :
+define input  parameter p-host-code    like ub.c-fin-statement-attr.host-code    no-undo .
+define input  parameter p-sttm-code like ub.c-fin-statement-attr.sttm-code     no-undo .
+define input parameter  p-corr-user-db-num  like ub.c-fin-statement-attr.corr-user-db-num   no-undo .
+define input parameter  p-chip-num      like ub.c-fin-statement-attr.chip-num   no-undo .
+define input  parameter p-attr-code    like ub.c-fin-statement-attr.attr-code    no-undo .
+define output parameter p-attr-value   like ub.c-fin-statement-attr.attr-value   no-undo .
+define variable  v-format         as character no-undo .
+define variable  v-label          as character no-undo .
+define variable  v-user-can-edit  as logical   no-undo .
+define variable  v-output-display as logical   no-undo .
+define variable  v-other          as character no-undo .
+define variable  v-type           as character no-undo .
+define buffer buf_c-fin-statement-attr for ub.c-fin-statement-attr.
+run fs-attr-code in this-procedure
+  (input  p-attr-code
+  ,output v-type
+  ,output v-format
+  ,output v-label
+  ,output v-user-can-edit
+  ,output v-output-display
+  ,output v-other
+  ) no-error .
+if error-status :error then do:
+  undo, return error return-value .
+end.
+find first buf_c-fin-statement-attr no-lock where
+          buf_c-fin-statement-attr.attr-code    = p-attr-code
+      AND buf_c-fin-statement-attr.sttm-code      = p-sttm-code
+      AND buf_c-fin-statement-attr.host-code      = p-host-code
+      AND buf_c-fin-statement-attr.corr-user-db-num = p-corr-user-db-num
+      AND buf_c-fin-statement-attr.chip-num         = p-chip-num      no-error .
+  if available  buf_c-fin-statement-attr then do:
+    assign
+    p-attr-value = buf_c-fin-statement-attr.attr-value
+    .
+  end.
+  else do:
+    p-attr-value = ? .
+  end.
+ end.
+end procedure.
+define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure write-fin-statement-history :
+define parameter buffer buf_fin-statement for ub.fin-statement.
+define variable v-date as date no-undo .
+define variable v-time as integer no-undo .
+define buffer buf_c-fin-statement for ub.c-fin-statement.
+define buffer buf_c-fin-statement-line for ub.c-fin-statement-line.
+define buffer buf_c-fin-statement-attr for ub.c-fin-statement-attr.
+  do
+  on error undo, return error
+  :
+    run cur-time in this-procedure(output v-date, output v-time).
+    create buf_c-fin-statement.
+    buffer-copy buf_fin-statement to buf_c-fin-statement
+    assign
+    buf_c-fin-statement.chip-num           = next-value (s-fin-corr-chip, ub)
+    buf_c-fin-statement.corr-time          = v-time
+    buf_c-fin-statement.corr-user-db-num   = g#db-num
+    buf_c-fin-statement.corr-user-name     = g#userid
+    buf_c-fin-statement.corr-date          = v-date
+    buf_c-fin-statement.corr-doc-code      = "":U
+    .
+    for each ub.fin-statement-line where
+             ub.fin-statement-line.host-code = buf_fin-statement.host-code
+         AND ub.fin-statement-line.sttm-code = buf_fin-statement.sttm-code:
+      create buf_c-fin-statement-line.
+      buffer-copy ub.fin-statement-line to buf_c-fin-statement-line
+      assign
+      buf_c-fin-statement-line.chip-num           = buf_c-fin-statement.chip-num
+      buf_c-fin-statement-line.corr-user-db-num   = buf_c-fin-statement.corr-user-db-num
+      .
+    end.
+    for each ub.fin-statement-attr where
+             ub.fin-statement-attr.host-code = buf_fin-statement.host-code
+         AND ub.fin-statement-attr.sttm-code = buf_fin-statement.sttm-code:
+      create buf_c-fin-statement-attr.
+      buffer-copy ub.fin-statement-attr to buf_c-fin-statement-attr
+      assign
+      buf_c-fin-statement-attr.chip-num           = buf_c-fin-statement.chip-num
+      buf_c-fin-statement-attr.corr-user-db-num   = buf_c-fin-statement.corr-user-db-num
+      buf_c-fin-statement-attr.attr-value         = buf_c-fin-statement-attr.attr-value
+      .
+    end.
+    release buf_c-fin-statement.
+  end.
+end procedure.
+do
+on error undo, return error return-value
+:
+  define variable v-mes as character no-undo .
+  define variable v-status_ like ub.fin-statement.status_ no-undo .
+  define buffer buf_fin-statement for ub.fin-statement .
+  find first buf_fin-statement exclusive-lock where
+            buf_fin-statement.host-code = p-host-code
+        AND buf_fin-statement.sttm-code = p-sttm-code
+    no-error .
+  if not available buf_fin-statement then do:
+    message
+      vss-workfile vss-revision vss-description skip
+      "Ошибка задания входных параметров" skip
+      "Фирма" p-host-code
+      "Выписка" p-sttm-code skip
+      view-as alert-box error .
+    undo, return error .
+  end.
+  if (buf_fin-statement.status_ = 'факт':U
+  and p-fact-delete = no)
+  or
+    (buf_fin-statement.status_ <> 'факт':U
+  and p-fact-delete = yes)
+  or (not g#news and p-fact-delete = ?)
+    then do:
+    message
+      vss-workfile vss-revision vss-description skip
+      "Ошибка задания входных параметров" skip
+      "Фирма" p-host-code
+      "Платеж" p-sttm-code skip
+      "Статус" buf_fin-statement.status_
+      "Параметр p-fact-delete" p-fact-delete
+      view-as alert-box error .
+    undo, return error .
+  end.
+  if p-fact-delete = yes then do:
+    assign
+    buf_fin-statement.is-del = true
+    .
+    if not g#news then do:
+      run write-fin-statement-history in this-procedure ( buffer buf_fin-statement) no-error .
+      if error-status :error then do:
+        message
+          vss-workfile vss-revision vss-description skip
+          "Ошибка при копировании в историю удаляемых выписок" skip
+          view-as alert-box error .
+        undo, return error.
+      end.
+    end.
+  end.
+  delete buf_fin-statement no-error .
+  if error-status:error then do:
+    assign
+    v-mes =  substitute("Выписка: код фирмы &1, вн № &2, статус &3: &4"
+                                 , p-host-code
+                                 , p-sttm-code
+                                 , v-status_
+                                 ,  return-value ).
+    if not p-silence then
+    message v-mes
+    view-as alert-box error .
+    undo, return error v-mes.
+  end.
+end.

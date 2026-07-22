@@ -1,0 +1,244 @@
+        1   block-level on error undo, throw.
+        2   define new global shared variable g#language as character no-undo .
+        3   if g#language <> '' and g#language <> 'rus':U then do:
+        4     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+        5   end.
+        6   define input parameter parfile    as character no-undo.
+        7   define input parameter p-obj-type as character no-undo.
+        8   define input parameter p-obj-code as integer   no-undo.
+        9   define input parameter p-pl-code  as integer   no-undo.
+       10   define variable v-filename       as character no-undo.
+       11   define variable varstring        as character no-undo.
+       12   define variable varcode          as integer   no-undo.
+       13   define variable varlevel         as integer   no-undo.
+       14   define variable varvolume        as DECIMAL   no-undo.
+       15   define variable varprev-level    as integer   no-undo.
+       16   define variable varprev-volume   as DECIMAL   no-undo.
+       17   define variable vardelta         as decimal   no-undo.
+       18   define variable vardeltaV        as decimal   no-undo.
+       19   define variable vError           as character no-undo.
+       20   define temp-table tt-tarir
+       21      field level   as   integer
+       22      field volume  as   DECIMAL
+       23      field delta   as   decimal
+       24      field deltaV  as   decimal
+       25      index pi is unique primary
+       26            level
+       27   .
+       28   define buffer buf_clients  for ub.clients .
+       29   define buffer buf_place    for ub.place .
+       30   define buffer buf_pl-level for ub.pl-level .
+       31   define buffer buf_pl-level-attr for ub.pl-level-attr .
+       32   define stream str-in.
+       33   do
+       34   on error undo, return error return-value :
+       35      assign
+       36         v-filename = search(parfile)
+       37      .
+       38      if v-filename = ? then do:
+       39         message "Не найден файл " parfile
+       40         skip "Таблицы не загружены."
+       41         view-as alert-box error.
+       42         return error.
+       43      end.
+       44      if  p-obj-type <> 'маг':U
+       45      and p-obj-type <> 'скл':U
+       46      then do:
+       47         message "Указан тип объекта " p-obj-type " должен быть указан склад или магазин."
+       48         skip "Таблицы не загружены."
+       49         view-as alert-box error.
+       50         return error.
+       51      end.
+       52      find first buf_clients
+       53           where buf_clients.obj-type = p-obj-type
+       54           and   buf_clients.obj-code = p-obj-code
+       55           no-lock
+       56           no-error.
+       57      if not available buf_clients then do:
+       58         message "Указан неправильный объект " p-obj-type " " p-obj-code " ."
+       59         skip "Таблицы не загружены."
+       60         view-as alert-box error.
+       61         return error.
+       62      end.
+       63      find first buf_place
+       64           where buf_place.obj-type = p-obj-type
+       65           and   buf_place.obj-code = p-obj-code
+       66           and   buf_place.pl-code  = p-pl-code
+       67           no-lock
+       68           no-error.
+       69      if not available buf_place then do:
+       70         message "Указан неправильный резервуар " p-obj-type " " p-obj-code " " p-pl-code "."
+       71         skip "Таблицы не загружены."
+       72         view-as alert-box error.
+       73         return error.
+       74      end.
+       75      input stream str-in from VALUE(v-filename).
+       76      repeat :
+       77         import stream str-in unformatted varstring.
+       78         if varstring = "" then next.
+       79         assign
+       80            varcode   = integer(entry (1, varstring, chr(9)))
+       81            varlevel  = integer(entry (2, varstring, chr(9)))
+       82            varvolume = DECIMAL(entry (3, varstring, chr(9)))
+       83         no-error.
+       84         if error-status:error then
+       85         do:
+       86           vError = "Неверный формат файла.".
+       87           leave.
+       88         end.
+       89         if STRING(varcode) = buf_place.loc1
+       90         then do:
+       91           find first tt-tarir where
+       92                      tt-tarir.level = varlevel
+       93                no-lock no-error.
+       94           if avail tt-tarir then
+       95           do:
+       96             vError = substitute("В файле указан повторно уровень &1.", varlevel).
+       97             leave.
+       98           end.
+       99           create tt-tarir.
+      100           assign
+      101              tt-tarir.level  = varlevel
+      102              tt-tarir.volume = varvolume
+      103           .
+      104           vardelta  = DECIMAL(entry (4, varstring, chr(9))) no-error .
+      105           if vardelta = 0 or vardelta = ?
+      106           then do :
+      107             find first ub.place-attr no-lock where ub.place-attr.obj-type = buf_place.obj-type
+      108                                                and ub.place-attr.obj-code = buf_place.obj-code
+      109                                                and ub.place-attr.pl-code = buf_place.pl-code
+      110                                                and ub.place-attr.attr-code = "place-type"
+      111                                                no-error .
+      112             if not available ub.place-attr
+      113             or (available ub.place-attr and ub.place-attr.attr-value = "2")
+      114             then do :
+      115               vardelta = 0.25 .
+      116             end .
+      117             else do :
+      118               vardelta = 0.2 .
+      119             end .
+      120           end .
+      121           tt-tarir.delta  = vardelta .
+      122           vardeltaV = DECIMAL(entry (5, varstring, chr(9))) no-error .
+      123           vardeltaV = round(vardeltaV, 4) no-error .
+      124           if vardeltaV > 0
+      125           then do :
+      126             if vardeltaV >= 10
+      127             then do :
+      128               vError = "Неверный формат значения коэффициента вместимости, неверное кол-во знаков до разделителя.".
+      129               leave.
+      130             end .
+      131             tt-tarir.deltaV  = vardeltaV .
+      132           end .
+      133         end.
+      134      end.
+      135      if vError <> "" then
+      136        return error substitute("&1~nТаблицы не загружены.", vError).
+      137      IF NOT CAN-FIND (FIRST tt-tarir) THEN DO:
+      138         message "В файле нет тарировочной таблицы для резервуара " p-obj-type " " p-obj-code " " p-pl-code " ("  buf_place.loc1 ")."
+      139         skip "Таблицы не загружены."
+      140         view-as alert-box error.
+      141         return.
+      142      END.
+      143      for each tt-tarir
+      144          break by tt-tarir.level
+      145          :
+      146         if first-of (tt-tarir.level) then do:
+      147         end.
+      148         else do:
+      149            if tt-tarir.level <> varprev-level + 1 then do:
+      150               message "Неверно указаны тарировочные таблицы по резервуару " p-pl-code " уровень " tt-tarir.level " идет после уровня " varprev-level " ."
+      151               skip "Во время загрузки тарировочных таблиц были ошибки. Таблицы не загружены."
+      152               view-as alert-box error.
+      153               return error.
+      154            end.
+      155            if tt-tarir.volume <= varprev-level then do:
+      156               message "Неверно указаны тарировочные таблицы по резервуару " p-pl-code " уровень " tt-tarir.level " объем " tt-tarir.volume " идет после уровня " varprev-level " с объемом " varprev-volume " ."
+      157               skip "Во время загрузки тарировочных таблиц были ошибки. Таблицы не загружены."
+      158               view-as alert-box error.
+      159               return error.
+      160            end.
+      161         end.
+      162         assign
+      163            varprev-level  = tt-tarir.level
+      164            varprev-volume = tt-tarir.volume
+      165         .
+      166      end.
+      167      for each  buf_pl-level
+      168          where buf_pl-level.obj-type = buf_place.obj-type
+      169          and   buf_pl-level.obj-code = buf_place.obj-code
+      170          and   buf_pl-level.pl-code  = buf_place.pl-code
+      171          exclusive-lock
+      172          on error undo, return error return-value
+      173      :
+      174        for first buf_pl-level-attr exclusive-lock where buf_pl-level-attr.obj-type  = buf_pl-level.obj-type
+      175                                                     and buf_pl-level-attr.obj-code  = buf_pl-level.obj-code
+      176                                                     and buf_pl-level-attr.pl-code   = buf_pl-level.pl-code
+      177                                                     and buf_pl-level-attr.pl-level  = buf_pl-level.pl-level
+      178                                                     and buf_pl-level-attr.attr-code = "tarir-delta"
+      179                                                     :
+      180          delete buf_pl-level-attr .
+      181        end .
+      182        for first buf_pl-level-attr exclusive-lock where buf_pl-level-attr.obj-type  = buf_pl-level.obj-type
+      183                                                     and buf_pl-level-attr.obj-code  = buf_pl-level.obj-code
+      184                                                     and buf_pl-level-attr.pl-code   = buf_pl-level.pl-code
+      185                                                     and buf_pl-level-attr.pl-level  = buf_pl-level.pl-level
+      186                                                     and buf_pl-level-attr.attr-code = "deltaV"
+      187                                                     :
+      188          delete buf_pl-level-attr .
+      189        end .
+      190        delete buf_pl-level.
+      191      end.
+      192      for each tt-tarir
+      193      :
+      194        create buf_pl-level.
+      195        assign
+      196          buf_pl-level.obj-type = buf_place.obj-type
+      197          buf_pl-level.obj-code = buf_place.obj-code
+      198          buf_pl-level.pl-code  = buf_place.pl-code
+      199          buf_pl-level.pl-level = tt-tarir.level
+      200          buf_pl-level.pl-qnty  = tt-tarir.volume
+      201        .
+      202        find first buf_pl-level-attr exclusive-lock where buf_pl-level-attr.obj-type  = buf_pl-level.obj-type
+      203                                                      and buf_pl-level-attr.obj-code  = buf_pl-level.obj-code
+      204                                                      and buf_pl-level-attr.pl-code   = buf_pl-level.pl-code
+      205                                                      and buf_pl-level-attr.pl-level  = buf_pl-level.pl-level
+      206                                                      and buf_pl-level-attr.attr-code = "tarir-delta"
+      207                                                      no-error .
+      208        if not available buf_pl-level-attr
+      209        then do :
+      210        create buf_pl-level-attr .
+      211          assign
+      212            buf_pl-level-attr.obj-type  = buf_pl-level.obj-type
+      213            buf_pl-level-attr.obj-code  = buf_pl-level.obj-code
+      214            buf_pl-level-attr.pl-code   = buf_pl-level.pl-code
+      215            buf_pl-level-attr.pl-level  = buf_pl-level.pl-level
+      216            buf_pl-level-attr.attr-code = "tarir-delta"
+      217          .
+      218        end .
+      219        assign buf_pl-level-attr.attr-value = string(tt-tarir.delta) .
+      220        if tt-tarir.deltaV > 0
+      221        then do :
+      222          find first buf_pl-level-attr exclusive-lock where buf_pl-level-attr.obj-type  = buf_pl-level.obj-type
+      223                                                        and buf_pl-level-attr.obj-code  = buf_pl-level.obj-code
+      224                                                        and buf_pl-level-attr.pl-code   = buf_pl-level.pl-code
+      225                                                        and buf_pl-level-attr.pl-level  = buf_pl-level.pl-level
+      226                                                        and buf_pl-level-attr.attr-code = "deltaV"
+      227                                                        no-error .
+      228          if not available buf_pl-level-attr
+      229          then do :
+      230          create buf_pl-level-attr .
+      231            assign
+      232              buf_pl-level-attr.obj-type  = buf_pl-level.obj-type
+      233              buf_pl-level-attr.obj-code  = buf_pl-level.obj-code
+      234              buf_pl-level-attr.pl-code   = buf_pl-level.pl-code
+      235              buf_pl-level-attr.pl-level  = buf_pl-level.pl-level
+      236              buf_pl-level-attr.attr-code = "deltaV"
+      237            .
+      238          end .
+      239          assign buf_pl-level-attr.attr-value = string(tt-tarir.deltaV) .
+      240        end .
+      241      end.
+      242   end.
+      243   message "Импорт завершен успешно."
+      244   view-as alert-box.

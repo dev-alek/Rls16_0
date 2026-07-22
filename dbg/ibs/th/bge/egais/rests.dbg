@@ -1,0 +1,241 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.bge.egais.*.
+        3   block-level on error undo, throw.
+        4   class ibs.th.bge.egais.Rests inherits ParserXMLRests:
+        5     define stream outstr.
+        6     define private buffer buf_ext-sys for ub.ext-system.
+        7     define private variable parameters as character no-undo.
+        8     define private variable inFileName as character no-undo.
+        9     define private variable inData     as character no-undo.
+       10     define private variable outData    as character no-undo.
+       11     define private variable cmd        as character no-undo.
+       12     define private variable urlResp    as character no-undo.
+       13     constructor public Rests (inOjType as char, inObjCode as int, inFSRAR as char, inINN as char):
+       14       super (inOjType, inObjCode).
+       15       assign
+       16         parameters = inFSRAR + chr(4) + inINN.
+       17       .
+       18       IsSent.
+       19     end constructor.
+       20     method public override logical SendRequestUTM():
+       21       assign
+       22         StatusErr = false
+       23         Msg = ""
+       24       .
+       25       if IsSent
+       26       then do:
+       27         Msg = "Запрос уже был отправлен".
+       28         StatusErr = true.
+       29         return no.
+       30       end.
+       31       StatusErr = false.
+       32       do trans:
+       33         os-delete "ReceiptQueryRests.xml".
+       34         assign
+       35           inFileName = "ReceiptQueryRests.xml"
+       36         .
+       37         output stream outstr to value ("QueryParameters.xml") convert target "UTF-8".
+       38         if VerXSD = "1" then
+       39           outData = substitute ('<?xml version="1.0" encoding="UTF-8"?><ns:Documents Version="1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ns="http://fsrar.ru/WEGAIS/WB_DOC_SINGLE_01" xmlns:qp="http://fsrar.ru/WEGAIS/QueryParameters"><ns:Owner><ns:FSRAR_ID>&1</ns:FSRAR_ID></ns:Owner><ns:Document><ns:QueryRests></ns:QueryRests></ns:Document></ns:Documents>', entry (1, parameters, chr(4))).
+       40         if VerXSD = "2" then
+       41           outData = substitute ('<?xml version="1.0" encoding="UTF-8"?><ns:Documents Version="1.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:ns="http://fsrar.ru/WEGAIS/WB_DOC_SINGLE_01" xmlns:qp="http://fsrar.ru/WEGAIS/QueryParameters"><ns:Owner><ns:FSRAR_ID>&1</ns:FSRAR_ID></ns:Owner><ns:Document><ns:QueryRests_v2></ns:QueryRests_v2></ns:Document></ns:Documents>', entry (1, parameters, chr(4))).
+       42         put stream outstr unformatted outData.
+       43         put stream outstr skip.
+       44         output stream outstr close.
+       45         if VerXSD = "1" then
+       46           cmd = substitute ("&1 --connect-timeout &5 -F xml_file=@&2 &3/opt/in/QueryRests >&4", search ("exe/curl.exe"), search ("QueryParameters.xml"), ConPar, inFileName, TimeOut).
+       47         if VerXSD = "2" then
+       48           cmd = substitute ("&1 --connect-timeout &5 -F xml_file=@&2 &3/opt/in/QueryRests_v2 >&4", search ("exe/curl.exe"), search ("QueryParameters.xml"), ConPar, inFileName, TimeOut).
+       49         os-command silent value (cmd).
+       50         file-info:file-name = search (inFileName).
+       51         if search (inFileName) <> ? and file-info:file-size > 0
+       52         then do:
+       53           def var respValue as handle no-undo.
+       54           respValue = ParseRequest (inFileName).
+       55           if respValue = ?
+       56           then do:
+       57             assign
+       58               StatusErr = true
+       59               Msg = "Не удалось разобрать данные от UTM"
+       60             .
+       61             undo, return false.
+       62           end.
+       63           if not StatusErr
+       64             then
+       65               ReplyId = respValue:node-value.
+       66             else do:
+       67               assign
+       68                 StatusErr = true
+       69                 Msg = respValue:node-value
+       70               .
+       71               undo, return false.
+       72             end.
+       73         end.
+       74         else do:
+       75           assign
+       76             StatusErr = true
+       77             Msg = "Не удалось получить данные от UTM"
+       78           .
+       79           undo, return false.
+       80         end.
+       81         if not WriteDbStatus (5, parameters , ReplyId, false)
+       82         then do:
+       83           assign
+       84             StatusErr = true
+       85             Msg = "Не удалось записать данные о запросе в БД. Запрос не выполен."
+       86           .
+       87           undo, return false.
+       88         end.
+       89       end.
+       90     end.
+       91     method protected handle ParseRequest (inFileName as char):
+       92       define variable hRoot as handle  no-undo.
+       93       define variable hDoc  as handle  no-undo.
+       94       define variable hRow  as handle  no-undo.
+       95       define variable hText as handle  no-undo.
+       96       define variable ii    as integer no-undo.
+       97       create x-document hDoc.
+       98       create x-noderef  hRoot.
+       99       create x-noderef  hRow.
+      100       create x-noderef htext .
+      101       hDoc:load ("file", inFileName, false).
+      102       hDoc:encoding = "UTF-8".
+      103       hDoc:get-document-element(hRoot) .
+      104       do ii = 1 to hRoot:num-children:
+      105         hRoot:get-child(hRow,ii).
+      106         case hRow:name:
+      107           when "url" then
+      108             do:
+      109               hRow:get-child (hText, 1) no-error.
+      110               return hText.
+      111             end.
+      112           when "error" then
+      113             do:
+      114               hRow:get-child (hText, 1) no-error.
+      115               StatusErr = true.
+      116               return hText.
+      117             end.
+      118           otherwise
+      119             do:
+      120               return ?.
+      121             end.
+      122         end case.
+      123       end.
+      124     end.
+      125     method override protected logical GetIsSent ():
+      126       def var repId as char no-undo.
+      127       def var glog  as log  no-undo.
+      128       glog = CheckCurrentRequest (5, parameters, repId).
+      129       if glog
+      130         then ReplyId = repId.
+      131       return glog.
+      132     end.
+      133     method public override handle GetHndlTable() :
+      134       assign
+      135         StatusErr = false
+      136         Msg = ""
+      137       .
+      138       if not IsSent
+      139       then do:
+      140         StatusErr = true.
+      141         Msg = "Запрос еще не был отправлен".
+      142         return ?.
+      143       end.
+      144       if ConPar = "" or ConPar = ?
+      145       then do:
+      146         StatusErr = true.
+      147         Msg = "Не заданы настройки соединения для EGAIS".
+      148         return ?.
+      149       end.
+      150       GetSubjectOfRequestUTM().
+      151       if StatusErr
+      152         then return ?.
+      153       file-info:file-name = search (inFileName).
+      154       if search (inFileName) = ? or file-info:file-size = 0
+      155       then do:
+      156         assign
+      157           StatusErr = true
+      158           Msg = "Не удалось получить данные от UTM"
+      159         .
+      160         return ?.
+      161       end.
+      162       if not WriteDbStatus ( 5, parameters , ReplyId, true )
+      163       then do:
+      164         assign
+      165           StatusErr = true
+      166           Msg = "Не удалось записать данные о запросе в БД. Запрос не выполен."
+      167         .
+      168         undo, return ?.
+      169       end.
+      170       urlResp = GetURLUTM(ReplyId, "in").
+      171       cmd = substitute ("&1 --connect-timeout &2 -X DELETE &3", search ("exe/curl.exe"), TimeOut, urlResp).
+      172       os-command silent value (cmd).
+      173       urlResp = GetURLUTM(ReplyId, "out").
+      174       cmd = substitute ("&1 --connect-timeout &2 -X DELETE &3", search ("exe/curl.exe"), TimeOut, urlResp).
+      175       os-command silent value (cmd).
+      176       assign
+      177         inFileName = "Rests-" + entry(1, parameters, chr(4)) + ".xml"
+      178       .
+      179       return ParseResponse(inFileName).
+      180     end.
+      181     method public override character GetSubjectOfRequestUTM() :
+      182       define variable v-fn as character no-undo .
+      183       urlResp = GetURLUTM(ReplyId, "out").
+      184       if urlResp = "" or urlResp = ?
+      185       then do:
+      186         StatusErr = true.
+      187         Msg = "Еще не получен ответ от сервера EGAIS по запросу " + ReplyId.
+      188         return ?.
+      189       end.
+      190       v-fn = "Rests-" + entry(1, parameters, chr(4)) + ".xml" .
+      191       os-delete v-fn.
+      192       assign
+      193         inFileName = "Rests-" + entry(1, parameters, chr(4)) + ".xml"
+      194       .
+      195       cmd = substitute ("&1 --connect-timeout &2 -X GET &3 >&4", search ("exe/curl.exe"), TimeOut, urlResp, inFileName).
+      196       os-command silent value (cmd).
+      197     end.
+      198     method protected character GetURLUTM (inReplyId as char, direction as char):
+      199       define variable hRoot as handle  no-undo.
+      200       define variable hDoc  as handle  no-undo.
+      201       define variable hRow  as handle  no-undo.
+      202       define variable hText as handle  no-undo.
+      203       define variable ii    as integer no-undo.
+      204       create x-document hDoc.
+      205       create x-noderef  hRoot.
+      206       create x-noderef  hRow.
+      207       create x-noderef  hText.
+      208       assign
+      209         inFileName = "ReceiptListOfQuery.xml"
+      210       .
+      211       if search ("ReceiptListOfQuery.xml") <> ? then os-delete value (inFileName).
+      212       if search (inFileName) <> ? then os-delete value (inFileName).
+      213       cmd = substitute ("&1 --connect-timeout &2 -X GET &3/opt/&5?refresh=true >&4",search ("exe/curl.exe"), TimeOut, ConPar, inFileName, direction).
+      214       os-command silent value (cmd).
+      215       file-info:file-name = search (inFileName).
+      216       if search (inFileName) = ? or file-info:file-size = 0
+      217       then do:
+      218         assign
+      219           StatusErr = true
+      220           Msg = "Не удалось получить данные от UTM"
+      221         .
+      222         return ?.
+      223       end.
+      224       hDoc:load ("file", inFileName, false).
+      225       hDoc:get-document-element(hRoot) .
+      226       do ii = 1 to hRoot:num-children:
+      227         hRoot:get-child(hRow,ii).
+      228         case hRow:name:
+      229           when "url" then
+      230             do:
+      231               if hRow:get-attribute("replyId") = ReplyId
+      232               then do:
+      233                 hRow:get-child (hText, 1) no-error.
+      234                 return hText:node-value.
+      235               end.
+      236             end.
+      237         end case.
+      238       end.
+      239       return ?.
+      240     end.
+      241   end class.

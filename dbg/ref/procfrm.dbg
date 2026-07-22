@@ -1,0 +1,663 @@
+        1   define temp-table procAsunc no-undo
+        2       field procid            as character
+        3       field procval           as character
+        4       field procname          as character
+        5       field proctyperun       as character
+        6       index pi is primary unique
+        7           procid
+        8   .
+        9   define temp-table procParam no-undo
+       10       field procid                as character
+       11       field paramName             as character
+       12       field numparam              as integer
+       13       field ParamValue            as character
+       14       field ParamType             as character
+       15       field ParamHiden            as logical
+       16       index pi is primary unique
+       17           procid numparam
+       18   .
+       19   define temp-table SesParam no-undo
+       20       field parCheck          as logical
+       21       field parCode           as character
+       22       field parname           as character
+       23       field parvalue          as character
+       24       field parWaitFile       as character
+       25       index pi is primary unique
+       26           parCode
+       27   .
+       28   define dataset ds-asuncProc xml-node-name "root" for procAsunc, procParam  , SesParam
+       29   data-relation  relver  for procAsunc, procParam relation-fields (procid,procid) nested.
+       30   define new global shared variable g#language as character no-undo .
+       31   if g#language <> '' and g#language <> 'rus':U then do:
+       32     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       33   end.
+       34   define variable masynchelper as class ibs.th.file.asynchelperTh no-undo.
+       35   define buffer tt-Param  for procparam.
+       36   define buffer tt-sespar for SesParam.
+       37   define input  parameter parparentproc as handle no-undo.
+       38   define input  parameter iProcId as character no-undo.
+       39   define input  parameter dataset  for ds-asuncProc bind.
+       40   define variable vss-revision    as character no-undo init "$Revision$":u .
+       41   define variable vss-author      as character no-undo init "$Author$":u .
+       42   define variable vss-date        as character no-undo init "$Date$":u .
+       43   define variable vss-workfile    as character no-undo init "$Workfile$":u .
+       44   define variable vss-archive     as character no-undo init "$Archive$":u .
+       45   define variable vss-description as character no-undo init "Асинхронные процессы" .
+       46   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       47   define new shared variable auto-window-h     as handle    no-undo .
+       48   define new shared variable auto-log-msg-h    as handle    no-undo .
+       49   define new shared variable hand-log-msg-h    as handle    no-undo .
+       50   define new shared variable log-file-name     as character no-undo initial ? .
+       51   define new shared variable add-log-file-name as character no-undo initial ? .
+       52   define new shared variable writelogvalue     as character no-undo initial ? .
+       53   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       54   procedure cur-time :
+       55      define output parameter p-today as date      no-undo .
+       56      define output parameter p-time  as integer   no-undo .
+       57     do
+       58     on error undo, return error
+       59     :
+       60       define variable v-date1 as date      no-undo .
+       61       define variable v-date2 as date      no-undo .
+       62       define variable v-time  as integer   no-undo .
+       63       assign
+       64         v-date1 = today
+       65         v-time  = time
+       66         v-date2 = today
+       67       .
+       68       if v-date1 <> v-date2
+       69       then do:
+       70         assign
+       71           v-date1 = today
+       72           v-time  = v-time
+       73         .
+       74       end.
+       75       assign
+       76         p-today = v-date1
+       77         p-time  = v-time
+       78       .
+       79     end.
+       80   end.
+       81   function cur-time-date returns character
+       82   :
+       83     return string(today, '99/99/9999':U) .
+       84   end.
+       85   function cur-time-mjd returns decimal
+       86   :
+       87     define variable v-date as date      no-undo .
+       88     define variable v-time as integer   no-undo .
+       89     run cur-time in this-procedure
+       90       (output v-date
+       91       ,output v-time
+       92       ) .
+       93     return integer(v-date) - 2400002 + (v-time / 86400) .
+       94   end.
+       95   function cur-time-get-ending-index returns integer
+       96   (input p-number as integer
+       97   )
+       98   :
+       99     if p-number < 0
+      100     or p-number = ?
+      101     then do:
+      102       return 1 .
+      103     end.
+      104     define variable v-rest as integer   no-undo .
+      105     assign
+      106       p-number = p-number modulo 100
+      107     .
+      108     if p-number < 20
+      109     then do:
+      110       assign
+      111         v-rest = p-number
+      112       .
+      113     end.
+      114     else do:
+      115       assign
+      116         v-rest = p-number modulo 10
+      117       .
+      118     end.
+      119     case v-rest :
+      120       when 1
+      121       then do:
+      122         return 2 .
+      123       end.
+      124       when 2 or
+      125       when 3 or
+      126       when 4
+      127       then do:
+      128         return 3 .
+      129       end.
+      130       otherwise do:
+      131         return 1 .
+      132       end.
+      133     end case .
+      134   end.
+      135   procedure cur-time-mjd-to-date :
+      136      define input  parameter i-mjd-diff as decimal no-undo.
+      137      define output parameter o-Date     as date    no-undo.
+      138      define output parameter o-Time     as integer no-undo.
+      139      define variable v-day-number as integer   no-undo .
+      140      if    i-mjd-diff < 0
+      141         or i-mjd-diff = ?
+      142      then do:
+      143         return "?" .
+      144      end.
+      145      assign
+      146         v-day-number = truncate(i-mjd-diff,0).
+      147         o-Date = date(v-day-number + 2400002).
+      148         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      149     .
+      150   end.
+      151   function cur-time-mjd-to-string returns character
+      152   (input p-mjd-diff as decimal
+      153   )
+      154   :
+      155     define variable v-day-number as integer   no-undo .
+      156     define variable v-seconds    as integer   no-undo .
+      157     define variable v-hour       as integer   no-undo .
+      158     define variable v-min        as integer   no-undo .
+      159     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      160     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      161     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      162     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      163     if p-mjd-diff < 0
+      164     or p-mjd-diff = ?
+      165     then do:
+      166       return "?" .
+      167     end.
+      168     assign
+      169       v-day-number = integer(truncate(p-mjd-diff,0))
+      170       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      171     .
+      172     if v-seconds > 86400
+      173     then do:
+      174       assign
+      175         v-seconds = 86400 - 1
+      176       .
+      177     end.
+      178     if v-seconds < 0
+      179     then do:
+      180       assign
+      181         v-seconds = 0
+      182       .
+      183     end.
+      184     assign
+      185       v-hour = truncate(v-seconds / 3600, 0)
+      186     .
+      187     assign
+      188       v-seconds = v-seconds modulo 3600
+      189     .
+      190     assign
+      191       v-min = truncate(v-seconds / 60, 0)
+      192     .
+      193     assign
+      194       v-seconds = v-seconds modulo 60
+      195     .
+      196     return
+      197         (if v-day-number <> 0
+      198           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      199           else ""
+      200         )
+      201       + (if v-day-number <> 0 or v-hour <> 0
+      202           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      203           else ""
+      204         )
+      205       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      206           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      207           else ""
+      208         )
+      209       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      210       .
+      211   end.
+      212   function cur-time-string returns character
+      213   :
+      214     define variable v-date as date      no-undo .
+      215     define variable v-time as integer   no-undo .
+      216     run cur-time in this-procedure
+      217       (output v-date
+      218       ,output v-time
+      219       ) .
+      220     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      221   end.
+      222   function cur-time-string-sec returns character
+      223   :
+      224     define variable v-date as date      no-undo .
+      225     define variable v-time as integer   no-undo .
+      226     run cur-time in this-procedure
+      227       (output v-date
+      228       ,output v-time
+      229       ) .
+      230     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      231   end.
+      232   function cur-time-custom  returns character
+      233   (input p-prefix as character
+      234   ,input p-date-format as character
+      235   ,input p-delimiter as character
+      236   ,input p-time-format as character
+      237   ,input p-suffix as character
+      238   )
+      239   :
+      240     define variable v-date as date      no-undo .
+      241     define variable v-time as integer   no-undo .
+      242     run cur-time in this-procedure
+      243       (output v-date
+      244       ,output v-time
+      245       ) .
+      246     return
+      247       p-prefix
+      248       + string(v-date, p-date-format)
+      249       + p-delimiter
+      250       + string(v-time, p-time-format)
+      251       + p-suffix
+      252       .
+      253   end.
+      254   function cur-time-print  returns character
+      255   :
+      256     define variable v-date as date      no-undo .
+      257     define variable v-time as integer   no-undo .
+      258     run cur-time in this-procedure
+      259       (output v-date
+      260       ,output v-time
+      261       ) .
+      262     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      263   end.
+      264   function cur-time-datetime returns datetime
+      265   :
+      266     define variable v-char as character no-undo .
+      267     define variable v-datetime as datetime no-undo .
+      268     v-char = cur-time-string().
+      269     v-datetime = datetime(v-char).
+      270     return  v-datetime.
+      271   end.
+      272   function cur-time-string-msec returns character
+      273   :
+      274     define variable v-date as datetime  no-undo .
+      275     v-date = now.
+      276     return string(v-date) .
+      277   end.
+      278   define stream LogStream .
+      279   define variable mNoTime as logical no-undo.
+      280   procedure write-to-log-notime :
+      281     define input param i-str as character no-undo .
+      282     mNoTime = yes.
+      283     run write-to-log (i-str).
+      284     mNoTime = no.
+      285   end.
+      286   procedure write-to-log :
+      287     define input param p-str as character no-undo .
+      288     do
+      289     on error  undo, return error substitute( "&1 (write-to-log). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      290     on stop   undo, return error substitute( "&1 (write-to-log). stop", vss-workfile )
+      291     on endkey undo, return error substitute( "&1 (write-to-log). endkey", vss-workfile )
+      292     :
+      293       define variable log-res        as logical   no-undo .
+      294       define variable v-jj           as integer   no-undo .
+      295       if auto-log-msg-h <> ? then do:
+      296         log-res = auto-log-msg-h:move-to-eof( ) .
+      297         log-res = auto-log-msg-h:insert-string( p-str ).
+      298       end.
+      299       if hand-log-msg-h <> ? then do:
+      300         log-res = hand-log-msg-h:move-to-eof( ) .
+      301         log-res = hand-log-msg-h:insert-string( p-str ).
+      302       end.
+      303       assign
+      304         p-str = replace(p-str, (chr(10) + chr(13)), chr(10) )
+      305         p-str = replace(p-str, (chr(13) + chr(10)), chr(10) )
+      306         p-str = replace(p-str, chr(10), (chr(13) + chr(10)) )
+      307       .
+      308       if add-log-file-name <> ? then do:
+      309         do v-jj = 1 to num-entries(add-log-file-name, chr(1)):
+      310           run gbl/fileapnd.p
+      311             ( input entry(v-jj, add-log-file-name, chr(1) )
+      312             ,input p-str
+      313             ,input 20
+      314             ) no-error .
+      315           if error-status:error then do:
+      316             return error return-value .
+      317           end.
+      318         end.
+      319       end.
+      320       if writelogvalue eq "AsyncProc"
+      321       then do:
+      322          p-str = trim(p-str, (chr(13) + chr(10)) )
+      323       .
+      324          Publish "WriteLogAsunc" (p-str,yes).
+      325       end.
+      326       else if writelogvalue <> "yes" then do:
+      327         run gbl/fileapnd.p
+      328           ( input log-file-name
+      329           ,input p-str
+      330           ,input 20
+      331           ) no-error .
+      332         if error-status:error then do:
+      333           return error return-value .
+      334         end.
+      335       end.
+      336     end.
+      337   end procedure.
+      338   procedure write-to-screen :
+      339     define input param p-str as character no-undo .
+      340     do
+      341     on error  undo, return error substitute( "&1 (write-to-screen). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      342     on stop   undo, return error substitute( "&1 (write-to-screen). stop", vss-workfile )
+      343     on endkey undo, return error substitute( "&1 (write-to-screen). endkey", vss-workfile )
+      344     :
+      345       define variable log-res as logical no-undo.
+      346       if auto-log-msg-h <> ?
+      347       then do:
+      348         log-res = auto-log-msg-h:move-to-eof( ) .
+      349         log-res = auto-log-msg-h:insert-string( p-str ).
+      350       end.
+      351       if hand-log-msg-h <> ?
+      352       then do:
+      353         log-res = hand-log-msg-h:move-to-eof( ) .
+      354         log-res = hand-log-msg-h:insert-string( p-str ).
+      355       end.
+      356     end.
+      357   end procedure.
+      358   procedure send-msg-to-email :
+      359     define input  parameter p-subject      as character no-undo .
+      360     define input  parameter p-text-err     as character no-undo .
+      361     define input  parameter p-attach-files as character no-undo .
+      362     do
+      363     on error  undo, return error substitute( "&1 (send-msg-to-email). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      364     on stop   undo, return error substitute( "&1 (send-msg-to-email). stop", vss-workfile )
+      365     on endkey undo, return error substitute( "&1 (send-msg-to-email). endkey", vss-workfile )
+      366     :
+      367       define variable v-tth             as handle    no-undo .
+      368       define variable v-value-character as character no-undo .
+      369       define variable v-value-date      as date      no-undo .
+      370       define variable v-value-decimal   as decimal   no-undo .
+      371       define variable v-value-integer   as integer   no-undo .
+      372       define variable v-value-logical   as logical   no-undo .
+      373       define variable v-param-type      as character no-undo .
+      374       define variable v-email       as character no-undo .
+      375       define variable v-tmp-str     as character no-undo .
+      376       define variable v-tmp1-str    as character no-undo .
+      377       define variable v-ind         as integer   no-undo .
+      378       define variable v-num-entries as integer   no-undo .
+      379       delete object v-tth no-error.
+      380       run adm/shattri.p
+      381         ( input "get":U
+      382          ,input  "":U
+      383          ,input  0
+      384          ,input  'auto-task':U
+      385          ,input  'send-msg-to-email':U
+      386          ,output v-value-character
+      387          ,output v-value-date
+      388          ,output v-value-decimal
+      389          ,output v-value-integer
+      390          ,output v-value-logical
+      391          ,output v-param-type
+      392          ,input-output table-handle v-tth
+      393         ) no-error .
+      394       if not error-status :error  then do:
+      395         assign
+      396           v-tmp-str = v-value-character
+      397         .
+      398       end.
+      399       delete object v-tth no-error.
+      400       assign
+      401         v-tmp-str     = replace(v-tmp-str, (chr(10) + chr(13)), chr(44) )
+      402         v-tmp-str     = replace(v-tmp-str, (chr(13) + chr(10)), chr(44) )
+      403         v-tmp-str     = replace(v-tmp-str, chr(10), chr(44) )
+      404         v-num-entries = num-entries( v-tmp-str, chr(44) )
+      405         v-email       = "":U
+      406       .
+      407       do v-ind = 1 to v-num-entries
+      408       :
+      409         assign
+      410           v-tmp1-str = entry( v-ind, v-tmp-str, chr(44) )
+      411         .
+      412         if trim( v-tmp1-str ) <> "":U then do:
+      413           if v-email = "":U then do:
+      414             assign
+      415               v-email = v-tmp1-str
+      416             .
+      417           end.
+      418           else do:
+      419             assign
+      420               v-email = v-email + chr(44) + v-tmp1-str
+      421             .
+      422           end.
+      423         end.
+      424       end.
+      425       if v-email <> "":U then do:
+      426         run gbl/sendmail.p
+      427           ( input v-email
+      428           , input p-subject
+      429           , input p-text-err
+      430           , input p-attach-files
+      431           ) no-error .
+      432         if error-status :error
+      433           or return-value <> "":U
+      434         then do:
+      435           return error substitute( "&1 (send-msg-to-email). &2", vss-workfile, return-value ) .
+      436         end.
+      437       end.
+      438     end.
+      439   end procedure.
+      440   define variable mLableText as character no-undo.
+      441   define variable mStartTime as datetime-tz no-undo init ?.
+      442   procedure addtask:
+      443      define input  parameter ITask as character no-undo.
+      444      define input  parameter iProc as character no-undo.
+      445      define input  parameter iParam as character no-undo.
+      446      subscribe "PutFileLogAsunc" anywhere run-procedure "WriteLogAsync".
+      447      if mStartTime ne ?
+      448      then
+      449         mAsyncHelper:AddTask (ITask,iProc,iParam,mStartTime).
+      450      else
+      451         mAsyncHelper:AddTask (ITask,iProc,iParam).
+      452      unsubscribe "PutFileLogAsunc".
+      453   end.
+      454   procedure addTaskTime:
+      455      define input  parameter ITask      as character no-undo.
+      456      define input  parameter iProc      as character no-undo.
+      457      define input  parameter iParam     as character no-undo.
+      458      define input  parameter iStartTime as datetime-tz no-undo.
+      459      subscribe "PutFileLogAsunc" anywhere run-procedure "WriteLogAsync".
+      460      mAsyncHelper:AddTask (ITask,iProc,iParam,iStartTime).
+      461      unsubscribe "PutFileLogAsunc".
+      462   end.
+      463   procedure waitproc:
+      464      define input  parameter itext  as character no-undo.
+      465      subscribe "PutFileLogAsunc" anywhere run-procedure "WriteLogAsync".
+      466      run ibs\th\file\waithelper.p (mAsyncHelper,?,1,itext + " " + mLableText).
+      467      unsubscribe "PutFileLogAsunc".
+      468   end.
+      469   procedure waitProcLable:
+      470      define input  parameter itext  as character no-undo.
+      471      mLableText = itext.
+      472   end.
+      473   procedure waitProcShed:
+      474      define input  parameter iSched as character no-undo.
+      475      define input  parameter itext  as character no-undo.
+      476      subscribe "PutFileLogAsunc" anywhere run-procedure "WriteLogAsync".
+      477      run ibs\th\file\waithelper.p (mAsyncHelper,iSched,1,itext).
+      478      unsubscribe "PutFileLogAsunc".
+      479   end.
+      480   procedure WriteLogAsync:
+      481      define input  parameter iFile as character no-undo.
+      482      define variable vText as character no-undo.
+      483      define variable vFile as longchar  no-undo.
+      484      define variable vfileName as character no-undo.
+      485      define variable vi as int64 no-undo.
+      486      define variable vStr  as character no-undo.
+      487      vfileName = mAsyncHelper:objExists(iFile,"f").
+      488      if vfileName ne ?
+      489      then do:
+      490         copy-lob from file vfileName to vFile no-error.
+      491         if error-status:error
+      492         then do:
+      493            run write-to-log (substitute ("Не удалось прочесть файл &1",iFile)).
+      494         end.
+      495         else do:
+      496             vFile = replace (vFile,chr(13) + chr(10),chr(10)).
+      497             do vi = 1 to num-entries(vFile,chr(10)) - 1:
+      498               run write-to-log-notime (entry(vi, vFile,chr(10))).
+      499            end.
+      500         end.
+      501      end.
+      502      else do:
+      503          assign
+      504              vtext = substitute ("Процедура обработки данных не завершена. &1",ifile).
+      505          run write-to-log (vtext).
+      506      end.
+      507   end.
+      508   define button Btn_Cancel auto-end-key
+      509        label "Выход"
+      510        size 15 by 1.13
+      511        bgcolor 8 .
+      512   define button Btn_OK
+      513        label "Выполнить"
+      514        size 15 by 1.13
+      515        bgcolor 8 .
+      516   define query BROWSE-2 for
+      517         tt-Param scrolling.
+      518   define query BROWSE-3 for
+      519         tt-sespar scrolling.
+      520   define browse BROWSE-2
+      521     query BROWSE-2 no-lock display
+      522         tt-Param.paramName column-label "Параметр" format "x(30)":U
+      523         tt-Param.ParamValue column-label "Значение" format "x(60)":U width 55.63
+      524         ENABLE
+      525         tt-Param.ParamValue
+      526       WITH NO-ROW-MARKERS SEPARATORS SIZE 90 BY 10.75 FIT-LAST-COLUMN.
+      527   define browse BROWSE-3
+      528     query BROWSE-3 no-lock display
+      529         tt-sespar.parCheck  column-label "" format "yes/no":U width 4
+      530               view-as toggle-box
+      531         tt-sespar.parname column-label "Параметр" format "x(30)":U width 14.5
+      532         tt-sespar.parvalue  column-label "Ключ запуска" format "x(200)":U width 44.63
+      533     ENABLE
+      534         tt-sespar.parCheck  tt-sespar.parvalue
+      535       WITH NO-ROW-MARKERS SEPARATORS SIZE 90 BY 9 FIT-LAST-COLUMN.
+      536   define frame Dialog-Frame
+      537        Btn_Cancel at row 1.25 col 2
+      538        Btn_OK at row 1.25 col 18
+      539        BROWSE-2 at row 3 col 2 widget-id 200
+      540        BROWSE-3 at row 15.25 col 2 widget-id 300
+      541        "Добавить параметры" view-as text
+      542             size 33 by .67 tooltip "Добавить параметры" at row 14.25 col 3.5 widget-id 8
+      543        space(52.87) skip(9.99)
+      544       with view-as dialog-box keep-tab-order
+      545            side-labels no-underline three-d  scrollable
+      546            title "Запуск сессии"
+      547            default-button Btn_OK cancel-button Btn_Cancel widget-id 100.
+      548   assign
+      549          frame Dialog-Frame:SCROLLABLE       = false
+      550          frame Dialog-Frame:HIDDEN           = true.
+      551   on window-close of frame Dialog-Frame
+      552   do:
+      553     apply "END-ERROR":U to self.
+      554   end.
+      555   on leave of tt-Param.ParamValue in browse BROWSE-2  do:
+      556    tt-Param.ParamValue = tt-Param.ParamValue:screen-value in browse BROWSE-2  no-error .
+      557   end.
+      558   on leave of tt-sespar.parCheck in browse BROWSE-3  do:
+      559    tt-sespar.parCheck = logical (tt-sespar.parCheck:screen-value in browse BROWSE-3 ) no-error .
+      560   end.
+      561   on choose of Btn_OK in frame Dialog-Frame
+      562     do:
+      563       define buffer tt-Param for procparam.
+      564       define buffer tt-sespar for SesParam.
+      565       define buffer tt-procAsunc for procAsunc.
+      566       define variable vParams      as character no-undo.
+      567       define variable vwaitfile    as character no-undo.
+      568       define variable vParamSession as character no-undo.
+      569       find first tt-procAsunc where tt-procAsunc.procid eq iProcid no-lock.
+      570       for each tt-sespar where tt-sespar.parCheck
+      571       no-lock:
+      572          vparamSession = vparamSession + " " + tt-sespar.parvalue.
+      573          if tt-sespar.parWaitFile ne "" and tt-sespar.parWaitFile ne ?
+      574          then
+      575             vwaitfile = vwaitfile +  "," + tt-sespar.parWaitFile.
+      576       end.
+      577       vwaitfile = trim(vwaitfile,",").
+      578       vParams = fill(chr(4),25).
+      579       for each tt-Param where tt-Param.procid eq tt-procAsunc.procid
+      580       no-lock:
+      581          if tt-Param.ParamValue eq "#paramSession#"
+      582          then
+      583              tt-Param.ParamValue = vparamSession.
+      584          else if tt-Param.ParamValue eq "#waitfile#"
+      585          then
+      586              tt-Param.ParamValue = vwaitfile.
+      587          else if tt-Param.ParamValue eq "#SaveFile#"
+      588          then
+      589              tt-Param.ParamValue = "yes".
+      590          else
+      591          if     tt-Param.ParamType ne ""
+      592             and tt-Param.ParamType ne ?
+      593          then do:
+      594             if tt-Param.ParamType begins "int"
+      595             then
+      596                int(tt-Param.ParamValue) no-error.
+      597             else if tt-Param.ParamType begins "dec"
+      598             then
+      599                dec(tt-Param.ParamValue) no-error.
+      600             else if tt-Param.ParamType begins "log"
+      601             then
+      602                logical(tt-Param.ParamValue) no-error.
+      603             else if tt-Param.ParamType begins "date"
+      604             then
+      605                date(tt-Param.ParamValue) no-error.
+      606             if error-status:error
+      607             then do:
+      608                message tt-Param.paramName skip
+      609                        "должен быть типа " tt-Param.paramtype skip
+      610                        error-status:get-message (1)
+      611                view-as alert-box.
+      612                return no-apply.
+      613             end.
+      614          end.
+      615          entry(tt-Param.numparam,vParams,chr(4)) = tt-Param.ParamValue.
+      616       end.
+      617       vParams = right-trim(vParams,chr(4)).
+      618       subscribe "PutFileLogAsunc" anywhere run-procedure "WriteLogAsync".
+      619       mAsyncHelper = new ibs.th.file.AsyncHelperth().
+      620       mAsyncHelper:mProcPublish   = this-procedure.
+      621       mAsyncHelper:setCurrentUserPasswd().
+      622       mAsyncHelper:MyBachMode     = session:batch-mode.
+      623       mAsyncHelper:SaveFile       = yes.
+      624       mAsyncHelper:paramSession   = vparamSession.
+      625       mAsyncHelper:WaitFile = vwaitfile.
+      626       if tt-procAsunc.proctyperun eq "diallog"
+      627       then do:
+      628          run str/diallog.w ( parparentproc
+      629                 , this-procedure
+      630                 , tt-procAsunc.procval
+      631                 , vParams
+      632                 , no
+      633                 , '':U
+      634                 , tt-procAsunc.procname) no-error .
+      635       end.
+      636       else do:
+      637          mAsyncHelper:AsyncProc(tt-procAsunc.procval, vParams,1).
+      638       end.
+      639       run ibs\th\file\waithelper.p (mAsyncHelper,?, 1,tt-procAsunc.procname).
+      640       os-command no-wait value (mAsyncHelper:getlog(?)).
+      641       message "Результаты выполнения находятся в " mAsyncHelper:SaveArh()
+      642       view-as alert-box.
+      643       delete object mAsyncHelper.
+      644       unsubscribe "PutFileLogAsunc".
+      645     end.
+      646   if valid-handle(active-window) and frame Dialog-Frame:PARENT eq ?
+      647   then frame Dialog-Frame:PARENT = active-window.
+      648   MAIN-BLOCK:
+      649   do on error   undo MAIN-BLOCK, leave MAIN-BLOCK
+      650      on end-key undo MAIN-BLOCK, leave MAIN-BLOCK:
+      651     run enable_UI.
+      652     wait-for go of frame Dialog-Frame.
+      653   end.
+      654   run disable_UI.
+      655   procedure disable_UI :
+      656     hide frame Dialog-Frame.
+      657   end procedure.
+      658   procedure enable_UI :
+      659     enable Btn_Cancel Btn_OK BROWSE-2 BROWSE-3
+      660         with frame Dialog-Frame.
+      661     view frame Dialog-Frame.
+      662     OPEN QUERY BROWSE-2 FOR EACH tt-Param where tt-Param.procid eq iProcId and tt-Param.paramhiden ne yes NO-LOCK INDEXED-REPOSITION.    OPEN QUERY BROWSE-3 FOR EACH tt-sespar NO-LOCK INDEXED-REPOSITION.
+      663   end procedure.

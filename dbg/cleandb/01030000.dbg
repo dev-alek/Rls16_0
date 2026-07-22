@@ -1,0 +1,83 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: sibintek-soft $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Nov 07 2025 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 01030000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cleandb/01030000.p $".
+        7   define variable vss-description as character no-undo init "Чистка УБД..".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define new global shared variable g#library  as handle no-undo .
+       13   define new global shared variable g#library2 as handle no-undo .
+       14   define input parameter vardate-actual-docs    as date      no-undo.
+       15   define input parameter varcall-back           as handle no-undo.
+       16   define variable vDeleted as int64     no-undo.
+       17   define variable vResult  as character no-undo.
+       18   define buffer buf_clients for ub.clients.
+       19   find ub.sys-ctrl no-lock.
+       20   if not available ub.sys-ctrl then do:
+       21      return error "Не найдена уникальная запись sys-ctrl.".
+       22   end.
+       23   define buffer buf_tables         for ub._file.
+       24   define buffer buf_fields         for ub._field.
+       25   LOOP_TABLES:
+       26   for each buf_tables no-lock where
+       27            buf_tables._file-name begins "c-"
+       28   :
+       29     find first buf_fields no-lock where
+       30                buf_fields._file-recid = recid(buf_tables)
+       31            and buf_fields._field-name = "corr-date"
+       32     no-error.
+       33     if not avail buf_fields then
+       34       next LOOP_TABLES.
+       35     run cleanTable in this-procedure (buf_tables._file-name) no-error.
+       36     if error-status:error then
+       37       return error return-value.
+       38   end.
+       39   procedure cleanTable:
+       40     define input parameter iTable as character no-undo.
+       41     define variable vBuffer as handle no-undo.
+       42     define variable vQuery  as handle no-undo.
+       43     define variable vFor    as character no-undo.
+       44     define variable vCnt    as int64 no-undo.
+       45     create buffer vBuffer for table iTable.
+       46     vBuffer:disable-load-triggers (false).
+       47     create query vQuery.
+       48     vQuery:set-buffers(vBuffer).
+       49     vFor = substitute("FOR EACH &1 where &1.corr-date < &2",
+       50                       vBuffer:name, vardate-actual-docs).
+       51     vQuery:query-prepare(vFor) no-error.
+       52     if error-status:error then
+       53       return error error-status:get-message(1).
+       54     vQuery:query-open().
+       55     vQuery:get-first().
+       56     if error-status:error then
+       57       return error error-status:get-message(1).
+       58     do while vBuffer:available:
+       59       if valid-handle(varcall-back) and vCnt = 0 then
+       60         run callback-write-to-log in varcall-back (
+       61           input substitute("Чистка таблицы &1~n",iTable)
+       62         ) no-error .
+       63       do transaction:
+       64          vBuffer:find-current (exclusive-lock).
+       65          vBuffer:buffer-delete ().
+       66       end.
+       67       vCnt = vCnt + 1.
+       68       if valid-handle(varcall-back) and vCnt mod 100000 = 0 then
+       69       do:
+       70         run callback-write-to-log in varcall-back (
+       71           input Substitute("Удалено &1 записей~n", vCnt)
+       72         ) no-error .
+       73       end.
+       74       vQuery:get-next().
+       75     end.
+       76     if valid-handle(varcall-back) and vCnt <> 0 then
+       77       run callback-write-to-log in varcall-back (
+       78         input Substitute("Удалено &1 записей~n", vCnt)
+       79       ) no-error .
+       80     vDeleted = vDeleted + vCnt.
+       81   end procedure.
+       82   vResult = substitute("Произведена чистка таблиц: &1~nУдалено записей - &2.", "История действий пользователя", vDeleted).
+       83   return vResult.

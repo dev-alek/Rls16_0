@@ -1,0 +1,561 @@
+        1   block-level on error undo, throw.
+        2   class ibs.th.gbl.pkcs:
+        3     define private variable c-oid-data        as class System.Security.Cryptography.Oid no-undo .
+        4     // define private variable c-oid-hashed-data as class System.Security.Cryptography.Oid no-undo .
+        5     define private variable m-x509-store      as class System.Security.Cryptography.X509Certificates.X509Store no-undo .
+        6     define private variable m-debug-enabled   as logical no-undo .
+        7     define private stream f-log .
+        8     define variable m-byte-content as class "System.Byte[]" no-undo . // данные
+        9     define variable m-hash-content as class "System.Byte[]" no-undo . // хэш от данных
+       10     define variable m-encoded-sign as class "System.Byte[]" no-undo . // закодированная подпись от данных
+       11     define variable m-sign-certs   as class System.Security.Cryptography.X509Certificates.X509Certificate2Collection no-undo .
+       12   constructor public pkcs () :
+       13     this-object(false) .
+       14   end constructor .
+       15   constructor public pkcs (input p-debug-enabled as logical) :
+       16     // https://docs.microsoft.com/ru-ru/dotnet/api/system.security.cryptography.pkcs.contentinfo.-ctor?view=netframework-4.7.2#System_Security_Cryptography_Pkcs_ContentInfo__ctor_System_Security_Cryptography_Oid_System_Byte___
+       17     // https://msdn.microsoft.com/en-us/library/2cfes5ff(v=vs.110).aspx
+       18     c-oid-data        = new System.Security.Cryptography.Oid ("1.2.840.113549.1.7.1") . // data
+       19     // The digestedData and encryptedData content types, which appear in the CMS/PKCS #7 standards document,
+       20     // are not content types that can be produced by this implementation.
+       21     // ... и 1с-ники тоже указывают data вместо hashedData
+       22     // c-oid-hashed-data = new System.Security.Cryptography.Oid ("1.2.840.113549.1.7.5") . // hashedData
+       23     m-debug-enabled = p-debug-enabled .
+       24     if p-debug-enabled then do :
+       25       define variable v-log-file-name as character no-undo .
+       26       v-log-file-name = substitute("pkcs_&1.log", now).
+       27       v-log-file-name = replace(v-log-file-name, "/", "").
+       28       v-log-file-name = replace(v-log-file-name, ":", "").
+       29       v-log-file-name = replace(v-log-file-name, " ", "_").
+       30       v-log-file-name = replace(v-log-file-name, "+", "_").
+       31       output stream f-log to value (v-log-file-name) .
+       32     end .
+       33   end constructor .
+       34   destructor public pkcs ( ) :
+       35     if m-debug-enabled then output stream f-log close .
+       36     if valid-object(m-x509-store) then do :
+       37       m-x509-store:Dispose() . // Starting with the .NET 4.6 you should dispose of it either directly or indirectly
+       38       delete object m-x509-store.
+       39     end .
+       40     if valid-object(m-sign-certs)   then delete object m-sign-certs.
+       41     if valid-object(m-encoded-sign) then delete object m-encoded-sign.
+       42     if valid-object(m-hash-content) then delete object m-hash-content.
+       43     if valid-object(m-byte-content) then delete object m-byte-content.
+       44     if valid-object(c-oid-data) then delete object c-oid-data .
+       45   end destructor .
+       46   method private System.Security.Cryptography.X509Certificates.X509Certificate2 getMyCert (
+       47     input p-my-name as character
+       48   , input p-issuer  as character
+       49   , input p-cert-repository as integer
+       50   ) :
+       51   define variable v-my-cert      as class System.Security.Cryptography.X509Certificates.X509Certificate2 no-undo .
+       52   define variable v-certificates as class System.Security.Cryptography.X509Certificates.X509Certificate2Collection no-undo .
+       53   define variable v-cucollection as class System.Security.Cryptography.X509Certificates.X509Certificate2Collection no-undo .
+       54   define variable v-mycollection as class System.Security.Cryptography.X509Certificates.X509Certificate2Collection no-undo .
+       55   define variable v-ofcollection as class System.Security.Cryptography.X509Certificates.X509Certificate2Collection no-undo .
+       56   define variable i       as integer no-undo .
+       57   define variable v-cert1 as class System.Security.Cryptography.X509Certificates.X509Certificate2 no-undo .
+       58   define variable v-subj1 as character no-undo .
+       59     v-my-cert = ? .
+       60     do on error undo, throw:
+       61       if not valid-object(m-x509-store) then do :
+       62         // https://docs.microsoft.com/ru-ru/dotnet/api/system.security.cryptography.x509certificates.storename?view=netframework-4.7.2
+       63         // StoreName:My   = 5 - The X.509 certificate store for personal certificates.
+       64         // StoreName:Root = 6 - The X.509 certificate store for trusted root certificate authorities (CAs).
+       65         // https://docs.microsoft.com/ru-ru/dotnet/api/system.security.cryptography.x509certificates.storelocation?view=netframework-4.7.1
+       66         // StoreLocation:CurrentUser = 1 - The X.509 certificate store used by the current user.
+       67         case p-cert-repository :
+       68           when 0
+       69           then do :
+       70             m-x509-store   = new System.Security.Cryptography.X509Certificates.X509Store
+       71             ( System.Security.Cryptography.X509Certificates.StoreName:My,
+       72               System.Security.Cryptography.X509Certificates.StoreLocation:CurrentUser ) .
+       73           end .
+       74           when 1
+       75           then do :
+       76             m-x509-store   = new System.Security.Cryptography.X509Certificates.X509Store
+       77             ( System.Security.Cryptography.X509Certificates.StoreName:My,
+       78               System.Security.Cryptography.X509Certificates.StoreLocation:LocalMachine ) .
+       79           end .
+       80         end case .
+       81       end .
+       82       m-x509-store:Open
+       83         ( System.Security.Cryptography.X509Certificates.OpenFlags:ReadOnly or
+       84           System.Security.Cryptography.X509Certificates.OpenFlags:OpenExistingOnly ) .
+       85       v-certificates = m-x509-store:Certificates .
+       86       if v-certificates:Count > 0 then . else
+       87         undo, throw new Progress.Lang.AppError("Отсутствуют сертификаты для подписи пакета") .
+       88       // https://docs.microsoft.com/ru-ru/dotnet/api/system.security.cryptography.x509certificates.x509findtype?view=netframework-4.7.1
+       89       // X509FindType:FindByTimeValid   = 6 - The findValue parameter must be a DateTime value in local time. You can use Now to find all the currently valid certificates.
+       90       // X509FindType:FindBySubjectName = 1 - the subject name of the certificate.
+       91       // X509FindType:FindByIssuerName  = 3 - the issuer name of the certificate.
+       92       v-cucollection = v-certificates:Find
+       93         ( System.Security.Cryptography.X509Certificates.X509FindType:FindByTimeValid,
+       94           System.DateTime:Now, true ) .
+       95       // If using a certificate with a trusted root you do not need to FindByTimeValid
+       96       // По FindByTimeValid ищет только среди сертификатов, имеющих путь к доверенному корневому сертификату
+       97       // validOnly (Boolean): true to allow only valid certificates to be returned from the search; otherwise, false.
+       98       if v-cucollection:Count > 0 then do :
+       99         if m-debug-enabled then do :
+      100           put stream f-log unformatted
+      101             "getMyCert:FindByTimeValid" skip
+      102             substitute("действующих сертификатов: &1", v-cucollection:Count) skip
+      103           .
+      104           do i = 0 to v-cucollection:Count - 1 :
+      105             v-cert1 = v-cucollection[i] .
+      106             v-subj1 = v-cert1:Subject .
+      107             put stream f-log unformatted
+      108               substitute(  "subject[&1] = [&2] (my-subj-name = [&3], &4",
+      109                            i, v-subj1, p-my-name, if (v-subj1 = p-my-name) then "equal" else "not equal"  ) skip
+      110             .
+      111           end .
+      112           put stream f-log unformatted skip(0) .
+      113         end .
+      114       end . else
+      115         undo, throw new Progress.Lang.AppError("Отсутствуют действующие сертификаты для подписи пакета") .
+      116       v-mycollection = v-cucollection:Find
+      117         ( System.Security.Cryptography.X509Certificates.X509FindType:FindBySubjectName,
+      118   //      ( System.Security.Cryptography.X509Certificates.X509FindType:FindBySubjectDistinguishedName, - более строгий, если потребуется CN,OU
+      119           p-my-name, true ) .
+      120       if v-mycollection:Count > 0 then do :
+      121         if m-debug-enabled then do :
+      122           put stream f-log unformatted
+      123             "getMyCert:FindBySubjectName" skip
+      124             substitute("действующих сертификатов субъекта[&1]: &2", p-my-name, v-mycollection:Count) skip
+      125           .
+      126           do i = 0 to v-mycollection:Count - 1 :
+      127             v-cert1 = v-mycollection[i] .
+      128             v-subj1 = v-cert1:Subject .
+      129             put stream f-log unformatted
+      130               substitute(  "subject[&1] = [&2] (my-subj-name = [&3], &4",
+      131                            i, v-subj1, p-my-name, if (v-subj1 = p-my-name) then "equal" else "not equal"  ) skip
+      132             .
+      133           end .
+      134           put stream f-log unformatted skip(0) .
+      135         end .
+      136       end . else
+      137         undo, throw new Progress.Lang.AppError(substitute("Отсутствуют действующие сертификаты выданные субъекту [&1] для подписи пакета", p-my-name)) .
+      138       v-ofcollection = v-mycollection:Find
+      139         ( System.Security.Cryptography.X509Certificates.X509FindType:FindByIssuerName,
+      140           p-issuer, true ) .
+      141       if v-ofcollection:Count > 0 then do:
+      142         if m-debug-enabled then do :
+      143           put stream f-log unformatted
+      144             "getMyCert:FindByIssuerName" skip
+      145             substitute("действующих сертификатов субъекта[&1] издателя[&2]: &3", p-my-name, p-issuer, v-ofcollection:Count) skip
+      146           .
+      147         end .
+      148         do i = 0 to v-ofcollection:Count - 1 :
+      149           v-cert1 = v-ofcollection[i] .
+      150           v-subj1 = v-cert1:Subject .
+      151           v-subj1 = replace(v-subj1, "=", ",") .
+      152           v-subj1 = replace(v-subj1, " ", ",") .
+      153           if can-do (v-subj1, p-my-name) then do :
+      154             v-my-cert = v-cert1 .
+      155             leave .
+      156           end .
+      157         end .
+      158         if v-my-cert = ? then v-my-cert = v-ofcollection[0] .
+      159       end .
+      160       else
+      161         undo, throw new Progress.Lang.AppError(substitute("Отсутствуют действующие сертификаты выданные субъекту [&1] центром сертификации [&2] для подписи пакета", p-my-name, p-issuer)) .
+      162       if m-debug-enabled then do :
+      163         define variable v-publ-key as class System.Security.Cryptography.X509Certificates.PublicKey no-undo .
+      164         v-publ-key = v-my-cert:PublicKey .
+      165         put stream f-log unformatted
+      166           substitute("my-cert Subj [&1]", v-my-cert:Subject) skip
+      167           substitute("my-cert PulicKey &1", (if valid-object(v-publ-key) then "valid" else "empty")) skip
+      168         .
+      169       end .
+      170       m-x509-store:Close() .
+      171       finally:
+      172         if valid-object(v-ofcollection) then delete object v-ofcollection.
+      173         if valid-object(v-mycollection) then delete object v-mycollection.
+      174         if valid-object(v-cucollection) then delete object v-cucollection.
+      175         if valid-object(v-certificates) then delete object v-certificates.
+      176         // ссылка на v-my-cert остаётся и передаётся в вызывающую программу
+      177       end finally .
+      178     end .
+      179     return v-my-cert .
+      180   end method . // end_of getMyCert
+      181   method private "System.Byte[]" memPtr2ByteArray (input p-memptr as memptr) :
+      182   define variable v-mptr-size  as int64 no-undo .
+      183   define variable v-int-size   as integer no-undo .
+      184   define variable v-byte-array as class "System.Byte[]" no-undo .
+      185   define variable v-n-ptr      as System.IntPtr no-undo .
+      186     v-mptr-size = get-size(p-memptr).
+      187     v-int-size  = integer(v-mptr-size) .
+      188     v-byte-array = new "System.Byte[]" (v-int-size) .
+      189     v-n-ptr      = new System.IntPtr(get-pointer-value(p-memptr)).
+      190     System.Runtime.InteropServices.Marshal:Copy(v-n-ptr, v-byte-array, 0, v-int-size).
+      191     return v-byte-array .
+      192     finally:
+      193       if valid-object(v-n-ptr) then delete object(v-n-ptr) .
+      194     end finally .
+      195   end method . // end_of memPtr2ByteArray
+      196   method private character byteArray2Str (input p-byte-array as class "System.Byte[]") :
+      197   define variable v-str-1 as character no-undo .
+      198   define variable v-int-1 as integer no-undo .
+      199   define variable v-len-1 as integer no-undo .
+      200     v-str-1 = "" .
+      201     v-len-1 = p-byte-array:Length - 1 .
+      202     do v-int-1 = 0 to v-len-1 :
+      203       v-str-1 = v-str-1 + cast(p-byte-array:GetValue(v-int-1), "System.Byte"):ToString("x2") .
+      204     end .
+      205     return v-str-1 .
+      206   end method . // end_of byteArray2Str
+      207   // 12/IX-2018 1совцы не смогли хэшировать функцией sha-256 и попросили её заменить на sha-1
+      208   method private "System.Byte[]" hashSHA1 (input p-byte-content as class "System.Byte[]") :
+      209   define variable v-o-sha1       as class System.Security.Cryptography.SHA1Managed no-undo .
+      210   define variable v-hash-content as class "System.Byte[]" no-undo .
+      211     v-o-sha1 = new System.Security.Cryptography.SHA1Managed() .
+      212     v-hash-content = v-o-sha1:ComputeHash(p-byte-content) .
+      213     return v-hash-content .
+      214     finally :
+      215       if valid-object(v-o-sha1) then delete object(v-o-sha1) .
+      216     end finally .
+      217   end method . // end_of hashSHA1
+      218   method private "System.Byte[]" hashSHA256 (input p-byte-content as class "System.Byte[]") :
+      219   define variable v-o-sha256     as class System.Security.Cryptography.SHA256Managed no-undo .
+      220   define variable v-hash-content as class "System.Byte[]" no-undo .
+      221     v-o-sha256 = new System.Security.Cryptography.SHA256Managed() .
+      222     v-hash-content = v-o-sha256:ComputeHash(p-byte-content) . // может получать на вход stream
+      223     // проверка из коммандной строки: Certutil -hashfile c:file SHA256
+      224     return v-hash-content .
+      225     finally :
+      226       if valid-object(v-o-sha256) then delete object(v-o-sha256) .
+      227     end finally .
+      228   end method . // end_of hashSHA256
+      229   method private "System.Byte[]" signCms (
+      230     input p-content-info as class System.Security.Cryptography.Pkcs.ContentInfo
+      231   , input p-cert         as class System.Security.Cryptography.X509Certificates.X509Certificate2
+      232   , input p-is-detached  as logical
+      233   ) :
+      234   define variable v-signed-cms   as class System.Security.Cryptography.Pkcs.SignedCms no-undo .
+      235   define variable v-cms-signer   as class System.Security.Cryptography.Pkcs.CmsSigner no-undo .
+      236   define variable v-encoded-sign as class "System.Byte[]" no-undo .
+      237   define variable v-err-descr    as character no-undo .
+      238     // Подписание
+      239     // https://docs.microsoft.com/ru-ru/dotnet/api/system.security.cryptography.pkcs.signedcms.computesignature?view=netframework-4.7.2#System_Security_Cryptography_Pkcs_SignedCms_ComputeSignature_System_Security_Cryptography_Pkcs_CmsSigner_
+      240     // not detached signature = The original content is included in this byte array.
+      241     // detached signature = The original content is not included in this byte array.
+      242     v-signed-cms   = new System.Security.Cryptography.Pkcs.SignedCms (p-content-info, p-is-detached) .
+      243     v-cms-signer = new System.Security.Cryptography.Pkcs.CmsSigner (p-cert).
+      244     v-cms-signer:IncludeOption = System.Security.Cryptography.X509Certificates.X509IncludeOption:EndCertOnly.
+      245     // X509Chain.aspx — позволяет строить и проверять цепочку сертификатов.
+      246     do on error undo, throw:
+      247       v-signed-cms:ComputeSignature(v-cms-signer) .
+      248       v-err-descr = "" .
+      249       catch exArgNull   as class System.ArgumentNullException :
+      250         v-err-descr = "A null reference was passed to a method that does not accept it as a valid argument." .
+      251         undo, throw new Progress.Lang.AppError(v-err-descr) .
+      252       end catch .
+      253       catch exCrypt     as class System.Security.Cryptography.CryptographicException :
+      254         // v-err-descr = "A cryptographic operation could not be completed." .
+      255         v-err-descr = substitute("&1|&2", exCrypt:HResult, exCrypt:Message) .
+      256         // -2146893811 | Ключ не существует.
+      257         undo, throw new Progress.Lang.AppError(v-err-descr) .
+      258       end catch .
+      259       catch exInvalidOp as  class System.InvalidOperationException :
+      260         v-err-descr = "A method call was invalid for the object's current state." .
+      261         undo, throw new Progress.Lang.AppError(v-err-descr) .
+      262       end catch .
+      263       finally :
+      264         if m-debug-enabled then do :
+      265           if v-err-descr = "" then put stream f-log unformatted "signification Ok" skip(1) .
+      266                               else put stream f-log unformatted v-err-descr skip(1) .
+      267         end .
+      268       end .
+      269     end .
+      270     v-encoded-sign = v-signed-cms:Encode() .
+      271     return v-encoded-sign .
+      272     finally :
+      273       if valid-object(v-cms-signer)   then delete object v-cms-signer.
+      274       if valid-object(v-signed-cms)   then delete object v-signed-cms.
+      275     end finally .
+      276   end method . // end_of signCms
+      277   method private void putData (input p-data as memptr) :
+      278     if valid-object(m-hash-content) then delete object m-hash-content.
+      279     if valid-object(m-byte-content) then delete object m-byte-content.
+      280     m-byte-content = memPtr2ByteArray(p-data) .
+      281     m-hash-content = hashSHA1(m-byte-content) .
+      282     if m-debug-enabled then do :
+      283       put stream f-log unformatted
+      284         "putData" skip
+      285         substitute("byte-content [&1]", byteArray2Str(m-byte-content)) skip
+      286         substitute("hash-content [&1]", byteArray2Str(m-hash-content)) skip(1)
+      287       .
+      288     end .
+      289   end method . // end_of putData
+      290   method public memptr computeSign (
+      291     input p-data    as memptr
+      292   , input p-my-name as character
+      293   , input p-issuer  as character
+      294   , input p-cert-repository as integer
+      295   ) :
+      296   define variable v-my-sert      as class System.Security.Cryptography.X509Certificates.X509Certificate2 no-undo .
+      297   define variable v-sign         as memptr no-undo .
+      298   //define variable v-byte-content as class "System.Byte[]" no-undo .
+      299   //define variable v-hash-content as class "System.Byte[]" no-undo .
+      300   define variable v-content-info as class System.Security.Cryptography.Pkcs.ContentInfo no-undo .
+      301   define variable v-encoded-sign as class "System.Byte[]" no-undo .
+      302   define variable i              as integer no-undo .
+      303     v-my-sert = getMyCert(p-my-name, p-issuer, p-cert-repository).
+      304     if valid-object(v-my-sert) then do:
+      305       if m-debug-enabled then do :
+      306         define variable v-publ-key as class System.Security.Cryptography.X509Certificates.PublicKey no-undo .
+      307         v-publ-key = v-my-sert:PublicKey .
+      308         put stream f-log unformatted
+      309           "enc1" skip
+      310           substitute("p-data [&1]", string(p-data)) skip(1)
+      311         .
+      312       end .
+      313     end .
+      314     else do :
+      315       if m-debug-enabled then do :
+      316         put stream f-log unformatted
+      317           "enc1 my-cert not-valid" skip(1)
+      318         .
+      319       end .
+      320       undo, throw new Progress.Lang.AppError("Ошибка поиска сертификата для подписи пакета") .
+      321     end .
+      322     putData(p-data) .
+      323     // represents the CMS/PKCS #7 ContentInfo data structure
+      324     // 16/X-2018 - оказалось, что 1с вообще не берёт hash, а отправляет шифроваться xml как есть
+      325     // v-content-info = new System.Security.Cryptography.Pkcs.ContentInfo (c-oid-data, m-hash-content) .
+      326     v-content-info = new System.Security.Cryptography.Pkcs.ContentInfo (c-oid-data, m-byte-content) .
+      327     if m-debug-enabled then do :
+      328       put stream f-log unformatted
+      329         "enc3" skip
+      330         substitute("v-content-info:content [&1]", byteArray2Str(v-content-info:Content)) skip(1)
+      331       .
+      332     end .
+      333     v-encoded-sign = signCms (v-content-info, v-my-sert, true) . // detached
+      334     if m-debug-enabled then do :
+      335       put stream f-log unformatted
+      336         "enc4" skip
+      337         substitute("detached encoded-sign [&1]", byteArray2Str(v-encoded-sign)) skip(1)
+      338       .
+      339     end .
+      340     set-size(v-sign) = v-encoded-sign:Length .
+      341     do i = 1 to v-encoded-sign:Length :
+      342       put-byte(v-sign, i) = integer(v-encoded-sign:GetValue(i - 1):ToString()) .
+      343     end .
+      344     return v-sign .
+      345     finally :
+      346       if valid-object(v-encoded-sign) then delete object v-encoded-sign.
+      347       if valid-object(v-content-info) then delete object v-content-info.
+      348   //    if valid-object(v-hash-content) then delete object v-hash-content.
+      349   //    if valid-object(v-byte-content) then delete object v-byte-content.
+      350       if valid-object(v-my-sert) then do :
+      351         v-my-sert:Dispose() . // Starting with the .NET Framework 4.6 you should dispose of it either directly or indirectly.
+      352         delete object v-my-sert.
+      353       end .
+      354     end finally .
+      355   end method . // end_of computeSign
+      356   method public void putSign (input p-sign as memptr) :
+      357   define variable v-signed-cms as class System.Security.Cryptography.Pkcs.SignedCms no-undo .
+      358     if valid-object(m-sign-certs)   then delete object m-sign-certs.
+      359     if valid-object(m-encoded-sign) then delete object m-encoded-sign.
+      360     m-encoded-sign = memPtr2ByteArray (p-sign) .
+      361     if m-debug-enabled then do :
+      362       put stream f-log unformatted
+      363         "putSign" skip
+      364         substitute("encoded-sign [&1]", byteArray2Str(m-encoded-sign)) skip(1)
+      365       .
+      366     end .
+      367     v-signed-cms = new System.Security.Cryptography.Pkcs.SignedCms () .
+      368     v-signed-cms:Decode(m-encoded-sign) .
+      369     m-sign-certs = v-signed-cms:Certificates .
+      370   end method . // end_of putSign
+      371   method public character getCertSubject () :
+      372   define variable v-cert1      as class System.Security.Cryptography.X509Certificates.X509Certificate2 no-undo .
+      373   define variable v-cert-dname as class System.Security.Cryptography.X509Certificates.X500DistinguishedName no-undo .
+      374   define variable v-cert-subj  as character no-undo .
+      375   define variable v-err-descr  as character no-undo .
+      376     if not valid-object(m-sign-certs) then do :
+      377       v-err-descr = "Отсутствует электронная подпись, содержащая сертификат. Используйте putSign() перед вызовом getCertSubject()." .
+      378       undo, throw new Progress.Lang.AppError(v-err-descr) .
+      379     end .
+      380     if m-sign-certs:Count > 0 then do :
+      381       v-cert1 = m-sign-certs[0] .
+      382       // v-cert-dname = new System.Security.Cryptography.X509Certificates.X500DistinguishedName (v-cert1:SubjectName) .
+      383       // v-cert-subj  = v-cert-dname:Name . // Gets the comma-delimited distinguished name from an X500 certificate.
+      384       v-cert-subj = v-cert1:SubjectName:Name .
+      385     end .
+      386     else do :
+      387       v-err-descr = "В электронной подписи отсутствует сертификат подписавшей стороны." .
+      388       if valid-object(m-sign-certs)   then delete object m-sign-certs.
+      389       if valid-object(m-encoded-sign) then delete object m-encoded-sign.
+      390       undo, throw new Progress.Lang.AppError(v-err-descr) .
+      391     end .
+      392     return v-cert-subj .
+      393     finally :
+      394       if valid-object (v-cert-dname) then delete object v-cert-dname .
+      395     end finally .
+      396   end method . // end_of getCertSubject
+      397   method public void verifySign (input p-data as memptr) :
+      398   // Проверка detached signature
+      399   // обратная задача: есть файл с данными и файл с подписью, содержащий сертификат.
+      400   //define variable v-encoded-sign as class "System.Byte[]" no-undo .
+      401   //define variable v-byte-content as class "System.Byte[]" no-undo .
+      402   //define variable v-hash-content as class "System.Byte[]" no-undo .
+      403   define variable v-content-info as class System.Security.Cryptography.Pkcs.ContentInfo no-undo .
+      404   define variable v-signed-cms   as class System.Security.Cryptography.Pkcs.SignedCms no-undo .
+      405   define variable v-cert1        as class System.Security.Cryptography.X509Certificates.X509Certificate2 no-undo .
+      406   define variable v-x509chain    as class System.Security.Cryptography.X509Certificates.X509Chain no-undo .
+      407   // define variable v-chain-policy as class System.Security.Cryptography.X509Certificates.X509ChainPolicy no-undo .
+      408   define variable v-element      as class System.Security.Cryptography.X509Certificates.X509ChainElement no-undo .
+      409   define variable v-status       as class "System.Security.Cryptography.X509Certificates.X509ChainStatus[]" no-undo .
+      410   define variable v-status1      as class System.Security.Cryptography.X509Certificates.X509ChainStatus no-undo .
+      411   define variable v-certs-count  as integer no-undo .
+      412   define variable v-icert        as integer no-undo .
+      413   define variable v-int          as integer no-undo .
+      414   define variable v-jnt          as integer no-undo .
+      415   define variable v-err-descr    as character no-undo .
+      416     if not valid-object(m-encoded-sign) then do :
+      417       v-err-descr = "Отсутствует электронная подпись для проверки. Используйте putSign() перед вызовом verifySign()." .
+      418       undo, throw new Progress.Lang.AppError(v-err-descr) .
+      419     end .
+      420     if not valid-object(m-sign-certs) then do :
+      421       v-err-descr = "В электронной подписи отсутствует сертификат подписавшей стороны." .
+      422       undo, throw new Progress.Lang.AppError(v-err-descr) .
+      423     end .
+      424     if m-sign-certs:Count > 0 then . else do :
+      425       v-err-descr = "В электронной подписи отсутствует сертификат подписавшей стороны." .
+      426       undo, throw new Progress.Lang.AppError(v-err-descr) .
+      427     end .
+      428     putData(p-data) .
+      429     v-err-descr    = "" .
+      430     // Надо проверить, что данная подпись получена именно с этого файла и при помощи этого сертификата.
+      431     // 16/X-2018 - оказалось, что 1с вообще не берёт hash, а отправляет шифроваться xml как есть
+      432     // v-content-info = new System.Security.Cryptography.Pkcs.ContentInfo (c-oid-data, m-hash-content) .
+      433     v-content-info = new System.Security.Cryptography.Pkcs.ContentInfo (c-oid-data, m-byte-content) .
+      434     v-signed-cms   = new System.Security.Cryptography.Pkcs.SignedCms (v-content-info, true) .
+      435     v-signed-cms:Decode(m-encoded-sign) .
+      436     v-x509chain = new System.Security.Cryptography.X509Certificates.X509Chain () .
+      437     v-x509chain:ChainPolicy:RevocationMode    = System.Security.Cryptography.X509Certificates.X509RevocationMode:NoCheck .
+      438     v-x509chain:ChainPolicy:VerificationFlags = System.Security.Cryptography.X509Certificates.X509VerificationFlags:NoFlag .
+      439     v-certs-count = m-sign-certs:Count .
+      440     do v-icert = 0 to v-certs-count - 1 :
+      441       v-cert1 = m-sign-certs[v-icert] .
+      442       v-x509chain:Build(v-cert1) .
+      443     if m-debug-enabled then do :
+      444       put stream f-log unformatted
+      445       skip(1)
+      446       substitute("Chain Information") skip
+      447       substitute("Chain revocation flag: &1", v-x509chain:ChainPolicy:RevocationFlag) skip
+      448       substitute("Chain revocation mode: &1", v-x509chain:ChainPolicy:RevocationMode) skip
+      449       substitute("Chain verification flag: &1", v-x509chain:ChainPolicy:VerificationFlags) skip
+      450       substitute("Chain verification time: &1", v-x509chain:ChainPolicy:VerificationTime) skip
+      451       substitute("Chain status length: &1", v-x509chain:ChainStatus:Length) skip
+      452       substitute("Chain application policy count: &1", v-x509chain:ChainPolicy:ApplicationPolicy:Count) skip
+      453       substitute("Chain certificate policy count: &1", v-x509chain:ChainPolicy:CertificatePolicy:Count) skip
+      454       .
+      455     end .
+      456     v-status = v-x509chain:ChainStatus .
+      457     if v-status:Length  > 0 then do :
+      458       do v-int = 0 to v-status:Length - 1 :
+      459         v-status1 = cast(v-status:GetValue(v-int), "System.Security.Cryptography.X509Certificates.X509ChainStatus") .
+      460         if m-debug-enabled then do :
+      461           put stream f-log unformatted
+      462             substitute("  &1", v-status1:Status) skip
+      463             substitute("  &1", v-status1:StatusInformation) skip
+      464           .
+      465         end .
+      466         v-err-descr = v-err-descr + chr(10) + v-status1:StatusInformation .
+      467       end .
+      468       v-err-descr = substring( v-err-descr, 2 ).
+      469       undo, throw new Progress.Lang.AppError(v-err-descr) .
+      470     end .
+      471     do v-int = 0 to v-x509chain:ChainElements:Count - 1 :
+      472       v-element = v-x509chain:ChainElements[v-int] .
+      473       if m-debug-enabled then do :
+      474         put stream f-log unformatted
+      475         skip(1)
+      476         substitute("Element issuer name: &1",             v-element:Certificate:Issuer) skip
+      477         substitute("Element certificate valid until: &1", v-element:Certificate:NotAfter) skip
+      478         substitute("Element certificate is valid: &1",    v-element:Certificate:Verify()) skip
+      479         substitute("Element error status length: &1",     v-element:ChainElementStatus:Length) skip
+      480         substitute("Element information: &1",             v-element:Information) skip
+      481         substitute("Number of element extensions: &1",    v-element:Certificate:Extensions:Count) skip
+      482         .
+      483       end .
+      484       if v-element:ChainElementStatus:Length > 0 then do :
+      485         v-status = v-element:ChainElementStatus .
+      486         v-err-descr = "" .
+      487         do v-jnt = 0 to v-status:Length - 1 :
+      488           v-status1 = cast(v-status:GetValue(v-jnt), "System.Security.Cryptography.X509Certificates.X509ChainStatus") .
+      489           if m-debug-enabled then do :
+      490             put stream f-log unformatted
+      491               substitute("  &1", v-status1:Status) skip
+      492               substitute("  &1", v-status1:StatusInformation) skip
+      493             .
+      494           end .
+      495           v-err-descr = v-err-descr + chr(10) + v-status1:StatusInformation .
+      496         end .
+      497         v-err-descr = substring( v-err-descr, 2 ).
+      498         undo, throw new Progress.Lang.AppError(v-err-descr) .
+      499       end .
+      500     end . // end_of v-x509chain:ChainElements:Count
+      501     end . // end_of do_v-certs-count
+      502     do on error undo, throw:
+      503       //  Проверяем подпись и корректность сертификата подписавшего.
+      504       v-signed-cms:CheckSignature(true) . // true - только подпись, false - и сертификаты тоже
+      505       // https://docs.microsoft.com/ru-ru/dotnet/api/system.security.cryptography.pkcs.signedcms.checksignature?view=netframework-4.7.2#System_Security_Cryptography_Pkcs_SignedCms_CheckSignature_System_Security_Cryptography_X509Certificates_X509Certificate2Collection_System_Boolean_
+      506       // The CheckSignature(X509Certificate2Collection, Boolean) method verifies the digital signatures on the signed CMS/PKCS #7 message by using the specified collection of certificates and, optionally, validates the signers' certificates.
+      507   
+      508       v-err-descr = "" .
+      509       catch exArgNull   as class System.ArgumentNullException :
+      510         v-err-descr = "A null reference was passed to a method that does not accept it as a valid argument." .
+      511         undo, throw new Progress.Lang.AppError(v-err-descr) .
+      512       end catch .
+      513       catch exCrypt     as class System.Security.Cryptography.CryptographicException :
+      514         // v-err-descr = "A cryptographic operation could not be completed." .
+      515   
+      516         v-err-descr = substitute("&1|&2", exCrypt:HResult, exCrypt:Message) .
+      517         // -2146762486 | Не удается построить цепочку сертификатов для доверенного корневого центра.      
+      518   
+      519         // -2146762495 | Истек/не наступил срок действия требуемого сертификата при проверке по системным часам или по отметке времени в подписанном файле.      
+      520   
+      521         // -2146885614 | Функция отзыва не смогла произвести проверку отзыва для сертификата.
+      522   
+      523         // -2146889714 | Не найден автор исходной подписи.
+      524   
+      525         // -2146889721 | Неправильное значение хеша.
+      526   
+      527         // -2146893818 | Неправильная подпись.      
+      528   
+      529         undo, throw new Progress.Lang.AppError(v-err-descr) .
+      530       end catch .
+      531       catch exInvalidOp as  class System.InvalidOperationException :
+      532         v-err-descr = "A method call was invalid for the object's current state." . 
+      533         undo, throw new Progress.Lang.AppError(v-err-descr) .
+      534       end catch .
+      535       finally :
+      536         if m-debug-enabled then do :
+      537           if v-err-descr = "" then put stream f-log unformatted "verification Ok" skip(1) .
+      538                               else put stream f-log unformatted v-err-descr skip(1) .
+      539         end .
+      540       end . 
+      541     end .
+      542   
+      543     finally :
+      544       if valid-object(v-x509chain) then do :
+      545         v-x509chain:Dispose() .
+      546         delete object v-x509chain .
+      547       end .
+      548       if valid-object(v-signed-cms)   then delete object v-signed-cms.
+      549       if valid-object(v-content-info) then delete object v-content-info.
+      550   //    if valid-object(v-hash-content) then delete object v-hash-content.
+      551   
+      552   //    if valid-object(v-byte-content) then delete object v-byte-content.
+      553   
+      554   //    if valid-object(v-encoded-sign) then delete object v-encoded-sign.
+      555   
+      556     end finally .
+      557   end method. // end_of verifySign
+      558   
+      559   
+      560   
+      561   end class.

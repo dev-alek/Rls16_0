@@ -1,0 +1,1183 @@
+        1   block-level on error undo, throw.
+        2   define input-output parameter p-inn as character no-undo .
+        3   define input parameter p-old-inn as character no-undo .
+        4   define input parameter p-obj-type like ub.clients.obj-type no-undo .
+        5   define input parameter p-obj-code like ub.clients.obj-code no-undo .
+        6   define input parameter p-silent as logical no-undo .
+        7   define input parameter p-recid as recid no-undo .
+        8   define input parameter p-buf-handle as handle no-undo .
+        9   define output parameter p-inn-uniq-error as logical no-undo .
+       10   define variable vss-revision    as character no-undo init "$Revision$":U .
+       11   define variable vss-author      as character no-undo init "$Author$":U .
+       12   define variable vss-date        as character no-undo init "$Date$":U .
+       13   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+       14   define variable vss-archive     as character no-undo init "$Archive$":U .
+       15   define variable vss-description as character no-undo init "Запись И_Н_Н в БД".
+       16   procedure vss-get-info :
+       17     define output parameter p-vss-revision    like vss-revision    no-undo .
+       18     define output parameter p-vss-author      like vss-author      no-undo .
+       19     define output parameter p-vss-date        like vss-date        no-undo .
+       20     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       21     define output parameter p-vss-archive     like vss-archive     no-undo .
+       22     define output parameter p-vss-description like vss-description no-undo .
+       23     assign
+       24       p-vss-revision    = vss-revision
+       25       p-vss-author      = vss-author
+       26       p-vss-date        = vss-date
+       27       p-vss-workfile    = vss-workfile
+       28       p-vss-archive     = vss-archive
+       29       p-vss-description = vss-description
+       30     .
+       31   end procedure.
+       32   procedure vss-get-parameters :
+       33     define output parameter p-vss-parameters as character no-undo .
+       34   end procedure.
+       35   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       36   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       37   define variable v-vssrevis-logger                   as handle    no-undo .
+       38   procedure vss-logevent :
+       39     define input  parameter p-extra-paramters as character no-undo .
+       40     define variable v-vssrevis-parameters as character no-undo .
+       41     do
+       42     on error undo, return error return-value
+       43     :
+       44       if  valid-handle(v-vssrevis-logger)
+       45       and v-vssrevis-logger :get-signature("logevent") <> ""
+       46       then do:
+       47         run vss-get-parameters in this-procedure
+       48           (output v-vssrevis-parameters
+       49           ).
+       50         run logevent in v-vssrevis-logger
+       51           (input vss-workfile
+       52           ,input vss-revision
+       53           ,input v-vssrevis-parameters
+       54           ,input p-extra-paramters
+       55           ).
+       56       end.
+       57     end.
+       58   end procedure.
+       59   assign
+       60     v-vssrevis-logger = g#vssrevis-logger
+       61   .
+       62   if  valid-handle(v-vssrevis-logger)
+       63   and v-vssrevis-logger :get-signature("logevent") <> ""
+       64   then do:
+       65     assign
+       66       v-vssrevis-logevent = true
+       67     .
+       68     run vss-logevent in this-procedure (input vss-description) .
+       69   end.
+       70   define new global shared variable g#language as character no-undo .
+       71   if g#language <> '' and g#language <> 'rus':U then do:
+       72     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       73   end.
+       74   define new global shared variable g#library  as handle no-undo .
+       75   define new global shared variable g#library2 as handle no-undo .
+       76   define   shared variable g#auto as logical no-undo.
+       77   define   shared variable g#news as logical no-undo.
+       78   define   shared variable g#oxml as logical no-undo.
+       79   define   shared variable g#esys as logical no-undo.
+       80   define   shared variable g#news-source-db as integer no-undo.
+       81   define   shared variable g#esys-source-esys as integer no-undo.
+       82   define   shared variable g#db-num as integer   no-undo .
+       83   define   shared variable g#userid as character no-undo .
+       84   define   shared variable g#passwd as character no-undo .
+       85   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       86   procedure gen-key-rec :
+       87     define input  parameter p-tbl-name    as character no-undo.
+       88     define input  parameter p-bh_tbl-name as handle    no-undo.
+       89     define output parameter p-key-rec     as character no-undo.
+       90     do
+       91     on error  undo, return error substitute( "&1 (gen-key-rec). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       92     on stop   undo, return error substitute( "&1 (gen-key-rec). stop", vss-workfile )
+       93     on endkey undo, return error substitute( "&1 (gen-key-rec). endkey", vss-workfile )
+       94     :
+       95       define variable fh               as handle    no-undo .
+       96       define variable v-ok             as logical   no-undo .
+       97       define variable v-inform         as character no-undo .
+       98       define variable v-ind            as integer   no-undo .
+       99       define variable v-idx-field-qnty as integer   no-undo .
+      100       if p-tbl-name = ?
+      101         or p-tbl-name = "":U
+      102       then do:
+      103         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Не задано имя таблицы.", vss-include-info0 ).
+      104       end.
+      105       if not p-bh_tbl-name:available then do:
+      106         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Переданый буфер таблицы &2 не доступен", vss-include-info0, p-tbl-name ).
+      107       end.
+      108       assign
+      109         p-key-rec = p-tbl-name
+      110         v-inform  = p-bh_tbl-name:index-information(1)
+      111         v-ind     = 2
+      112       .
+      113       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      114       on error undo, return error
+      115       :
+      116         assign
+      117           v-inform = p-bh_tbl-name:index-information( v-ind )
+      118           v-ind    = v-ind + 1
+      119         .
+      120       end.
+      121       if v-inform = ?
+      122         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      123         or entry( 3, v-inform, ",":U ) <> "1":U
+      124       then do:
+      125         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, p-tbl-name ).
+      126       end.
+      127       else do:
+      128         assign
+      129           v-idx-field-qnty = num-entries( v-inform ) - 4
+      130         .
+      131         if v-idx-field-qnty < 2 then do:
+      132           return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, p-tbl-name ).
+      133         end.
+      134         do v-ind = 1 to v-idx-field-qnty by 2
+      135         on error undo, return error
+      136         :
+      137           assign
+      138             fh = p-bh_tbl-name:buffer-field( entry( 4 + v-ind, v-inform, ",":U ) ).
+      139             p-key-rec = p-key-rec + chr(3) + substitute("&1", replace(fh:buffer-value(),chr(3),chr(2) + chr(9) + chr (2)))
+      140           .
+      141         end.
+      142       end.
+      143       if p-key-rec = ? then do:
+      144         assign
+      145           p-key-rec = "":U
+      146         .
+      147         return error substitute( "&1. Поле(поля) первичного ключа таблицы &2 имеет(ют) неопределенное значение", vss-include-info0, p-tbl-name ).
+      148       end.
+      149     end.
+      150     return.
+      151   end procedure.
+      152   procedure gen-where-keyr-tab :
+      153     define input  parameter i-tableSerach as character no-undo.
+      154     define input  parameter i-tablekey   as character  no-undo.
+      155     define input  parameter p-key-rec    as character  no-undo.
+      156     define input  parameter p-key-handle as handle     no-undo .
+      157     define input  parameter p-db-name    as character  no-undo .
+      158     define input  parameter p-tt-handle  as handle     no-undo .
+      159     define output parameter o-Where      as character  no-undo.
+      160     do
+      161     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      162     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      163     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile )
+      164     :
+      165       define variable v-full-tbl-name  as character no-undo .
+      166       define variable bh_tbl-name      as handle    no-undo .
+      167       define variable fh_key           as handle    no-undo .
+      168       define variable fh_search        as handle    no-undo .
+      169       define variable v-field-num      as integer   no-undo .
+      170       define variable v-count-fld      as integer   no-undo .
+      171       define variable v-inform         as character no-undo .
+      172       define variable v-ind            as integer   no-undo .
+      173       define variable v-idx-field-qnty as integer   no-undo .
+      174       define variable v-field-name     as character no-undo .
+      175       define variable v-field-val      as character no-undo .
+      176       define variable v-word-link      as character no-undo .
+      177       define variable vTable           as character no-undo.
+      178       define variable bh_tbl-key       as handle    no-undo .
+      179       assign
+      180         p-key-rec = trim( p-key-rec )
+      181       .
+      182       if p-key-handle <> ? then do:
+      183         if not valid-handle(p-key-handle)
+      184            or p-key-handle:type <> "buffer"
+      185         then do:
+      186           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Задан невалидный буфер для поиска.", vss-include-info0 ).
+      187         end.
+      188         if num-entries( p-key-rec, chr(3) ) > 1
+      189           or p-key-rec = ?
+      190           or p-key-rec = "":U
+      191         then do:
+      192           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. При поиске по буферу вместо ключа (&2) должено быть 'имя таблицы'.", vss-include-info0, p-key-rec ).
+      193         end.
+      194       end.
+      195       else do:
+      196         if p-key-rec = ?
+      197           or p-key-rec = "":U
+      198         then do:
+      199           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      200         end.
+      201       end.
+      202       assign
+      203         vTable = entry( 1 , p-key-rec, chr(3) )
+      204       .
+      205       if p-tt-handle <> ?
+      206         and ( not valid-handle(p-tt-handle)
+      207               or p-tt-handle:type <> "buffer"
+      208             )
+      209       then do:
+      210         return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. &2&3Передан невалидный handle для поиска или handle не типа BUFFER", vss-include-info0, vTable, chr(10) ).
+      211       end.
+      212       if p-tt-handle = ? then do:
+      213         assign
+      214           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable )
+      215         .
+      216         create buffer bh_tbl-name for table v-full-tbl-name .
+      217       end.
+      218       else do:
+      219         create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      220       end.
+      221       assign
+      222         v-inform = bh_tbl-name:index-information(1)
+      223         v-ind    = 2
+      224       .
+      225       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      226       on error undo, return error
+      227       :
+      228         assign
+      229           v-inform = bh_tbl-name:index-information( v-ind )
+      230           v-ind    = v-ind + 1
+      231         .
+      232       end.
+      233       if v-inform = ?
+      234         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      235         or entry( 3, v-inform, ",":U ) <> "1":U
+      236       then do:
+      237         delete object bh_tbl-name no-error.
+      238         return error substitute( "&1. Таблица &2 не имеет первичного ключа", vss-include-info0, vTable ).
+      239       end.
+      240       assign
+      241         v-idx-field-qnty = num-entries( v-inform ) - 4
+      242       .
+      243       if v-idx-field-qnty < 2 then do:
+      244         delete object bh_tbl-name no-error.
+      245         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, vTable ).
+      246       end.
+      247       assign
+      248         o-where     = "where":U
+      249         v-word-link = "":U
+      250         v-field-num = num-entries( p-key-rec, chr(3) ) - 1
+      251         v-count-fld = 0
+      252       .
+      253       if i-tablekey ne "" and i-tablekey ne ?
+      254       then do:
+      255         assign
+      256           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tablekey )
+      257         .
+      258         create buffer bh_tbl-key for table v-full-tbl-name .
+      259       end.
+      260       if i-tableSerach ne "" and i-tableSerach ne ?
+      261       then do:
+      262         delete object bh_tbl-name no-error.
+      263         assign
+      264           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach )
+      265         .
+      266         create buffer bh_tbl-name for table v-full-tbl-name .
+      267       end.
+      268       block_where:
+      269       do v-ind = 1 to v-idx-field-qnty by 2
+      270       on error undo, return error
+      271       :
+      272         assign
+      273           v-count-fld = v-count-fld + 1
+      274         .
+      275         if p-key-handle = ?
+      276           and v-count-fld > v-field-num
+      277         then do:
+      278           leave block_where.
+      279         end.
+      280         define variable VfieldKeyTable as handle no-undo.
+      281         assign
+      282           v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      283           fh_search    = bh_tbl-name:buffer-field( v-field-name )
+      284         .
+      285         if     bh_tbl-key ne ?
+      286         then do:
+      287            VfieldKeyTable = bh_tbl-key:buffer-field( v-field-name ) no-error.
+      288            if VfieldKeyTable eq ?
+      289            then next block_where.
+      290         end.
+      291         if v-full-tbl-name ne "" and v-full-tbl-name ne ?
+      292         then
+      293            o-where = substitute( "&1 &2 &3.&4 =", o-where, v-word-link,v-full-tbl-name, v-field-name ).
+      294         else
+      295            o-where = substitute( "&1 &2 &3 =", o-where, v-word-link, v-field-name ).
+      296         if p-key-handle = ? then do:
+      297           assign
+      298             v-field-val = replace (entry( v-count-fld + 1 , p-key-rec, chr(3) ),chr(2) + chr(9) + chr (2),chr(3))
+      299           .
+      300         end.
+      301         else do:
+      302           assign
+      303             fh_key = p-key-handle:buffer-field( v-field-name )
+      304           .
+      305           if fh_key = ?
+      306             or not valid-handle( fh_key )
+      307           then do:
+      308             delete object bh_tbl-name.
+      309             if     bh_tbl-key ne ?
+      310             then
+      311                delete object bh_tbl-key.
+      312             return error substitute( "&1. Буфер &2 не содержит поля &3 необходимого для поиска.", vss-include-info0, p-key-handle:name, v-field-name ).
+      313           end.
+      314           assign
+      315             v-field-val = fh_key:buffer-value
+      316           .
+      317         end.
+      318         if fh_search:data-type ="character":U then do:
+      319           assign
+      320             v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+      321             v-field-val = replace( v-field-val, '"':U, '~~"':U )
+      322             v-field-val = replace( v-field-val, "'":U, "~~'":U )
+      323             v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+      324             v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+      325             v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+      326             v-field-val = replace( v-field-val, chr(10), '~~n':U )
+      327             v-field-val = replace( v-field-val, chr(9), '~~t':U )
+      328             v-field-val = replace( v-field-val, chr(13), '~~r':U )
+      329             v-field-val = replace( v-field-val, chr(27), '~~E':U )
+      330             v-field-val = replace( v-field-val, chr(8), '~~b':U )
+      331             v-field-val = replace( v-field-val, chr(12), '~~f':U )
+      332             v-field-val = substitute( '"&1"', v-field-val )
+      333           .
+      334         end.
+      335         assign
+      336           o-where = substitute( "&1 &2", o-where, v-field-val )
+      337         .
+      338         if v-word-link = "":U then do:
+      339           assign
+      340             v-word-link = "and":U
+      341           .
+      342         end.
+      343       end.
+      344       delete object bh_tbl-name.
+      345       if     bh_tbl-key ne ?
+      346       then
+      347          delete object bh_tbl-key.
+      348       if p-key-handle = ?
+      349         and v-count-fld <> v-field-num
+      350       then do:
+      351         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2", vss-include-info0, vTable ).
+      352       end.
+      353     end.
+      354   end procedure.
+      355   procedure gen-hn-keyr-tab :
+      356     define input  parameter i-tableSerach as character no-undo.
+      357     define input  parameter i-tablekey   as character no-undo.
+      358     define input  parameter p-key-rec    as character no-undo.
+      359     define input  parameter p-key-handle as handle    no-undo .
+      360     define input  parameter p-db-name    as character no-undo .
+      361     define input  parameter p-tt-handle  as handle    no-undo .
+      362     define input  parameter p-stts-lock  as integer   no-undo .
+      363     define output parameter o-hn         as handle    no-undo.
+      364     define variable v-full-tbl-name as character no-undo.
+      365     define variable v-where         as character no-undo.
+      366     define variable bh_tbl-name     as handle    no-undo.
+      367     define variable vTable          as character no-undo.
+      368     do
+      369     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      370     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      371     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile ):
+      372         run gen-where-keyr-tab(i-tableSerach,
+      373                                i-tablekey,
+      374                                p-key-rec,
+      375                                p-key-handle,
+      376                                p-db-name,
+      377                                p-tt-handle,
+      378                                output v-where).
+      379         if i-tableSerach ne "" and i-tableSerach ne ?
+      380         then do:
+      381            v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach ).
+      382            create buffer bh_tbl-name for table v-full-tbl-name .
+      383         end.
+      384         else do:
+      385            if p-tt-handle = ? then do:
+      386               assign
+      387                  vTable = entry( 1 , p-key-rec, chr(3) )
+      388               .
+      389               v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable ).
+      390               create buffer bh_tbl-name for table v-full-tbl-name .
+      391            end.
+      392            else do:
+      393               create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      394            end.
+      395         end.
+      396         if p-tt-handle = ? then do:
+      397            bh_tbl-name:find-first( v-where, p-stts-lock ) no-error .
+      398         end.
+      399         else do:
+      400            bh_tbl-name:find-first( v-where ) no-error .
+      401         end.
+      402         o-hn = bh_tbl-name.
+      403      end.
+      404   end procedure.
+      405   procedure gen-hn-keyr :
+      406     define input  parameter p-key-rec    as character no-undo.
+      407     define input  parameter p-key-handle as handle    no-undo .
+      408     define input  parameter p-db-name    as character no-undo .
+      409     define input  parameter p-tt-handle  as handle    no-undo .
+      410     define input  parameter p-stts-lock  as integer   no-undo .
+      411     define output parameter o-hn         as handle    no-undo.
+      412     run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output o-hn).
+      413   end.
+      414   procedure gen-row-keyr :
+      415     define input  parameter p-key-rec    as character no-undo.
+      416     define input  parameter p-key-handle as handle    no-undo .
+      417     define input  parameter p-db-name    as character no-undo .
+      418     define input  parameter p-tt-handle  as handle    no-undo .
+      419     define input  parameter p-stts-lock  as integer   no-undo .
+      420     define output parameter p-tbl-row    as rowid     no-undo.
+      421     define output parameter p-tbl-name   as character no-undo.
+      422     define variable vHn as handle no-undo.
+      423       run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output vHn).
+      424       p-tbl-row = if vHn:available then vHn:rowid else ?.
+      425       p-tbl-name =  vHn:table.
+      426       delete object vHn no-error.
+      427     if p-tbl-row = ? then do:
+      428       return substitute( "Не найдена запись таблицы &2 по ключу &3", vss-include-info0, p-tbl-name, p-key-rec ).
+      429     end.
+      430     else do:
+      431       return.
+      432     end.
+      433   end procedure.
+      434   procedure gen-key-fv :
+      435     define input  parameter p-key-rec    as character no-undo .
+      436     define output parameter p-field-list as character no-undo .
+      437     define output parameter p-value-list as character no-undo.
+      438     do
+      439     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      440     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      441     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      442     :
+      443       define variable v-full-tbl-name  as character no-undo .
+      444       define variable bh_tbl-name      as handle    no-undo .
+      445       define variable v-tbl-name       as character no-undo .
+      446       define variable v-field-num      as integer   no-undo .
+      447       define variable v-count-fld      as integer   no-undo .
+      448       define variable v-inform         as character no-undo .
+      449       define variable v-ind            as integer   no-undo .
+      450       define variable v-idx-field-qnty as integer   no-undo .
+      451       define variable v-delim-key      as character no-undo .
+      452       if p-key-rec = ?
+      453         or p-key-rec = "":U
+      454       then do:
+      455         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      456       end.
+      457       assign
+      458         v-tbl-name      = entry( 1 , p-key-rec, chr(3) )
+      459         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      460       .
+      461       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      462       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверный уникальный ключ.", vss-include-info0 ).
+      463       assign
+      464         v-inform = bh_tbl-name:index-information(1)
+      465         v-ind    = 2
+      466       .
+      467       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      468       on error undo, return error
+      469       :
+      470         assign
+      471           v-inform = bh_tbl-name:index-information( v-ind )
+      472           v-ind    = v-ind + 1
+      473         .
+      474       end.
+      475       if v-inform = ?
+      476         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      477         or entry( 3, v-inform, ",":U ) <> "1":U
+      478       then do:
+      479         delete object bh_tbl-name no-error.
+      480         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      481       end.
+      482       assign
+      483         v-idx-field-qnty = num-entries( v-inform ) - 4
+      484       .
+      485       if v-idx-field-qnty < 2 then do:
+      486         delete object bh_tbl-name no-error.
+      487         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      488       end.
+      489       assign
+      490         p-field-list = "":U
+      491         p-value-list = "":U
+      492         v-delim-key  = "":U
+      493         v-field-num  = num-entries( p-key-rec, chr(3) ) - 1
+      494         v-count-fld  = 0
+      495       .
+      496       block_where:
+      497       do v-ind = 1 to v-idx-field-qnty by 2
+      498       on error undo, return error
+      499       :
+      500         assign
+      501           v-count-fld = v-count-fld + 1
+      502         .
+      503         if v-count-fld > v-field-num then do:
+      504           leave block_where.
+      505         end.
+      506         assign
+      507           p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U )
+      508           p-value-list = p-value-list + v-delim-key + entry( v-count-fld + 1 , p-key-rec, chr(3) )
+      509         .
+      510         if v-ind = 1 then do:
+      511           assign
+      512             v-delim-key = chr(3)
+      513           .
+      514         end.
+      515       end.
+      516       delete object bh_tbl-name.
+      517       if v-count-fld <> v-field-num then do:
+      518         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2 в БД", vss-include-info0, v-tbl-name ).
+      519       end.
+      520     end.
+      521   end procedure.
+      522   procedure gen-key-field :
+      523     define input  parameter p-table      as character no-undo .
+      524     define output parameter p-field-list as character no-undo .
+      525     do
+      526     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      527     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      528     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      529     :
+      530       define variable v-full-tbl-name  as character no-undo .
+      531       define variable bh_tbl-name      as handle    no-undo .
+      532       define variable v-tbl-name       as character no-undo .
+      533       define variable v-field-num      as integer   no-undo .
+      534       define variable v-count-fld      as integer   no-undo .
+      535       define variable v-inform         as character no-undo .
+      536       define variable v-ind            as integer   no-undo .
+      537       define variable v-idx-field-qnty as integer   no-undo .
+      538       define variable v-delim-key      as character no-undo .
+      539       if p-table = ?
+      540         or p-table = "":U
+      541       then do:
+      542         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан таблица.", vss-include-info0 ).
+      543       end.
+      544       assign
+      545         v-tbl-name      = p-table
+      546         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      547       .
+      548       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      549       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверная таблица.", vss-include-info0 ).
+      550       assign
+      551         v-inform = bh_tbl-name:index-information(1)
+      552         v-ind    = 2
+      553       .
+      554       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      555       on error undo, return error
+      556       :
+      557         assign
+      558           v-inform = bh_tbl-name:index-information( v-ind )
+      559           v-ind    = v-ind + 1
+      560         .
+      561       end.
+      562       if v-inform = ?
+      563         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      564         or entry( 3, v-inform, ",":U ) <> "1":U
+      565       then do:
+      566         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      567       end.
+      568       assign
+      569         v-idx-field-qnty = num-entries( v-inform ) - 4
+      570       .
+      571       if v-idx-field-qnty < 2 then do:
+      572         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      573       end.
+      574       assign
+      575         p-field-list = "":U
+      576         v-delim-key  = "":U
+      577         v-count-fld  = 0
+      578       .
+      579       block_where:
+      580       do v-ind = 1 to v-idx-field-qnty by 2
+      581       on error undo, return error
+      582       :
+      583         assign
+      584           v-count-fld = v-count-fld + 1
+      585         .
+      586         p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U ).
+      587         if v-ind = 1 then do:
+      588           assign
+      589             v-delim-key = chr(3)
+      590           .
+      591         end.
+      592       end.
+      593       delete object bh_tbl-name.
+      594     end.
+      595   end procedure.
+      596   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      597   define variable conf-par as character no-undo .
+      598   define variable par-type as character no-undo .
+      599   define variable inn-uniq as integer no-undo .
+      600   define variable glog as logical no-undo .
+      601   define variable v-err-mess as character no-undo .
+      602   define variable bpr_lprocessedok as logical no-undo .
+      603   define variable v-new-inn as character no-undo .
+      604   define variable v-obj-type as character no-undo .
+      605   define variable v-obj-code as integer no-undo .
+      606   define variable v-our-key-rec as character no-undo .
+      607   define variable v-firm-our-key-rec as character no-undo .
+      608   define variable v-person-our-key-rec as character no-undo .
+      609   define variable v-param-type as character no-undo .
+      610   define variable v-value-character as character no-undo .
+      611   define variable v-value-date as date no-undo .
+      612   define variable v-value-decimal as decimal no-undo .
+      613   define variable v-value-integer as INTEGER no-undo .
+      614   define variable v-value-logical AS LOGICAL no-undo .
+      615   define variable v-tth as handle no-undo .
+      616   define buffer another_firm for ub.firm.
+      617   define buffer another_person for ub.person.
+      618   define buffer buf_ext-classif for ub.ext-classif.
+      619   define buffer buf2_ext-classif for ub.ext-classif.
+      620   define buffer buf_firm for ub.firm.
+      621   define buffer buf_person for ub.person.
+      622   define temp-table temp-clients  no-undo
+      623   like ub.clients.
+      624   define buffer buf_batchprocess for ub.batchprocess.
+      625   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      626   define variable v-waitfram-action01         as character   no-undo .
+      627   define variable v-waitfram-action02         as character   no-undo .
+      628   define variable v-waitfram-action03         as character   no-undo .
+      629   define variable mWaitFramTextBeg            as character   no-undo.
+      630   define variable mWaitFramTextEnd            as character   no-undo.
+      631   define variable mWaitFramView               as logical     no-undo.
+      632   define variable mWaitProcEvent              as logical     no-undo init yes.
+      633   define variable mWaitFramInterval           as integer     no-undo init 1 .
+      634   define variable mWaitFramStop               as logical     no-undo.
+      635   define variable mWaitFramStopUser           as logical     no-undo.
+      636   define variable mWaitFramStopTimeOut        as logical     no-undo.
+      637   define variable mWaitFramStartProc          as datetime-tz no-undo.
+      638   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+      639   define button B-WaitFramStop auto-end-key
+      640        label "Стоп"
+      641        size 10 by 1 tooltip "Остоновить процесс".
+      642   define button B-viewProcInfo
+      643        label "Информация"
+      644        size 15 by 1 tooltip "Информация о процесс".
+      645   define frame waitfram
+      646     v-waitfram-action01 format "x(72)" no-label skip
+      647     v-waitfram-action02 format "x(72)" no-label skip
+      648     v-waitfram-action03 format "x(72)" no-label skip
+      649     B-viewProcInfo
+      650     B-WaitFramStop at row 4 col 30
+      651     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+      652     .
+      653   define new global shared variable mBatchMode as logical no-undo init ?.
+      654   define variable mFramBachModHandle as handle no-undo.
+      655   mFramBachModHandle = frame waitfram:handle.
+      656   define variable mFameOldVis as logical no-undo.
+      657   define variable mVisCUrentVin as logical no-undo.
+      658   if session:batch-mode
+      659   then
+      660      mBatchMode = yes.
+      661   if mBatchMode = ? then do:
+      662     mVisCUrentVin = current-window:visible.
+      663     mFameOldVis = mFramBachModHandle:visible.
+      664     mFramBachModHandle:visible  = yes.
+      665     mBatchMode = mFramBachModHandle:visible ne yes.
+      666     mFramBachModHandle:visible = mFameOldVis.
+      667     current-window:visible = mVisCUrentVin.
+      668   end.
+      669    if  log-manager:logfile-name ne ?
+      670     then DO:
+      671         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      672         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      673         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+      674     end.
+      675   on choose of B-WaitFramStop in frame waitfram
+      676   do:
+      677     mWaitFramStop = yes.
+      678     mWaitFramStopUser = yes.
+      679   end.
+      680   function waitfram-check-timeout returns logical():
+      681      define variable vtime as int64 no-undo.
+      682      if mWaitFramStopTimeOut
+      683      then
+      684         return yes.
+      685      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      686      if     mWaitFramTimeOut ne ?
+      687         and mWaitFramTimeOut ne 0
+      688         and mWaitFramTimeOut lt vtime
+      689      then do:
+      690         mWaitFramStopTimeOut = yes.
+      691      end.
+      692      return mWaitFramStopTimeOut.
+      693   end.
+      694   procedure waitfram-hide :
+      695     if not session:batch-mode
+      696     then do
+      697     on error undo, return error return-value
+      698     :
+      699       pause 0 before-hide .
+      700       if not mBatchMode then
+      701         hide frame waitfram .
+      702     if     not mWaitFramView
+      703        and mWaitProcEvent
+      704     then
+      705       process events .
+      706     end.
+      707   end procedure.
+      708   procedure waitfram-show :
+      709     define input  parameter p-message as character no-undo .
+      710     define variable v-left-margin as integer   no-undo .
+      711     if not session:batch-mode
+      712     then do
+      713     on error undo, return error return-value
+      714     :
+      715       if length(p-message) <= 70 then do:
+      716         assign
+      717           v-left-margin = integer((70 - length(p-message)) / 2)
+      718         .
+      719         assign
+      720           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      721         .
+      722         assign
+      723           v-waitfram-action01 = " "
+      724           v-waitfram-action02 = " "
+      725                                    + fill(" ", v-left-margin)
+      726                                    + p-message
+      727           v-waitfram-action03 = " "
+      728         .
+      729       end.
+      730       else do:
+      731         define variable vRindex1 as integer no-undo.
+      732         define variable vRindex2 as integer no-undo.
+      733         vRindex1 = r-index(p-message," ",70).
+      734         if vRindex1 = 0
+      735         then
+      736            vRindex1 = 70.
+      737         if length(p-message)  <= vRindex1 + 70 then do:
+      738           assign
+      739             v-waitfram-action01 = " "
+      740             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+      741             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+      742           .
+      743         end.
+      744         else do:
+      745           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+      746           if vRindex2 <= vRindex1
+      747           then
+      748              vRindex2 = vRindex1 + 70.
+      749           assign
+      750             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+      751             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+      752             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+      753           .
+      754         end.
+      755       end.
+      756       B-viewProcInfo:visible   in frame waitfram = no.
+      757       B-viewProcInfo:sensitive in frame waitfram = no.
+      758       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      759       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      760       if  (   mWaitFramView
+      761          or  mWaitProcEvent)
+      762          and not mBatchMode
+      763       then
+      764          display
+      765             v-waitfram-action01 skip
+      766             v-waitfram-action02 skip
+      767             v-waitfram-action03 skip
+      768          with frame waitfram .
+      769       if     mWaitFramView
+      770          then do:
+      771             if     mWaitFramInterval ne ?
+      772                and not mBatchMode
+      773             then
+      774                wait-for go of frame waitfram pause mWaitFramInterval.
+      775          end.
+      776          else
+      777             if     mWaitProcEvent
+      778                and not mBatchMode
+      779             then
+      780                process events .
+      781     end.
+      782   end procedure.
+      783      procedure waitfram-show-this:
+      784         define input  parameter iInterval as int64 no-undo.
+      785         define variable vtime as int64 no-undo.
+      786         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      787         mWaitFramInterval = iInterval.
+      788         run waitfram-show (substitute("&1&2 &3&4" ,
+      789                                       mWaitFramTextBeg ,
+      790                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+      791                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+      792                                       mWaitFramTextEnd
+      793                                      )
+      794                           ).
+      795      end.
+      796      procedure WaitFramRunPause:
+      797         define input  parameter iInterval as dec no-undo.
+      798         define variable vStart  as datetime-tz no-undo.
+      799         define variable vend    as datetime-tz no-undo.
+      800         define variable vint as int64 no-undo.
+      801         define variable vOk as logical no-undo.
+      802         vStart = now.
+      803         vend   = vStart.
+      804         publish "WaitFramPause" (iInterval,output vOk).
+      805         vend   =  now.
+      806         vint = vend - vStart.
+      807         vint = iInterval - vint / 1000.
+      808         if     not mWaitFramStop
+      809            and (   vint > 0
+      810                 or (    not vOk
+      811                     and iInterval eq ?
+      812                     )
+      813                 )
+      814         then
+      815            run waitfram-show-this (iInterval).
+      816         vend   =  now.
+      817         vint = vend - vStart.
+      818         vint = iInterval - vint / 1000.
+      819         if     not mWaitFramStop
+      820            and vint > 0
+      821         then do:
+      822            run gbl/pause.p (vint * 1000).
+      823         end.
+      824         if iInterval ne ?
+      825         then
+      826            publish "WaitFramStop".
+      827         waitfram-check-timeout().
+      828      end.
+      829      procedure WaitFramWaitFor:
+      830         define input  parameter iInterval as dec no-undo.
+      831         assign
+      832            mWaitFramStartProc   = now
+      833            mWaitFramStopUser    = no
+      834            mWaitFramStopTimeOut = no
+      835         .
+      836         block-wait:
+      837         do while not mWaitFramStop:
+      838            run WaitFramRunPause (iInterval).
+      839            if  waitfram-check-timeout()
+      840            then do:
+      841               leave block-wait.
+      842            end.
+      843         end.
+      844         run waitfram-hide.
+      845      end.
+      846   procedure waitfram-join :
+      847     define input  parameter p-line-1  as character no-undo .
+      848     define input  parameter p-line-2  as character no-undo .
+      849     define input  parameter p-line-3  as character no-undo .
+      850     define output parameter p-message as character no-undo .
+      851     do
+      852     on error undo, return error return-value
+      853     :
+      854       assign
+      855         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+      856                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+      857                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+      858       .
+      859     end.
+      860   end procedure.
+      861   function waitfram-join-function returns character
+      862     (input p-line-1 as character
+      863     ,input p-line-2 as character
+      864     ,input p-line-3 as character
+      865     ).
+      866     define variable v-message as character no-undo .
+      867     run waitfram-join in this-procedure
+      868       (input  p-line-1
+      869       ,input  p-line-2
+      870       ,input  p-line-3
+      871       ,output v-message
+      872       ) .
+      873     return v-message .
+      874   end function .
+      875   main-block:
+      876   do
+      877   on error undo, return error return-value
+      878   :
+      879     if p-inn = '':U
+      880     and p-old-inn = '':U then return .
+      881     assign
+      882     v-new-inn = p-inn.
+      883     run adm/shattri.p (
+      884           input "get":U
+      885         ,input  '':U
+      886         ,input  0
+      887         ,input  'cli-all':U
+      888         ,input  'inn-uniq':U
+      889         ,output v-value-character
+      890         ,output v-value-date
+      891         ,output v-value-decimal
+      892         ,output inn-uniq
+      893         ,output v-value-logical
+      894         ,output v-param-type
+      895         ,INPUT-OUTPUT table-handle v-tth
+      896         ) no-error .
+      897     delete object v-tth.
+      898     if inn-uniq = 99 and v-new-inn <> '' then return "".
+      899     if inn-uniq = 2
+      900     or v-new-inn = ''
+      901     then do:
+      902       create temp-clients.
+      903       assign
+      904       temp-clients.obj-type = (if p-buf-handle:table = 'clients':U
+      905                                then p-buf-handle::obj-type
+      906                                else (if p-buf-handle:table = 'firm':U
+      907                                      then 'орг':U
+      908                                      else 'чел':U)
+      909                               )
+      910       temp-clients.obj-code =  (if p-buf-handle:table = 'clients':U
+      911                                then p-buf-handle::obj-code
+      912                                else (if p-buf-handle:table = 'firm':U
+      913                                      then p-buf-handle::firm-code
+      914                                      else p-buf-handle::psn-code)
+      915                               )
+      916       .
+      917       if p-buf-handle:table = 'firm':U then
+      918       run gen-key-rec in this-procedure (
+      919                                           input  ('firm':U)
+      920                                           ,input  p-buf-handle
+      921                                           ,output v-firm-our-key-rec ).
+      922       if p-buf-handle:table = 'person':U then
+      923       run gen-key-rec in this-procedure (
+      924                                           input  ('person':U)
+      925                                           ,input  p-buf-handle
+      926                                           ,output v-person-our-key-rec ).
+      927       run gen-key-rec in this-procedure (
+      928                                           input  ('clients':U)
+      929                                           ,input  (buffer temp-clients:handle)
+      930                                           ,output v-our-key-rec ).
+      931       if v-new-inn <> '':u then do:
+      932         find first buf_ext-classif where
+      933                 buf_ext-classif.classif-subject = 'clients':U
+      934             and buf_ext-classif.classif-name = 'inn':U
+      935             and buf_ext-classif.charkey_one  = v-new-inn
+      936             and buf_ext-classif.db-num  = -1
+      937             no-error.
+      938         if available buf_ext-classif then do:
+      939           if buf_ext-classif.uniq-key-rec = v-our-key-rec
+      940           or (temp-clients.obj-type = 'орг':U and buf_ext-classif.uniq-key-rec = v-firm-our-key-rec)
+      941           or (temp-clients.obj-type = 'чел':U and buf_ext-classif.uniq-key-rec = v-person-our-key-rec)
+      942           then do:
+      943             return.
+      944           end.
+      945           else do:
+      946             define variable v-field-list as character no-undo .
+      947             define variable v-value-list as character no-undo .
+      948             run gen-key-fv in this-procedure ( input buf_ext-classif.uniq-key-rec
+      949                                               ,output v-field-list
+      950                                               ,output v-value-list
+      951                                               ).
+      952             if entry(1, buf_ext-classif.uniq-key-rec, chr(3)) = 'clients':U then do:
+      953               assign
+      954               v-obj-type = entry(2, buf_ext-classif.uniq-key-rec, chr(3))
+      955               v-obj-code = integer(entry(3, buf_ext-classif.uniq-key-rec, chr(3)))
+      956               .
+      957             end.
+      958             else do:
+      959               assign
+      960               v-obj-type = (if entry(1, buf_ext-classif.uniq-key-rec, chr(3)) = 'firm':U then 'орг':U else 'чел':U)
+      961               v-obj-code = integer(entry(lookup((if v-obj-type = 'чел':U
+      962                                                   then "obj-code"
+      963                                                   else "firm-code")
+      964                                                 , v-field-list
+      965                                                 , chr(3))
+      966                                           , v-value-list, chr(3))).
+      967             end.
+      968             if g#news then do:
+      969               if g#db-num = 0 then do:
+      970                 p-inn = v-new-inn + chr(63).
+      971               end.
+      972               if g#db-num <> 0 then do:
+      973                 if v-obj-type = 'орг':U then do:
+      974                   find first buf_firm no-lock where
+      975                             buf_firm.firm-code = v-obj-code.
+      976                 end.
+      977                 else do:
+      978                   find first buf_person no-lock where
+      979                             buf_person.psn-code = v-obj-code .
+      980                 end.
+      981               end.
+      982               run trg/nu_coll.p (
+      983                                input buf_ext-classif.uniq-key-rec
+      984                               ,input 'ncoll_inn':U
+      985                               ,input v-new-inn
+      986                               ,input g#news-source-db
+      987                               ,input 1
+      988                               ).
+      989             end.
+      990             else do:
+      991               assign
+      992               v-err-mess = substitute("Уже есть контрагент с ИНН &1: &2&3&4" +
+      993                                       "Согласно настройкам в Вашей системе НЕ ДОЛЖНО БЫТЬ ДВУХ КОНТРАГЕНТОВ с одинаковым ИНН"
+      994                                     , v-new-inn
+      995                                     , v-obj-type
+      996                                     , v-obj-code
+      997                                     , chr(10)
+      998                                     ).
+      999               p-inn-uniq-error = yes.
+     1000               return v-err-mess.
+     1001             end.
+     1002           end.
+     1003         end.
+     1004         if not available buf_ext-classif
+     1005         then do:
+     1006           find first buf_ext-classif where
+     1007                     buf_ext-classif.classif-name = 'inn':U
+     1008                and  buf_ext-classif.uniq-key-rec = v-our-key-rec
+     1009                and  buf_ext-classif.db-num = -1
+     1010                no-error .
+     1011           if not available buf_ext-classif then do:
+     1012             create buf_ext-classif.
+     1013             assign
+     1014             buf_ext-classif.uniq-key-rec = v-our-key-rec
+     1015             buf_ext-classif.classif-subject = 'clients':U
+     1016             buf_ext-classif.classif-name = 'inn':U
+     1017             buf_ext-classif.db-num = -1
+     1018             .
+     1019           end.
+     1020           assign
+     1021           buf_ext-classif.charkey_one = v-new-inn
+     1022           .
+     1023         end.
+     1024         else do:
+     1025           if g#news
+     1026           and g#db-num <> 0 then do:
+     1027             find first buf2_ext-classif exclusive-lock where
+     1028                       buf2_ext-classif.classif-name = 'inn':U
+     1029                    and buf2_ext-classif.charkey_one = p-old-inn
+     1030                    and buf2_ext-classif.db-num = -1   no-wait no-error.
+     1031             if locked buf2_ext-classif then do:
+     1032               undo, return error substitute("Ошибка при обновлении уникального ИНН:&1&2&1&3"
+     1033                                             ,chr(10)
+     1034                                             , error-status:get-message(1)
+     1035                                             , return-value ).
+     1036             end.
+     1037             if available buf2_ext-classif then do:
+     1038                 if buf2_ext-classif.uniq-key-rec = v-our-key-rec  then do:
+     1039                   delete buf2_ext-classif.
+     1040                 end.
+     1041             end.
+     1042             for each buf2_ext-classif where
+     1043                     buf2_ext-classif.classif-subject = 'clients':U
+     1044                 and buf2_ext-classif.classif-name = 'inn':U
+     1045                 and buf2_ext-classif.uniq-key-rec = v-our-key-rec
+     1046                 and buf2_ext-classif.db-num = -1
+     1047             on error undo, return error substitute("&1&2&3Ошибка при удалении записи ИНН для &4&5:&2&6"
+     1048                                                  , vss-workfile
+     1049                                                  , vss-revision
+     1050                                                  , chr(10)
+     1051                                                  , p-obj-type
+     1052                                                  , p-obj-code
+     1053                                                  , error-status:get-message(1)
+     1054                                                    )
+     1055             on stop undo, return error substitute("&1&2Занята запись ИНН для &3&4"
+     1056                                                  , vss-workfile
+     1057                                                  , chr(10)
+     1058                                                  , p-obj-type
+     1059                                                  , p-obj-code):
+     1060               delete buf2_ext-classif.
+     1061             end.
+     1062             assign
+     1063             buf_ext-classif.classif-name = 'inn':U
+     1064             buf_ext-classif.uniq-key-rec = v-our-key-rec
+     1065             buf_ext-classif.db-num = -1
+     1066             .
+     1067           end.
+     1068         end.
+     1069       end.
+     1070       else do:
+     1071         for each buf_ext-classif where
+     1072             buf_ext-classif.classif-subject = 'clients':U
+     1073         and buf_ext-classif.classif-name = 'inn':U
+     1074         and buf_ext-classif.charkey_one  = p-old-inn
+     1075         and buf_ext-classif.db-num  = -1
+     1076         and buf_ext-classif.uniq-key-rec = (if temp-clients.obj-type = 'орг':U
+     1077                                             then v-firm-our-key-rec
+     1078                                             else v-person-our-key-rec)
+     1079         on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1080         on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     1081         on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     1082         :
+     1083           delete buf_ext-classif.
+     1084         end.
+     1085         for each buf_ext-classif where
+     1086             buf_ext-classif.classif-subject = 'clients':U
+     1087         and buf_ext-classif.classif-name = 'inn':U
+     1088         and buf_ext-classif.charkey_one  = p-old-inn
+     1089         and buf_ext-classif.db-num  = -1
+     1090         and buf_ext-classif.uniq-key-rec =  v-our-key-rec
+     1091         on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1092         on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     1093         on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     1094         :
+     1095           delete buf_ext-classif.
+     1096         end.
+     1097       end.
+     1098       for each buf_batchprocess exclusive-lock where
+     1099               buf_batchprocess.charkey_one = v-our-key-rec
+     1100           AND buf_batchprocess.bp_type = 'coll':u
+     1101           and buf_batchprocess.bp_status = 'N':U
+     1102       on error undo, return error return-value :
+     1103         if buf_batchprocess.charkey_three <> v-new-inn then do:
+     1104           assign
+     1105             buf_batchprocess.bp_status = 'D':U
+     1106           .
+     1107         end.
+     1108       end.
+     1109     end.
+     1110     else do:
+     1111       if g#news then return.
+     1112       if p-inn =  '':U then return.
+     1113       if p-obj-type = 'орг':U then do:
+     1114         find first another_firm no-lock where
+     1115                   another_firm.inn = v-new-inn
+     1116               and recid(another_firm)  <> p-recid  no-error.
+     1117       end.
+     1118       if p-obj-type = 'чел':U
+     1119       and inn-uniq = 1
+     1120       then do:
+     1121         find first another_firm no-lock where
+     1122                   another_firm.inn = v-new-inn no-error.
+     1123       end.
+     1124       if available another_firm then do:
+     1125         if p-silent then do:
+     1126         end.
+     1127         else do:
+     1128           message
+     1129           substitute("Уже есть фирма с ИНН &1: фирма &2&3" +
+     1130                     "Вы уверены, что хотите добавить/изменить контрагента с таким же ИНН?"
+     1131                     , v-new-inn
+     1132                     , another_firm.firm-code
+     1133                     , chr(10)
+     1134                     )
+     1135           view-as alert-box question buttons YES-NO update glog.
+     1136           if not glog then do:
+     1137             p-inn-uniq-error = yes.
+     1138             return "inn-uniq-no-message".
+     1139           end.
+     1140         end.
+     1141       end.
+     1142       if inn-uniq = 1 then do:
+     1143         run waitfram-show in this-procedure ( input "Ждите... Идет поиск повторных ИНН" ).
+     1144         for each another_person no-lock :
+     1145           if another_person.inn = v-new-inn then do:
+     1146             if p-obj-type = 'орг':U
+     1147             or (p-obj-type = 'чел':U
+     1148                 and
+     1149                 p-obj-code <> another_person.psn-code) then do:
+     1150               run waitfram-hide in this-procedure .
+     1151               if p-silent then do:
+     1152                 assign
+     1153                 v-err-mess = substitute("Уже есть физ.лицо с ИНН &1: чел &2&3" +
+     1154                                         "Изменение/добавление контрагента должно быть подтверждено оператором&3" +
+     1155                                         "Автоматическое изменение добавление/изменение контрагента с таким ИНН НЕВОЗМОЖНО"
+     1156                                       , v-new-inn
+     1157                                       , another_person.psn-code
+     1158                                       , chr(10)
+     1159                                       ).
+     1160                 p-inn-uniq-error = yes.
+     1161                 return v-err-mess.
+     1162               end.
+     1163               else do:
+     1164                 message
+     1165                 substitute("Уже есть физ лицо с ИНН &1: чел &2&3" +
+     1166                           "Вы уверены, что хотите добавить/изменить контрагента с таким же ИНН?"
+     1167                           , v-new-inn
+     1168                           , another_person.psn-code
+     1169                           , chr(10)
+     1170                           )
+     1171                 view-as alert-box question buttons YES-NO update glog.
+     1172                 if not glog then do:
+     1173                   p-inn-uniq-error = yes.
+     1174                   return  "inn-uniq-no-message".
+     1175                 end.
+     1176               end.
+     1177             end.
+     1178           end.
+     1179         end.
+     1180         run waitfram-hide in this-procedure .
+     1181       end.
+     1182     end.
+     1183   end.

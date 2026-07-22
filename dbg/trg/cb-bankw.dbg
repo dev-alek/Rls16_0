@@ -1,0 +1,130 @@
+        1   block-level on error undo, throw.
+        2   TRIGGER PROCEDURE FOR WRITE OF ub.cbr-bank NEW BUFFER Buf-New OLD BUFFER Buf-Old.
+        3   DEFINE VARIABLE vss-revision    AS CHARACTER NO-UNDO INITIAL "$Revision$":U.
+        4   DEFINE VARIABLE vss-author      AS CHARACTER NO-UNDO INITIAL "$Author$":U.
+        5   DEFINE VARIABLE vss-date        AS CHARACTER NO-UNDO INITIAL "$Date$":U.
+        6   DEFINE VARIABLE vss-workfile    AS CHARACTER NO-UNDO INITIAL "$Workfile$":U.
+        7   DEFINE VARIABLE vss-archive     AS CHARACTER NO-UNDO INITIAL "$Archive$":U.
+        8   DEFINE VARIABLE vss-description AS CHARACTER NO-UNDO INITIAL "Триггер на запись таблицы cbr-bank":U.
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27   end procedure.
+       28   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       29   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       30   define variable v-vssrevis-logger                   as handle    no-undo .
+       31   procedure vss-logevent :
+       32     define input  parameter p-extra-paramters as character no-undo .
+       33     define variable v-vssrevis-parameters as character no-undo .
+       34     do
+       35     on error undo, return error return-value
+       36     :
+       37       if  valid-handle(v-vssrevis-logger)
+       38       and v-vssrevis-logger :get-signature("logevent") <> ""
+       39       then do:
+       40         run vss-get-parameters in this-procedure
+       41           (output v-vssrevis-parameters
+       42           ).
+       43         run logevent in v-vssrevis-logger
+       44           (input vss-workfile
+       45           ,input vss-revision
+       46           ,input v-vssrevis-parameters
+       47           ,input p-extra-paramters
+       48           ).
+       49       end.
+       50     end.
+       51   end procedure.
+       52   assign
+       53     v-vssrevis-logger = g#vssrevis-logger
+       54   .
+       55   if  valid-handle(v-vssrevis-logger)
+       56   and v-vssrevis-logger :get-signature("logevent") <> ""
+       57   then do:
+       58     assign
+       59       v-vssrevis-logevent = true
+       60     .
+       61     run vss-logevent in this-procedure (input vss-description) .
+       62   end.
+       63   define new global shared variable g#language as character no-undo .
+       64   if g#language <> '' and g#language <> 'rus':U then do:
+       65     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       66   end.
+       67   define new global shared variable g#library  as handle no-undo .
+       68   define new global shared variable g#library2 as handle no-undo .
+       69   define   shared variable g#auto as logical no-undo.
+       70   define   shared variable g#news as logical no-undo.
+       71   define   shared variable g#oxml as logical no-undo.
+       72   define   shared variable g#esys as logical no-undo.
+       73   define   shared variable g#news-source-db as integer no-undo.
+       74   define   shared variable g#esys-source-esys as integer no-undo.
+       75   define   shared variable g#db-num as integer   no-undo .
+       76   define   shared variable g#userid as character no-undo .
+       77   define   shared variable g#passwd as character no-undo .
+       78   DEFINE BUFFER buf_fin FOR ub.fin-bank.
+       79   Main-Block:
+       80   DO ON ERROR   UNDO Main-Block, LEAVE Main-Block
+       81      ON END-KEY UNDO Main-Block, LEAVE Main-Block :
+       82     IF  not new(buf-new)
+       83     and Buf-New.bic <> Buf-Old.bic
+       84     THEN DO:
+       85       message
+       86         vss-workfile vss-revision vss-description skip
+       87         "Нельзя менять БИК код" skip
+       88         "Старый БИК" Buf-Old.bic skip
+       89         "Новый БИК" Buf-New.bic skip
+       90         view-as alert-box error .
+       91       undo, return error return-value .
+       92     END.
+       93     IF g#news <> YES THEN DO:
+       94       CREATE ub.c-cbr-bank.
+       95       BUFFER-COPY Buf-Old EXCEPT bic TO ub.c-cbr-bank NO-ERROR.
+       96       IF ERROR-STATUS :ERROR THEN DO: UNDO, RETURN ERROR. END.
+       97       ASSIGN ub.c-cbr-bank.action           = INTEGER( IF NEW( Buf-New )            THEN '1':U ELSE
+       98                                                      ( IF Buf-New.bic = Buf-Old.bic THEN '2':U ELSE
+       99                                                                                          '9':U ) )
+      100              ub.c-cbr-bank.bic              = ( IF NEW( Buf-New ) THEN Buf-New.bic ELSE Buf-Old.bic )
+      101              ub.c-cbr-bank.corr-date        = TODAY
+      102              ub.c-cbr-bank.corr-time        = TIME
+      103              ub.c-cbr-bank.corr-user-name   = g#userid
+      104              ub.c-cbr-bank.corr-user-db-num = g#db-num
+      105              ub.c-cbr-bank.chip-num         = NEXT-VALUE( s-corr-chip, ub ) NO-ERROR.
+      106       IF ERROR-STATUS :ERROR THEN DO:
+      107         MESSAGE vss-workfile SKIP vss-revision SKIP vss-date SKIP vss-archive SKIP vss-description SKIP( 1 )
+      108                 "Ошибка при записи истории банка ЦБ РФ" Buf-New.bic SKIP
+      109                 ERROR-STATUS :GET-MESSAGE( 1 ) SKIP RETURN-VALUE
+      110         VIEW-AS ALERT-BOX ERROR.
+      111         UNDO Main-Block, RETURN ERROR.
+      112       END.
+      113     END.
+      114       if g#oxml = yes
+      115       then do:
+      116       run str/calloxml.p (
+      117             input 'update':U
+      118           , input 'fin-bank':U
+      119           , input ( buffer ub.fin-bank:handle )
+      120       ) no-error.
+      121       if error-status :error
+      122       then do:
+      123           undo, return error substitute( "&2&1Ошибка при отправке записи в систему OpenXML&1&3&1&4"
+      124                                , chr(10)
+      125                                , vss-workfile
+      126                                , return-value
+      127                                , error-status :get-message ( 1 ) ).
+      128       end.
+      129       end.
+      130   END.

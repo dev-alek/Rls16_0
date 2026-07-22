@@ -1,0 +1,1729 @@
+        1   define input parameter parparentproc as widget-handle no-undo .
+        2   define variable vss-revision    as character no-undo init "$Revision$":U .
+        3   define variable vss-author      as character no-undo init "$Author$":U .
+        4   define variable vss-date        as character no-undo init "$Date$":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        6   define variable vss-archive     as character no-undo init "$Archive$":U .
+        7   define variable vss-description as character no-undo init "загрузка товара для КАНРУ".
+        8   define input  parameter file-name as char no-undo .
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27   end procedure.
+       28   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       29   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       30   define variable v-vssrevis-logger                   as handle    no-undo .
+       31   procedure vss-logevent :
+       32     define input  parameter p-extra-paramters as character no-undo .
+       33     define variable v-vssrevis-parameters as character no-undo .
+       34     do
+       35     on error undo, return error return-value
+       36     :
+       37       if  valid-handle(v-vssrevis-logger)
+       38       and v-vssrevis-logger :get-signature("logevent") <> ""
+       39       then do:
+       40         run vss-get-parameters in this-procedure
+       41           (output v-vssrevis-parameters
+       42           ).
+       43         run logevent in v-vssrevis-logger
+       44           (input vss-workfile
+       45           ,input vss-revision
+       46           ,input v-vssrevis-parameters
+       47           ,input p-extra-paramters
+       48           ).
+       49       end.
+       50     end.
+       51   end procedure.
+       52   assign
+       53     v-vssrevis-logger = g#vssrevis-logger
+       54   .
+       55   if  valid-handle(v-vssrevis-logger)
+       56   and v-vssrevis-logger :get-signature("logevent") <> ""
+       57   then do:
+       58     assign
+       59       v-vssrevis-logevent = true
+       60     .
+       61     run vss-logevent in this-procedure (input vss-description) .
+       62   end.
+       63   define new global shared variable g#language as character no-undo .
+       64   if g#language <> '' and g#language <> 'rus':U then do:
+       65     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       66   end.
+       67   define new global shared variable g#library  as handle no-undo .
+       68   define new global shared variable g#library2 as handle no-undo .
+       69   define   shared variable g#auto as logical no-undo.
+       70   define   shared variable g#news as logical no-undo.
+       71   define   shared variable g#oxml as logical no-undo.
+       72   define   shared variable g#esys as logical no-undo.
+       73   define   shared variable g#news-source-db as integer no-undo.
+       74   define   shared variable g#esys-source-esys as integer no-undo.
+       75   define   shared variable g#db-num as integer   no-undo .
+       76   define   shared variable g#userid as character no-undo .
+       77   define   shared variable g#passwd as character no-undo .
+       78   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       79   procedure gen-b-code :
+       80     define input  parameter type-code like ub.code-range.range-type no-undo .
+       81     define output parameter p-b-code  like ub.bar-code.b-code       no-undo .
+       82     do
+       83     on error  undo, return error substitute( "&1 (gen-b-code). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+       84     on stop   undo, return error substitute( "&1 (gen-b-code). stop", vss-workfile )
+       85     on endkey undo, return error substitute( "&1 (gen-b-code). endkey", vss-workfile )
+       86     :
+       87       define buffer buf_thbj-attr     for ub.thbj-attr .
+       88       define buffer buf_sys-ctrl   for ub.sys-ctrl .
+       89       define buffer buf_code-range for ub.code-range .
+       90       define variable l-code         as   integer              no-undo .
+       91       define variable v-db-num       like ub.db.db-num         no-undo .
+       92       define variable cfg-param-code like ub.thbj-attr.prop-code no-undo .
+       93       if type-code = 'sslc':U
+       94       or type-code = 'ssgb':U
+       95       then do:
+       96         message
+       97           "Нельзя генерировать локальный или глобальный взвешиваемый код." skip
+       98           "Обратитесь к администратору системы."
+       99           view-as alert-box error .
+      100         undo, return error (if type-code = 'sslc':U then "loc-ss-code":U else "gbl-ss-code" ) .
+      101       end.
+      102       run trg/getpcode.p ( input  type-code
+      103                      ,output cfg-param-code
+      104                     ).
+      105       run get-next-seq( input  type-code,
+      106                         output l-code
+      107                       ).
+      108       find first buf_sys-ctrl no-lock.
+      109       if type-code = 'sclc':U
+      110       or type-code = 'pglc':U
+      111       then do:
+      112         assign
+      113           v-db-num = 0
+      114         .
+      115       end.
+      116       else do:
+      117         assign
+      118           v-db-num = buf_sys-ctrl.db-num
+      119         .
+      120       end.
+      121       find first buf_code-range no-lock
+      122         where buf_code-range.db-num     = v-db-num
+      123           and buf_code-range.range-type = type-code
+      124           and buf_code-range.stts       = "a"
+      125         use-index stts
+      126         no-error .
+      127       if available buf_code-range
+      128          and l-code <= buf_code-range.last-code
+      129          and l-code >= buf_code-range.first-code then do:
+      130         assign
+      131           p-b-code = l-code
+      132         .
+      133       end.
+      134       else do:
+      135         if available buf_code-range
+      136            and l-code < buf_code-range.last-code then do:
+      137           message
+      138             substitute( "Последовательность для создания кодов с типом &1 имеет неверное значение.", type-code ) skip
+      139             "Обратитесь к администратору системы."
+      140             view-as alert-box error .
+      141           undo, return error "sequence":U .
+      142         end.
+      143         do transaction
+      144         on error undo, return error
+      145         :
+      146           find first buf_thbj-attr exclusive-lock
+      147             where buf_thbj-attr.upper-prop-code = 'code-range':U
+      148               and buf_thbj-attr.prop-code = cfg-param-code
+      149               and buf_thbj-attr.obj-type   = 'БД':U
+      150               and buf_thbj-attr.obj-code   = v-db-num
+      151             no-error .
+      152           if not available buf_thbj-attr then do:
+      153             find first buf_thbj-attr exclusive-lock
+      154               where buf_thbj-attr.upper-prop-code = 'code-range':U
+      155                 and buf_thbj-attr.prop-code = cfg-param-code
+      156                 and buf_thbj-attr.obj-type   = ''
+      157                 and buf_thbj-attr.obj-code   = 0
+      158               no-error .
+      159             if not available buf_thbj-attr then do:
+      160               if not locked buf_thbj-attr then do:
+      161                 message
+      162                   substitute( "Отсутствует параметр 'длина диапазона кодов' (&1) для БД &2.", cfg-param-code, buf_sys-ctrl.db-num ) skip
+      163                   "Обратитесь к администратору системы."
+      164                   view-as alert-box error .
+      165               end.
+      166               undo, return error "config":U .
+      167             end.
+      168           end.
+      169           run get-next-seq( input type-code,
+      170                             output l-code
+      171                           ).
+      172           find first buf_code-range
+      173             where buf_code-range.db-num     = v-db-num
+      174               and buf_code-range.range-type = type-code
+      175               and buf_code-range.stts       = "a"
+      176             use-index stts
+      177             no-error .
+      178           if available buf_code-range
+      179           and l-code <= buf_code-range.last-code
+      180           and l-code >= buf_code-range.first-code
+      181           then do:
+      182             assign
+      183               p-b-code = l-code
+      184             .
+      185           end.
+      186           else do:
+      187             if available buf_code-range then do:
+      188               assign
+      189                 buf_code-range.stts = "u"
+      190               .
+      191             end.
+      192             find first buf_code-range
+      193               where buf_code-range.db-num     = v-db-num
+      194                 and buf_code-range.range-type = type-code
+      195                 and buf_code-range.stts       = "f"
+      196               use-index stts
+      197               no-error .
+      198             if not available buf_code-range then do:
+      199               message
+      200                 substitute( "Отсутствует свободный диапазон для кодов с типом &1.", type-code ) skip
+      201                 "Обратитесь к администратору системы"
+      202                 view-as alert-box error .
+      203               undo, return error "code-range":U .
+      204             end.
+      205             assign
+      206               buf_code-range.stts           = "a"
+      207             .
+      208             if buf_code-range.first-code = 1 then do:
+      209               run set-seq-cr( input type-code,
+      210                               input buf_code-range.first-code
+      211                             ).
+      212               assign
+      213                 p-b-code = 1
+      214               .
+      215             end.
+      216             else do:
+      217               run set-seq-cr( input type-code,
+      218                               input ( buf_code-range.first-code - 1 )
+      219                             ).
+      220               run get-next-seq( input type-code,
+      221                                 output p-b-code
+      222                               ).
+      223             end.
+      224           end.
+      225         end.
+      226       end.
+      227     end.
+      228   end procedure.
+      229   procedure get-next-seq :
+      230     define input  parameter type-code like ub.code-range.range-type no-undo .
+      231     define output parameter next-seq  as   integer                  no-undo .
+      232     do
+      233     on error  undo, return error substitute( "&1 (get-next-seq). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      234     on stop   undo, return error substitute( "&1 (get-next-seq). stop", vss-workfile )
+      235     on endkey undo, return error substitute( "&1 (get-next-seq). endkey", vss-workfile )
+      236     :
+      237       case type-code:
+      238         when 'bcgb':U then do:
+      239           assign
+      240             next-seq = next-value(s-bcgb-code, ub)
+      241           .
+      242         end.
+      243         when 'scgb':U then do:
+      244           assign
+      245             next-seq = next-value(s-scgb-code, ub)
+      246           .
+      247         end.
+      248         when 'sclc':U then do:
+      249           assign
+      250             next-seq = next-value(s-sclc-code, ub)
+      251           .
+      252         end.
+      253         when 'pglc':U then do:
+      254           assign
+      255             next-seq = next-value(s-pglc-code, ub)
+      256           .
+      257         end.
+      258         when 'dcgb':U then do:
+      259           assign
+      260             next-seq = next-value(s-dcgb-code, ub)
+      261           .
+      262         end.
+      263         when 'ctgb':U then do:
+      264           assign
+      265             next-seq = next-value(s-ctgb-code, ub)
+      266           .
+      267         end.
+      268         when 'drgb':U then do:
+      269           assign
+      270             next-seq = next-value(s-drgb-code, ub)
+      271           .
+      272         end.
+      273         when 'fmgb':U then do:
+      274           assign
+      275             next-seq = next-value(s-fmgb-code, ub)
+      276           .
+      277         end.
+      278         when 'pngb':U then do:
+      279           assign
+      280             next-seq = next-value(s-pngb-code, ub)
+      281           .
+      282         end.
+      283         when 'cagb':U then do:
+      284           assign
+      285             next-seq = next-value(s-cagb-code, ub)
+      286           .
+      287         end.
+      288         when 'fdgb':U then do:
+      289           assign
+      290             next-seq = next-value(s-fin-doc, ub)
+      291           .
+      292         end.
+      293       end case.
+      294     end.
+      295   end procedure.
+      296   procedure set-seq-cr :
+      297     define input parameter type-code like ub.code-range.range-type no-undo .
+      298     define input parameter set-val   like ub.code-range.first-code no-undo .
+      299     do
+      300     on error  undo, return error substitute( "&1 (set-seq-cr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      301     on stop   undo, return error substitute( "&1 (set-seq-cr). stop", vss-workfile )
+      302     on endkey undo, return error substitute( "&1 (set-seq-cr). endkey", vss-workfile )
+      303     :
+      304       case type-code:
+      305         when 'bcgb':U then do:
+      306           assign
+      307             current-value(s-bcgb-code, ub) = set-val
+      308           .
+      309         end.
+      310         when 'scgb':U then do:
+      311           assign
+      312             current-value(s-scgb-code, ub) = set-val
+      313           .
+      314         end.
+      315         when 'sclc':U then do:
+      316           assign
+      317             current-value(s-sclc-code, ub) = set-val
+      318           .
+      319         end.
+      320         when 'pglc':U then do:
+      321           assign
+      322             current-value(s-pglc-code, ub) = set-val
+      323           .
+      324         end.
+      325         when 'dcgb':U then do:
+      326           assign
+      327             current-value(s-dcgb-code, ub) = set-val
+      328           .
+      329         end.
+      330         when 'ctgb':U then do:
+      331           assign
+      332             current-value(s-ctgb-code, ub) = set-val
+      333           .
+      334         end.
+      335         when 'drgb':U then do:
+      336           assign
+      337             current-value(s-drgb-code, ub) = set-val
+      338           .
+      339         end.
+      340         when 'fmgb':U then do:
+      341           assign
+      342             current-value(s-fmgb-code, ub) = set-val
+      343           .
+      344         end.
+      345         when 'pngb':U then do:
+      346           assign
+      347             current-value(s-pngb-code, ub) = set-val
+      348           .
+      349         end.
+      350         when 'cagb':U then do:
+      351           assign
+      352             current-value(s-cagb-code, ub) = set-val
+      353           .
+      354         end.
+      355         when 'fdgb':U then do:
+      356           assign
+      357             current-value(s-fin-doc, ub) = set-val
+      358           .
+      359         end.
+      360       end case.
+      361     end.
+      362   end procedure.
+      363   procedure new-bcod-gen-code-range :
+      364     do
+      365     on error  undo, return error substitute( "&1 (new-bcod-gen-code-range). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      366     on stop   undo, return error substitute( "&1 (new-bcod-gen-code-range). stop", vss-workfile )
+      367     on endkey undo, return error substitute( "&1 (new-bcod-gen-code-range). endkey", vss-workfile )
+      368     :
+      369       define input parameter p-db-num  like ub.db.db-num             no-undo .
+      370       define input parameter type-code like ub.code-range.range-type no-undo .
+      371       define buffer buf_code-range      for ub.code-range .
+      372       define buffer last_code-range     for ub.code-range .
+      373       define buffer last-1_code-range   for ub.code-range .
+      374       define buffer last-2_code-range   for ub.code-range .
+      375       define buffer last-3_code-range   for ub.code-range .
+      376       define buffer buf_sys-ctrl        for ub.sys-ctrl .
+      377       define variable conf-par       as character no-undo .
+      378       define variable par-type       as character no-undo .
+      379       define variable cfg-param-code like ub.thbj-attr.prop-code no-undo .
+      380       define variable v-cre-cdrg as logical   no-undo .
+      381       define variable v-cre-str  as character no-undo .
+      382       define variable v-cr1      as integer no-undo .
+      383       define variable v-cr2      as integer no-undo .
+      384       define variable v-cr3      as integer no-undo .
+      385       define variable v-cmax     as integer no-undo .
+      386       find first buf_sys-ctrl no-lock .
+      387       if buf_sys-ctrl.db-num <> 0 and type-code <> 'cagb':U then do:
+      388         undo, return error substitute("&1 &2 &3&4Диапазоны кодов можно создавать только в ГБД&4База данных &5"
+      389                                       ,vss-workfile
+      390                                       ,vss-revision
+      391                                       ,vss-description
+      392                                       ,chr(10)
+      393                                       , p-db-num
+      394                                      ).
+      395       end.
+      396       run trg/getpcode.p ( input  type-code
+      397                      ,output cfg-param-code
+      398                     ).
+      399       for each buf_code-range
+      400         where buf_code-range.db-num     = -1
+      401           and buf_code-range.range-type = type-code
+      402           and buf_code-range.stts       = "f"
+      403       by buf_code-range.first-code
+      404       on error  undo, return error substitute( "&1 (new-bcod-gen-code-range). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      405       on stop   undo, return error substitute( "&1 (new-bcod-gen-code-range). stop", vss-workfile )
+      406       on endkey undo, return error substitute( "&1 (new-bcod-gen-code-range). endkey", vss-workfile )
+      407       :
+      408         assign
+      409           buf_code-range.db-num = p-db-num
+      410         .
+      411         return .
+      412       end.
+      413       assign
+      414         v-cre-cdrg = TRUE
+      415       .
+      416       case type-code:
+      417         when 'sclc':U
+      418         or when 'scgb':U
+      419         or when 'pglc':U
+      420         then do:
+      421           find last last-1_code-range no-lock
+      422             where last-1_code-range.range-type = 'sclc':U
+      423             no-error .
+      424           if available last-1_code-range then do:
+      425             v-cr1 = last-1_code-range.last-code.
+      426           end.
+      427           find last last-2_code-range no-lock
+      428             where last-2_code-range.range-type = 'scgb':U
+      429             no-error .
+      430           if available last-2_code-range then do:
+      431             v-cr2 = last-2_code-range.last-code.
+      432             end.
+      433           find last last-3_code-range no-lock
+      434             where last-3_code-range.range-type = 'pglc':U
+      435             no-error .
+      436           if available last-3_code-range then do:
+      437             v-cr3 = last-3_code-range.last-code.
+      438           end.
+      439           v-cmax = maximum(v-cr1, v-cr2, v-cr3)
+      440           .
+      441           if v-cmax = v-cr1  then do:
+      442               find last last_code-range no-lock
+      443                 where recid( last_code-range ) = recid( last-1_code-range )
+      444                 .
+      445             end.
+      446           if v-cmax = v-cr2  then do:
+      447               find last last_code-range no-lock
+      448                 where recid( last_code-range ) = recid( last-2_code-range )
+      449                 .
+      450             end.
+      451           if v-cmax = v-cr3  then do:
+      452             find last last_code-range no-lock
+      453               where recid( last_code-range ) = recid( last-3_code-range )
+      454               .
+      455           end.
+      456           if last_code-range.last-code + 1 > 99999 then do:
+      457             assign
+      458               v-cre-cdrg = FALSE
+      459             .
+      460           end.
+      461         end.
+      462         when 'bcgb':U
+      463         or when 'sslc':U
+      464         or when 'ssgb':U
+      465         then do:
+      466           find last last-1_code-range no-lock
+      467             where last-1_code-range.range-type = 'sslc':U
+      468             no-error .
+      469           if available last-1_code-range then do:
+      470             v-cr1 = last-1_code-range.last-code.
+      471           end.
+      472           find last last-2_code-range no-lock
+      473             where last-2_code-range.range-type = 'bcgb':U
+      474             no-error .
+      475           if available last-2_code-range then do:
+      476             v-cr2 = last-2_code-range.last-code.
+      477             end.
+      478           find last last-3_code-range no-lock
+      479             where last-3_code-range.range-type = 'ssgb':U
+      480             no-error .
+      481           if available last-3_code-range then do:
+      482             v-cr3 = last-3_code-range.last-code.
+      483           end.
+      484           v-cmax = maximum(v-cr1, v-cr2, v-cr3)
+      485           .
+      486           if v-cmax = v-cr1  then do:
+      487               find last last_code-range no-lock
+      488                 where recid( last_code-range ) = recid( last-1_code-range )
+      489                 .
+      490             end.
+      491           if v-cmax = v-cr2  then do:
+      492               find last last_code-range no-lock
+      493                 where recid( last_code-range ) = recid( last-2_code-range )
+      494                 .
+      495             end.
+      496           if v-cmax = v-cr3  then do:
+      497             find last last_code-range no-lock
+      498               where recid( last_code-range ) = recid( last-3_code-range )
+      499               .
+      500           end.
+      501         end.
+      502         otherwise do:
+      503           find last last_code-range no-lock
+      504             where last_code-range.range-type = type-code
+      505             no-error .
+      506         end.
+      507       end case.
+      508       if not available last_code-range then do:
+      509         undo, return error substitute("&1 &2 &3&4В БД нет ни одного диапазона с типом &5&4Не была проведена инициализация диапазонов!"
+      510                                       ,vss-workfile
+      511                                       ,vss-revision
+      512                                       ,vss-description
+      513                                       , chr(10)
+      514                                       , type-code
+      515                                      ) .
+      516       end.
+      517       define variable v-mes0 as character no-undo .
+      518       define variable v-param-type0 as character no-undo .
+      519       define variable v-value-character0 as INTEGER no-undo .
+      520       define variable v-value-date0 as date no-undo .
+      521       define variable v-value-decimal0 as decimal no-undo .
+      522       define variable v-value-integer0 AS integer no-undo .
+      523       define variable v-value-logical0 AS LOGICAL no-undo .
+      524       define variable v-tth0 as handle no-undo .
+      525       run adm/shattri.p (
+      526           input "get":U
+      527           ,input  'БД':U
+      528           ,input  p-db-num
+      529           ,input  'code-range':U
+      530           ,input  cfg-param-code
+      531           ,output v-value-character0
+      532           ,output v-value-date0
+      533           ,output v-value-decimal0
+      534           ,output v-value-integer0
+      535           ,output v-value-logical0
+      536           ,output v-param-type0
+      537           ,INPUT-OUTPUT table-handle v-tth0
+      538           ) no-error .
+      539       if error-status :error then do:
+      540         delete object v-tth0.
+      541         v-mes0 = substitute("Ошибка при получении размера диапазона собственных глобальных кодов&2&1&2&3"
+      542                            , error-status:get-message(1)
+      543                            , chr(10)
+      544                            , return-value ).
+      545         undo, return error v-mes0.
+      546       end.
+      547       delete object v-tth0.
+      548       if v-cre-cdrg = TRUE then do:
+      549         create buf_code-range .
+      550         assign
+      551           buf_code-range.db-num     = p-db-num
+      552           buf_code-range.range-type = type-code
+      553           buf_code-range.stts       = "f"
+      554           buf_code-range.first-code = last_code-range.last-code + 1
+      555           buf_code-range.last-code  = last_code-range.last-code + integer(v-value-integer0)
+      556           v-cre-str = "Свободный диапазон успешно создан"
+      557         .
+      558       end.
+      559       else do:
+      560         assign
+      561           v-cre-str = "Нет возможности создать свободный диапазон." + chr(10)
+      562                       + substitute( "Превышен предел диапазонов c типом &1", type-code )
+      563         .
+      564       end.
+      565     end.
+      566     return v-cre-str .
+      567   end procedure.
+      568   procedure gen-new-code-range-if-neces :
+      569     define input parameter v-db-num           like ub.db.db-num             no-undo .
+      570     define input parameter v-range-type       like ub.code-range.range-type no-undo .
+      571     define input parameter v-cur-code         as   integer                  no-undo .
+      572     define input parameter v-g#news           as   logical                  no-undo .
+      573     define input parameter v-g#db-num         like ub.db.db-num             no-undo .
+      574     define input parameter v-g#news-source-db like ub.db.db-num             no-undo .
+      575     do
+      576     on error  undo, return error substitute( "&1 (gen-new-code-range-if-neces). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      577     on stop   undo, return error substitute( "&1 (gen-new-code-range-if-neces). stop", vss-workfile )
+      578     on endkey undo, return error substitute( "&1 (gen-new-code-range-if-neces). endkey", vss-workfile )
+      579     :
+      580       define variable l-code-range-exist as logical   no-undo init false .
+      581       define variable v-db-for-send      as character no-undo .
+      582       define buffer buf_code-range  for ub.code-range .
+      583       define buffer buf1_code-range for ub.code-range .
+      584       define buffer buf_db          for ub.db .
+      585       find first buf_code-range
+      586         where buf_code-range.range-type = v-range-type
+      587           and buf_code-range.last-code >= v-cur-code
+      588         use-index last-codei
+      589         no-error .
+      590       if
+      591       (
+      592          available buf_code-range
+      593          and
+      594         (buf_code-range.db-num = v-db-num
+      595           and
+      596         buf_code-range.first-code <= v-cur-code
+      597         )
+      598       or
+      599         (
+      600           v-range-type = 'drgb':U
+      601           AND
+      602           v-cur-code = 0
+      603         )
+      604      )
+      605      then do:
+      606         assign
+      607           l-code-range-exist = true
+      608         .
+      609         if v-g#news
+      610         and buf_code-range.stts = "f" then do:
+      611           assign
+      612             buf_code-range.stts = "u"
+      613           .
+      614         end.
+      615       end.
+      616       if not l-code-range-exist
+      617          and v-g#news-source-db <> 0
+      618       then do:
+      619         undo, return error substitute("&1 &2 &3&4Отсутствует диапазон кодов для БД &5 Тип диапазона кодов &6 Код &7"
+      620                                       ,vss-workfile
+      621                                       ,vss-revision
+      622                                       ,vss-description
+      623                                       ,chr(10)
+      624                                       ,v-db-num
+      625                                       ,v-range-type
+      626                                       ,v-cur-code
+      627                                      ).
+      628       end.
+      629       if (not l-code-range-exist
+      630           or ( v-cur-code >= int( (buf_code-range.first-code + buf_code-range.last-code) / 2 ) )
+      631          )
+      632       and ( not can-find (first buf1_code-range no-lock
+      633                           where buf1_code-range.db-num = v-db-num
+      634                             and buf1_code-range.range-type = v-range-type
+      635                             and buf1_code-range.stts = "f"
+      636                          )
+      637           )
+      638       then do:
+      639         if v-g#db-num = 0 then do:
+      640           run new-bcod-gen-code-range in this-procedure
+      641             (input v-db-num,
+      642              input v-range-type
+      643             ) no-error .
+      644           if error-status :error then do:
+      645             undo, return error substitute("Ошибка при создании нового свободного диапазона &1 Тип диапазона кодов &2 Код &3:&4&5 &6"
+      646                                           , substitute("&1 &2 &3", vss-workfile, vss-revision, vss-description)
+      647                                           ,v-db-num
+      648                                           ,v-range-type
+      649                                           ,v-cur-code
+      650                                           ,chr(10)
+      651                                           ,error-status:get-message(1)
+      652                                           ,return-value
+      653                                          ).
+      654           end.
+      655         end.
+      656         else do:
+      657           if v-range-type = 'sclc':U
+      658           or v-range-type = 'pglc':U
+      659           then do:
+      660             assign
+      661               v-db-for-send = "":U
+      662             .
+      663             if v-g#db-num = 0 then do:
+      664               for each buf_db no-lock
+      665                 where buf_db.db-num > 0
+      666                   and buf_db.db-num <> v-g#news-source-db
+      667               on error  undo, return error substitute( "&1 (gen-new-code-range-if-neces). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      668               :
+      669                 assign
+      670                   v-db-for-send = v-db-for-send + chr(1) + string( buf_db.db-num )
+      671                 .
+      672               end.
+      673               assign
+      674                 v-db-for-send = right-trim( v-db-for-send, chr(1) )
+      675               .
+      676             end.
+      677             else do:
+      678               if not v-g#news then do:
+      679                 assign
+      680                   v-db-for-send = "0":U
+      681                 .
+      682               end.
+      683             end.
+      684             run nws/cr-route.p ( input 'send-cmd':U
+      685                           ,input ("command":U + chr(1) + "create":U + chr(1) +
+      686                                  "code-range":U + chr(1) +
+      687                                  (if v-range-type = 'sclc':U
+      688                                   then string( current-value(s-sclc-code, ub))
+      689                                   else string( current-value(s-pglc-code, ub))
+      690                                   ) + chr(1) +
+      691                                   v-range-type)
+      692                           ,input ?
+      693                           ,input v-db-for-send
+      694                           ) no-error .
+      695             if error-status :error then do:
+      696               undo, return error return-value.
+      697             end.
+      698           end.
+      699         end.
+      700       end.
+      701     end.
+      702   end procedure.
+      703   procedure cre-loc-sc-code-range :
+      704     define input parameter v-cur-code as integer no-undo .
+      705   define input parameter p-cdrg-type as character no-undo .
+      706     do
+      707     on error  undo, return error substitute( "&1 (cre-loc-sc-code-range). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      708     on stop   undo, return error substitute( "&1 (cre-loc-sc-code-range). stop", vss-workfile )
+      709     on endkey undo, return error substitute( "&1 (cre-loc-sc-code-range). endkey", vss-workfile )
+      710     :
+      711       define buffer buf_code-range for ub.code-range .
+      712       find first buf_code-range
+      713            where buf_code-range.range-type = p-cdrg-type
+      714              and buf_code-range.first-code >= v-cur-code
+      715            no-error .
+      716       if not available buf_code-range then do:
+      717         run new-bcod-gen-code-range in this-procedure
+      718           ( input 0,
+      719             input p-cdrg-type
+      720           ) no-error .
+      721         if error-status :error then do:
+      722           undo, return error substitute( "Ошибка при создании нового свободного диапазона локальных весовых или штучных кодов&1"
+      723                                          + "Код &2&1&3 &4"
+      724                                         , chr(10)
+      725                                         , v-cur-code
+      726                                         , error-status:get-message(1)
+      727                                         , return-value
+      728                                        ) .
+      729         end.
+      730       end.
+      731     end.
+      732   end procedure.
+      733   procedure mark-used-if-need :
+      734   define input parameter p-cur-code as integer no-undo .
+      735   define input parameter p-range-type like ub.code-range.range-type no-undo .
+      736   define input parameter p-db-num like ub.code-range.db-num no-undo .
+      737     do
+      738     on error  undo, return error substitute( "&1 (mark-used-if-need). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      739     on stop   undo, return error substitute( "&1 (mark-used-if-need). stop", vss-workfile )
+      740     on endkey undo, return error substitute( "&1 (mark-used-if-need). endkey", vss-workfile )
+      741     :
+      742       DEFINE VARIABLE v-db-num like ub.code-range.db-num no-undo .
+      743       define buffer buf_code-range for ub.code-range .
+      744       assign
+      745       v-db-num = if p-range-type = 'sclc':U
+      746                  then 0
+      747                  else p-db-num
+      748       .
+      749   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      750   define buffer locK-batchprocess1 for ub.batchprocess.
+      751   run gbl/lock-prc.p
+      752       (input 'lscc':U
+      753       ,input 0
+      754       ,input 0
+      755       ,input 0
+      756       ,input ""
+      757       ,input ""
+      758       ,input ""
+      759       ,input (
+      760               ",,,Вкл/выкл лок. вес. кодов"
+      761              )
+      762       ,input true
+      763       ,buffer lock-batchprocess1
+      764       ) no-error .
+      765     if error-status :error then do:
+      766       message
+      767         vss-workfile vss-revision vss-description skip
+      768         "В данный момент идет процесс вкл/выкл лок. вес. кодов" skip
+      769         view-as alert-box error .
+      770       undo, return error .
+      771     end.
+      772       find first buf_code-range
+      773            where buf_code-range.range-type = p-range-type
+      774              and buf_code-range.first-code >= p-cur-code
+      775              and buf_code-range.last-code <= p-cur-code
+      776              and buf_code-range.db-num = v-db-num
+      777            no-error .
+      778       if not available buf_code-range then do:
+      779         message
+      780           vss-workfile vss-revision vss-description skip
+      781           "Ошибка при создании поиске диапазона" skip
+      782           "База данных" p-db-num skip
+      783           "Код" p-cur-code skip
+      784           "Тип" p-range-type
+      785           error-status :get-message(1) skip
+      786           return-value skip
+      787           view-as alert-box error .
+      788         undo, return error .
+      789       end.
+      790       if buf_code-range.stts = "f":U then do:
+      791         assign
+      792         buf_code-range.stts = "u":U
+      793         .
+      794       end.
+      795     end.
+      796   end procedure.
+      797   define variable vss-include-info2 as character format "X(65)" no-undo
+      798   initial "@(#)$Workfile$ $Revision$".
+      799   procedure grplib-get-full-name :
+      800      define input parameter p-node-code  as integer      no-undo.
+      801      define output parameter p-full-name as character    no-undo.
+      802      do
+      803   on error undo, return error
+      804   :
+      805       define variable v-upper-code    as integer           no-undo.
+      806       define buffer buf_gds-grp       for ub.gds-grp.
+      807       define buffer buf_upper_gds-grp for ub.gds-grp.
+      808       find first buf_gds-grp no-lock
+      809            where buf_gds-grp.node-code = p-node-code
+      810       no-error.
+      811       if not available buf_gds-grp
+      812       then do:
+      813           undo, return error "grplib-get-full-name: Не найдена группа товаров с кодом " + string( p-node-code ).
+      814       end.
+      815       assign
+      816           p-full-name  = ""
+      817           v-upper-code = 1
+      818       .
+      819       do while buf_gds-grp.upper-code <> 0
+      820       on error undo, return error "grplib-get-full-name: Ошибка составления полного имени группы"
+      821       :
+      822           assign
+      823               p-full-name  = buf_gds-grp.node-name
+      824                            + (if p-full-name <> "" then chr(47) else "")
+      825                            + p-full-name
+      826               v-upper-code = buf_gds-grp.upper-code
+      827           .
+      828           find first buf_gds-grp no-lock
+      829                where buf_gds-grp.node-code = v-upper-code
+      830           no-error.
+      831           if not available buf_gds-grp
+      832           then do:
+      833               undo, return error "grplib-get-full-name: Не найдена группа товаров с кодом "
+      834                                   + string( v-upper-code )
+      835                                   + ". Ошибка ссылки в дереве товаров для узла p-node-code".
+      836           end.
+      837       end.
+      838       assign
+      839       p-full-name = p-full-name + (if p-full-name = "":U then "":U else chr(47))
+      840       .
+      841   end.
+      842   end .
+      843   procedure grplib-get-node-from-full-name :
+      844   define input parameter p-full-name as character no-undo .
+      845   define output parameter p-node-code as integer no-undo .
+      846   define variable v-ii as integer no-undo .
+      847   define variable v-upper-code as integer no-undo .
+      848   define variable v-root-code as integer no-undo .
+      849   define variable v-entry as character no-undo .
+      850   define buffer buf_gds-grp       for ub.gds-grp.
+      851   do
+      852   on error undo, return error
+      853   :
+      854     find first buf_gds-grp no-lock
+      855         where buf_gds-grp.upper-code = 0
+      856     no-error .
+      857     if not available buf_gds-grp
+      858     then do:
+      859         undo, return error substitute("Не найдена корневая группа товаров (upper-code = 0)").
+      860     end.
+      861     else do:
+      862       assign
+      863       v-root-code = buf_gds-grp.node-code
+      864       .
+      865     end.
+      866     v-upper-code = v-root-code.
+      867     do v-ii = 1 to num-entries(p-full-name, chr(47)):
+      868       assign
+      869       v-entry = entry(v-ii, p-full-name, chr(47)).
+      870       if v-entry = '' then leave.
+      871       find first buf_gds-grp no-lock where
+      872                 buf_gds-grp.node-name = v-entry
+      873             and buf_gds-grp.upper-code = v-upper-code
+      874             no-error.
+      875       if not available buf_gds-grp then do:
+      876         undo, return error substitute("Не найдена подгруппа &1 в группе с вн. кодом &2", v-entry, v-upper-code).
+      877       end.
+      878       else do:
+      879         p-node-code = buf_gds-grp.node-code.
+      880         v-upper-code = buf_gds-grp.node-code.
+      881       end.
+      882     end.
+      883   end.
+      884   end .
+      885   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      886     define variable v-cntxt-db-num        as integer   no-undo .
+      887     define variable v-cntxt-userid        as character no-undo .
+      888     define variable v-cntxt-level         as character no-undo .
+      889     define variable v-cntxt-host-code-obj as integer   no-undo .
+      890     define variable v-cntxt-obj-type      as character no-undo .
+      891     define variable v-cntxt-obj-code      as integer   no-undo .
+      892     define variable v-cntxt-db-num-obj    as integer   no-undo .
+      893     define variable v-cntxt-is-admin      as logical   no-undo .
+      894     define new shared temp-table  tt-tax no-undo
+      895   field tax-code    like ub.tax.tax-code
+      896   FIELD individual  like ub.tax.individual
+      897   FIELD tax-name    like ub.tax.tax-name format "X(12)" column-label "Налог"
+      898   field rate-code   like ub.tax-rate.rate-code
+      899   FIELD rate-name   like ub.tax-rate.rate-name FORMAT "X(12)"
+      900   FIELD tax-type    like ub.tax.tax-type
+      901   field rate-value  like ub.tax-rate-value.rate-value
+      902   FIELD tax-rate-gds-rc  as recid
+      903   FIELD to-cashdesk like ub.tax.to-cashdesk
+      904   FIELD fact-date like ub.tax-rate-value.fact-date
+      905   FIELD fact-order like ub.tax-rate-value.fact-order
+      906   FIELD next-order like ub.tax-rate-value.fact-order
+      907   FIELD corr-user-name like ub.tax-rate-gds.corr-user-name
+      908   FIELD corr-user-db-num   like ub.tax-rate-gds.corr-user-db-num
+      909   FIELD corr-date like ub.tax-rate-gds.corr-date
+      910   FIELD corr-time like ub.tax-rate-gds.corr-time
+      911   index tax-code is unique primary tax-code fact-order descending rate-code.
+      912   define new shared buffer goods for ub.goods.
+      913   define variable ref-list as char no-undo.
+      914   define stream imp.
+      915   define stream err.
+      916   def new shared var vattaxcd as integer no-undo.
+      917   def new shared var slttaxcd as integer no-undo.
+      918   define variable text-string as char no-undo.
+      919   define variable impc as integer No-UNDO.
+      920   define variable imp-save as integer No-UNDO.
+      921   define variable i-artic as char no-undo.
+      922   define variable i-scale as char no-undo.
+      923   define variable i-name as char no-undo.
+      924   define variable i-unit-name as char no-undo.
+      925   define variable i-VAT-code AS integer NO-UNDO.
+      926   define variable i-NP-code AS integer NO-UNDO.
+      927   define variable i-grp as integer no-undo.
+      928   define variable i-gds-code like ub.goods.gds-code NO-UNDO.
+      929   define variable j-gds-code like ub.goods.gds-code NO-UNDO.
+      930   define variable i-grp-code AS integer NO-UNDO.
+      931   define variable i-grp-name as char no-undo.
+      932   define variable i-city as char init ? no-undo.
+      933   DEFINE VARIABLE var-bc-code as integer no-undo .
+      934   define buffer buf-goods for ub.goods.
+      935   define buffer buf_bar-code for ub.bar-code.
+      936   define variable i-prod-bc as character no-undo.
+      937   define variable v_os-file as character no-undo.
+      938   define variable prt-name as character no-undo.
+      939   define variable rt as recid NO-UNDO.
+      940   define variable tax-rate-rid as character no-undo init "".
+      941   define variable taxvalue like ub.tax-rate-value.rate-value no-undo.
+      942   define temp-table tbl-grp no-undo
+      943   field Num-grp    as int
+      944   field Name-grp  as char
+      945   field Short-Name-grp  as char
+      946   field code like ub.gds-grp.node-code
+      947   index pi is unique primary
+      948   Num-grp.
+      949   define variable grp-full as character no-undo .
+      950   define variable N-grp as integer no-undo .
+      951   def buffer buf_grp for ub.gds-grp.
+      952   def buffer buf_prt for ub.gds-prt.
+      953   define variable i-color as char no-undo.
+      954   define variable i-size as char no-undo.
+      955   define variable add-scale as log no-undo.
+      956   define variable reply as log no-undo.
+      957   define variable NDS-code like  ub.tax-rate-value.rate-value  no-undo .
+      958   define variable NP-code  like  ub.tax-rate-value.rate-value init ? no-undo .
+      959   define variable  log-save as log no-undo.
+      960   def temp-table ld no-undo
+      961   field num  as integer
+      962   field ord  as integer
+      963   field name like ub.gds-prt.node-name
+      964   index name is primary unique name .
+      965   define buffer buf_clients for ub.clients.
+      966   DEFINE BUTTON b-exit AUTO-GO
+      967        LABEL "Выполнить"
+      968        SIZE 15 BY 1.13
+      969        BGCOLOR 8 .
+      970   DEFINE BUTTON b-quit AUTO-END-KEY
+      971        LABEL "Выход"
+      972        SIZE 15 BY 1.13
+      973        BGCOLOR 8 .
+      974   DEFINE BUTTON Imly-City
+      975        LABEL "Страна"
+      976        SIZE 10.5 BY 1.2.
+      977   DEFINE BUTTON Imply-Cli
+      978        LABEL "Производитель"
+      979        SIZE 14.1 BY 1.13.
+      980   DEFINE VARIABLE city1 AS CHARACTER FORMAT "X(256)":U
+      981         VIEW-AS TEXT
+      982        SIZE 3.9 BY 1.2
+      983        BGCOLOR 15  NO-UNDO.
+      984   DEFINE VARIABLE city2 AS CHARACTER FORMAT "X(256)":U
+      985         VIEW-AS TEXT
+      986        SIZE 48.5 BY 1.2
+      987        BGCOLOR 15  NO-UNDO.
+      988   DEFINE VARIABLE Cli-code AS INTEGER FORMAT "->,>>>,>>9":U INITIAL 0
+      989         VIEW-AS TEXT
+      990        SIZE 8.9 BY 1.13
+      991        BGCOLOR 15  NO-UNDO.
+      992   DEFINE VARIABLE Cli-Name AS CHARACTER FORMAT "X(256)":U
+      993         VIEW-AS TEXT
+      994        SIZE 34.5 BY 1.13
+      995        BGCOLOR 15  NO-UNDO.
+      996   DEFINE VARIABLE Cli-type AS CHARACTER FORMAT "X(8)":U
+      997         VIEW-AS TEXT
+      998        SIZE 4.6 BY 1.13
+      999        BGCOLOR 15  NO-UNDO.
+     1000   DEFINE FRAME Dialog-Frame
+     1001        Imply-Cli AT ROW 2.27 COL 1
+     1002        Imly-City AT ROW 5.5 COL 1
+     1003        b-exit AT ROW 7.27 COL 11
+     1004        b-quit AT ROW 7.27 COL 43
+     1005        Cli-code AT ROW 2.27 COL 14 COLON-ALIGNED NO-LABEL
+     1006        Cli-type AT ROW 2.27 COL 23.5 COLON-ALIGNED NO-LABEL
+     1007        Cli-Name AT ROW 2.27 COL 28.5 COLON-ALIGNED NO-LABEL
+     1008        city1 AT ROW 5.5 COL 10 COLON-ALIGNED NO-LABEL
+     1009        city2 AT ROW 5.5 COL 14.5 COLON-ALIGNED NO-LABEL
+     1010        "       Не обязательные параметры подставляемые по умолчанию" VIEW-AS TEXT
+     1011             SIZE 64 BY 1 AT ROW 4 COL 1
+     1012             BGCOLOR 8 FGCOLOR 0
+     1013        "                         Необходимо указать" VIEW-AS TEXT
+     1014             SIZE 64 BY .93 AT ROW 1 COL 1
+     1015             BGCOLOR 8 FGCOLOR 0
+     1016        SPACE(0.00) SKIP(6.64)
+     1017       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+     1018            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+     1019            TITLE "Импорт товаров из текстового файла"
+     1020            DEFAULT-BUTTON b-exit CANCEL-BUTTON b-quit.
+     1021   ASSIGN
+     1022          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+     1023          FRAME Dialog-Frame:HIDDEN           = TRUE.
+     1024   ON WINDOW-CLOSE OF FRAME Dialog-Frame
+     1025   DO:
+     1026     APPLY "END-ERROR":U TO SELF.
+     1027   END.
+     1028   ON CHOOSE OF b-exit IN FRAME Dialog-Frame
+     1029   DO:
+     1030   define variable v-rate-value as decimal no-undo .
+     1031   define variable v-is-new as logical no-undo .
+     1032   define variable v-b-str as character no-undo .
+     1033   define variable v-rid as recid no-undo .
+     1034   define buffer buf_goods for ub.goods.
+     1035   define buffer buf_gds-grp for ub.gds-grp.
+     1036   define buffer buf_gds-prt for ub.gds-prt.
+     1037   define buffer buf_tax-rate for ub.tax-rate.
+     1038   define buffer buf_lvl-name for ub.lvl-name.
+     1039   define buffer buf_prod-bc for ub.prod-bc.
+     1040   define buffer buf_bar-code for ub.bar-code.
+     1041   if cli-code = 0 then do:
+     1042     message "Не задан производитель "
+     1043     view-as alert-box ERROR.
+     1044     return no-apply.
+     1045   end.
+     1046   if trim(file-name) = "" then do:
+     1047     message "Не задан файл для импорта "
+     1048     view-as alert-box ERROR.
+     1049     return no-apply.
+     1050   end.
+     1051   for each buf_gds-grp  no-lock:
+     1052   find first buf_grp where
+     1053             buf_grp.upper-code = buf_gds-grp.node-code no-lock no-error.
+     1054   if avail buf_grp then next.
+     1055    run grplib-get-full-name in this-procedure ( input buf_gds-grp.node-code
+     1056                                                ,output grp-full).
+     1057    if index(buf_gds-grp.node-name, "-") = 0 then do:
+     1058      message
+     1059     "Существуют группы товаров которые начинаются не с номера в начале названия," skip
+     1060     "в начале названия должен стоять номер и символ -" skip
+     1061      buf_gds-grp.node-name  skip
+     1062      view-as alert-box ERROR   .
+     1063      return no-apply.
+     1064    end.
+     1065    N-grp = integer(substring(buf_gds-grp.node-name, 1, index(buf_gds-grp.node-name, "-") - 1)).
+     1066    find first tbl-grp where tbl-grp.num-grp = n-grp no-lock no-error.
+     1067    if not avail tbl-grp then do:
+     1068       create tbl-grp.
+     1069       assign
+     1070       tbl-grp.num-grp = n-grp
+     1071       tbl-grp.name-grp = grp-full
+     1072       tbl-grp.Short-Name-grp = buf_gds-grp.node-name
+     1073       tbl-grp.code = buf_gds-grp.node-code.
+     1074     end.
+     1075     else do:
+     1076       message
+     1077       "Существуют группы товаров с одинаковым номером " N-grp " в начале названия" skip
+     1078       buf_gds-grp.node-name  skip
+     1079       tbl-grp.Short-Name-grp  skip
+     1080       "В одном из них измените начальный номер на другой. "
+     1081        view-as alert-box ERROR   .
+     1082        return no-apply.
+     1083     end.
+     1084   end.
+     1085   add-scale = false.
+     1086   input stream imp from value (file-name) .
+     1087   repeat:
+     1088     IMPORT stream imp UNFORMATTED text-string  .
+     1089     if trim(text-string) = "" then   leave.
+     1090     impc = impc + 1.
+     1091     if num-entries (text-string, ";") <> 11 then do:
+     1092       OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1093       put stream Err unformatted
+     1094       string(today, "99/99/9999") " "
+     1095       string(time, "HH:MM")
+     1096       " Неправильное число параметров в строке, должно быть 10, в конце строки должен стоять знак ;" skip.
+     1097       export stream  Err text-string .
+     1098       output stream Err close.
+     1099      next.
+     1100     end.
+     1101     assign
+     1102     i-artic          = ENTRY( 1, text-string, ";")
+     1103     i-name        = ENTRY( 2, text-string, ";")
+     1104     i-unit-name = ENTRY( 3, text-string, ";")
+     1105     i-grp            = integer(ENTRY( 4, text-string, ";"))
+     1106     i-vat-code    = integer(ENTRY(5, text-string, ";"))
+     1107     i-NP-code      = integer(ENTRY(6, text-string, ";"))
+     1108     i-prod-bc       = ENTRY(8, text-string, ";")
+     1109     log-save      = false
+     1110     .
+     1111       i-scale  = "/".
+     1112       overlay ( i-artic, r-index(i-artic, "-"), 1) = i-scale.
+     1113       i-scale = substring( i-artic, r-index(i-artic, "-") + 1 ).
+     1114       i-artic = substring( i-artic, 1, r-index(i-artic, "-") - 1 ).
+     1115       display
+     1116       impc  label "Прочитано"
+     1117       imp-save label "Сохранено"
+     1118       i-artic format "x(10)" label "Артикул"
+     1119       text-string format "x(40)" label "Строка файла"
+     1120       with frame ff view-as dialog-box
+     1121       title ": Импорт справочника товаров из файла".
+     1122       pause 0.
+     1123       if i-unit-name = "th" then do:
+     1124         i-unit-name = "шт".
+     1125       end.
+     1126       else  do:
+     1127         OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1128         put stream Err unformatted
+     1129         string(today, "99/99/9999") " "
+     1130         string(time, "HH:MM")
+     1131         " Неизвестная единица измерения товара" skip.
+     1132         export stream  Err text-string .
+     1133         output stream Err close.
+     1134         next.
+     1135       end.
+     1136       find first tbl-grp where
+     1137                tbl-grp.num-grp = i-grp no-lock no-error.
+     1138       if not avail tbl-grp then do:
+     1139         OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1140         put stream err unformatted
+     1141         string(today, "99/99/9999") " "
+     1142         string(time, "HH:MM")
+     1143         " Группа к которой хотят привезать товар отсутствует в БД" skip.
+     1144         export stream  err text-string .
+     1145         output stream err close.
+     1146         next.
+     1147       end.
+     1148       _tax-rate:
+     1149       for each buf_tax-rate no-lock where
+     1150               buf_tax-rate.tax-code = integer('1':U):
+     1151   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1152   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run pftaxval in g#library
+     1153     (input  ?
+     1154     ,input  buf_tax-rate.tax-code
+     1155     ,input  buf_tax-rate.rate-code
+     1156     ,input  ?
+     1157     ,input  v-cntxt-host-code-obj
+     1158     ,input  v-cntxt-obj-type
+     1159     ,input  v-cntxt-obj-code
+     1160     ,output v-rate-value
+     1161     ) no-error .
+     1162         if not error-status:error then do:
+     1163           if v-rate-value = i-vat-code then do:
+     1164             leave.
+     1165           end.
+     1166         end.
+     1167       end.
+     1168       if not avail buf_tax-rate then do:
+     1169         OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1170         put stream err unformatted
+     1171         string(today, "99/99/9999") " "
+     1172         string(time, "HH:MM")
+     1173         substitute(" Ставка НДС с таким процентом (&1) отсутствует в БД", i-vat-code) skip.
+     1174         export stream  err text-string .
+     1175         output stream err close.
+     1176         next.
+     1177       end.
+     1178       else  do:
+     1179         NDS-code = buf_tax-rate.rate-code.
+     1180       end.
+     1181       _tax-rate:
+     1182       for each buf_tax-rate no-lock where
+     1183               buf_tax-rate.tax-code = integer('2':U):
+     1184   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1185   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run pftaxval in g#library
+     1186     (input  ?
+     1187     ,input  buf_tax-rate.tax-code
+     1188     ,input  buf_tax-rate.rate-code
+     1189     ,input  ?
+     1190     ,input  v-cntxt-host-code-obj
+     1191     ,input  v-cntxt-obj-type
+     1192     ,input  v-cntxt-obj-code
+     1193     ,output v-rate-value
+     1194     ) no-error .
+     1195         if not error-status:error then do:
+     1196           if v-rate-value = i-np-code then do:
+     1197             leave.
+     1198           end.
+     1199         end.
+     1200       end.
+     1201       if not avail buf_tax-rate then do:
+     1202         OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1203         put stream err unformatted
+     1204         string(today, "99/99/9999") " "
+     1205         string(time, "HH:MM")
+     1206         substitute(" Ставка НП с таким процентом (&1) отсутствует в БД", i-np-code) skip.
+     1207         export stream  err text-string .
+     1208         output stream err close.
+     1209         next.
+     1210       end.
+     1211       else  do:
+     1212         NP-code = buf_tax-rate.rate-code.
+     1213       end.
+     1214       find first buf_prt where
+     1215             buf_prt.root    = no and
+     1216             buf_prt.f-name = i-scale  no-lock no-error.
+     1217       if not avail buf_prt then do:
+     1218         i-color = substring( i-scale, 1, r-index(i-scale, "/") - 1 ).
+     1219         i-size = substring( i-scale, r-index(i-scale, "/") + 1 ).
+     1220         find first buf_prt where
+     1221                 buf_prt.root    = no and
+     1222                 buf_prt.node-name = i-color  no-lock no-error.
+     1223         if not avail buf_prt then do:
+     1224            run add-color in this-procedure  ( input i-color
+     1225                                             , output reply ).
+     1226            if reply = false then do:
+     1227               OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1228               put stream err unformatted
+     1229               string(today, "99/99/9999") " "
+     1230               string(time, "HH:MM")
+     1231               " Такая шкала отсутствует в БД" skip.
+     1232               export stream  err text-string .
+     1233               output stream err close.
+     1234               next.
+     1235            end.
+     1236          add-scale = true.
+     1237          end.
+     1238          find first buf_prt where
+     1239                   buf_prt.root    = no
+     1240               and buf_prt.node-name = i-size  no-lock no-error.
+     1241          if not avail buf_prt then do:
+     1242            run add-size in this-procedure  ( input i-size
+     1243                                             , output reply ).
+     1244            if reply = false then do:
+     1245               OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1246               put stream err unformatted
+     1247               string(today, "99/99/9999") " "
+     1248               string(time, "HH:MM")
+     1249               " Такая шкала отсутствует в БД" skip.
+     1250               export stream  err text-string .
+     1251               output stream err close.
+     1252               next.
+     1253             end.
+     1254             add-scale = true.
+     1255           end.
+     1256       end.
+     1257       if  trim(city1) <> "" then  i-city = city1 .
+     1258       find first buf_lvl-name no-lock no-error.
+     1259       find first buf_gds-prt where
+     1260             buf_gds-prt.prt-root  = buf_lvl-name.upper-code
+     1261         and buf_gds-prt.is-term   = no
+     1262         and buf_gds-prt.upper-code = buf_lvl-name.upper-code
+     1263       no-lock no-error.
+     1264       if not avail buf_gds-prt then do:
+     1265         OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1266         put stream err unformatted
+     1267         string(today, "99/99/9999") " "
+     1268         string(time, "HH:MM")
+     1269         " Корневая шкала не найдена" skip.
+     1270         export stream  err text-string .
+     1271         output stream err close.
+     1272         next.
+     1273       end.
+     1274       find first buf_goods where
+     1275                  buf_goods.artic = i-artic
+     1276             and  buf_goods.prod-type = cli-type
+     1277             and  buf_goods.prod-code = cli-code
+     1278       no-lock no-error.
+     1279       if not avail buf_goods then do:
+     1280         do transaction:
+     1281           run ref/dtaxgdss.p (
+     1282                 input no
+     1283               , input   i-unit-name
+     1284               , input   buf_gds-prt.node-code
+     1285               , input ?
+     1286               , input ?
+     1287               , input    v-cntxt-host-code-obj
+     1288               , input    v-cntxt-obj-type
+     1289               , input   v-cntxt-obj-code
+     1290           ).
+     1291           define variable v-recid         as recid             no-undo.
+     1292           run ref/goods01.p (
+     1293                 input parparentproc
+     1294               , input 'ДОБАВЛЕНИЕ':U
+     1295               , input no
+     1296               , input 0
+     1297               , input no
+     1298               , input yes
+     1299               , input no
+     1300               , input no
+     1301               , input yes
+     1302               , input v-cntxt-host-code-obj
+     1303               , input v-cntxt-obj-type
+     1304               , input v-cntxt-obj-code
+     1305               , input yes
+     1306               , input ?
+     1307               , input 0
+     1308               , input i-artic
+     1309               , input cli-type
+     1310               , input cli-code
+     1311               , input buf_gds-prt.node-code
+     1312               , input tbl-grp.code
+     1313               , input i-name
+     1314               , input ""
+     1315               , input i-name
+     1316               , input i-name
+     1317               , input replace( replace( i-name, chr( 39 ), "" ), chr( 34 ), "" )
+     1318               , input i-city
+     1319               , input i-unit-name
+     1320               , input i-unit-name
+     1321               , input 0.0
+     1322               , input 0.0
+     1323               , input 1
+     1324               , input 1
+     1325               , input 0
+     1326               , input 0
+     1327               , input 0
+     1328               , input 0
+     1329               , input 'Группа':U
+     1330               , input 0
+     1331               , input yes
+     1332               , input 0
+     1333               , input 0
+     1334               , input ""
+     1335               , input ""
+     1336               , input ""
+     1337               , input ""
+     1338               , input ""
+     1339               , input ""
+     1340               , input 0
+     1341               , input 0
+     1342               , input ""
+     1343               , input 0
+     1344               , input 0
+     1345               , input 0
+     1346               , input ""
+     1347               , input ""
+     1348               , input ""
+     1349               , input 0
+     1350               , input ?
+     1351               , input ""
+     1352               , input no
+     1353               , input no
+     1354               , input no
+     1355               , input no
+     1356               , input "no"
+     1357               , input yes
+     1358               , input no
+     1359               , input no
+     1360               , input 0
+     1361               , input-output v-recid
+     1362               , output j-gds-code
+     1363           ) no-error .
+     1364         if error-status :error
+     1365         then do:
+     1366           message
+     1367           vss-workfile vss-revision vss-description
+     1368           skip "Ошибка создания или изменения карточки товара."
+     1369           skip return-value
+     1370           skip i-artic
+     1371           skip trim(error-status :get-message(1))
+     1372           trim(error-status :get-message(2))
+     1373           trim(error-status :get-message(3))
+     1374           view-as alert-box error.
+     1375         end.
+     1376         log-save = true.
+     1377       end.
+     1378     end.
+     1379     find first buf_goods where
+     1380               buf_goods.artic = i-artic
+     1381         and  buf_goods.prod-type = cli-type
+     1382         and  buf_goods.prod-code = cli-code
+     1383     no-lock no-error.
+     1384     if not avail buf_goods then do:
+     1385       OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1386         put stream Err unformatted
+     1387           string(today, "99/99/9999") " "
+     1388           string(time, "HH:MM")
+     1389           " Нет такого товара" skip.
+     1390         export stream  Err text-string .
+     1391       output stream Err close.
+     1392     end.
+     1393     find first buf_prod-bc where
+     1394               buf_prod-bc.b-str  = i-prod-bc no-lock no-error.
+     1395     if  not avail buf_prod-bc then do:
+     1396       find first buf_gds-prt where
+     1397           buf_gds-prt.prt-root = buf_lvl-name.upper-code and
+     1398           buf_gds-prt.f-name = i-scale  no-lock no-error.
+     1399       if  avail buf_gds-prt then do:
+     1400         do transaction  :
+     1401   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1402   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run barcodcr in g#library
+     1403     (input  buf_goods.gds-code
+     1404     ,input  buf_gds-prt.node-code
+     1405     ,input  ''
+     1406     ,input  ''
+     1407     ,input  buf_goods.unit-base
+     1408     ,input  1
+     1409     ,output v-is-new
+     1410     ,buffer buf_bar-code
+     1411     ) no-error .
+     1412           v-b-str = i-prod-bc.
+     1413           run trg/prod-bc1.p (
+     1414                              input parparentproc
+     1415                             ,input yes
+     1416                             ,input yes
+     1417                             ,input yes
+     1418                             ,input no
+     1419                             ,input ''
+     1420                             ,input ''
+     1421                             ,buffer buf_goods
+     1422                             ,input buf_bar-code.b-code
+     1423                             ,input-output v-b-str
+     1424                             ,output v-rid
+     1425                              ) no-error .
+     1426            if not error-status:error then do:
+     1427              log-save = true.
+     1428            end.
+     1429            else do:
+     1430               OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1431               put stream err unformatted
+     1432               string(today, "99/99/9999") " "
+     1433               string(time, "HH:MM")
+     1434               substitute("Ошибка при сохранении ДопБК:&1&2&1&3", chr(10), error-status:get-message(1) , return-value ) skip.
+     1435               export stream  err text-string .
+     1436               output stream err close.
+     1437            end.
+     1438           end.
+     1439         end.
+     1440         else do:
+     1441           OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1442           put stream err unformatted
+     1443           string(today, "99/99/9999") " "
+     1444           string(time, "HH:MM")
+     1445           " Такая шкала отсутствует в БД" skip.
+     1446           export stream  err text-string .
+     1447           output stream err close.
+     1448       end.
+     1449     end.
+     1450     else do:
+     1451       OUTPUT stream Err TO value ("Imp_goods.err") append.
+     1452       put stream err unformatted
+     1453       string(today, "99/99/9999") " "
+     1454       string(time, "HH:MM")
+     1455       " Такой Доп-БК уже существует в БД" skip.
+     1456       export stream  err text-string .
+     1457       output stream err close.
+     1458     end.
+     1459     if   log-save = true then imp-save = imp-save + 1.
+     1460   end.
+     1461   input stream imp close.
+     1462   message
+     1463   substitute("Импорт из файла &1 закончен, прочитано &2, сохранено &3&4" +
+     1464              "Все строки из файла которые не удалось импортировать можно посмотреть в файле Imp_goods.err "
+     1465              , file-name
+     1466              , impc
+     1467              , imp-save
+     1468              , chr(10)
+     1469   )
+     1470   view-as alert-box  INFORMATION.
+     1471   END.
+     1472   ON CHOOSE OF Imly-City IN FRAME Dialog-Frame
+     1473   DO:
+     1474   define variable v-rid-list as character no-undo .
+     1475   define buffer buf_country for ub.country.
+     1476   run ref/countris.w ( input parparentproc
+     1477                       ,input "b-sel"
+     1478                       ,input-output v-rid-list ).
+     1479   if v-rid-list <> '' then     do:
+     1480    FIND first buf_country no-lock WHERE
+     1481            recid (buf_country) = integer(v-rid-list) no-error.
+     1482    if avail buf_country then
+     1483     assign
+     1484     city1 = buf_country.alpha1
+     1485     city2  =  buf_country.long-name
+     1486     .
+     1487     display
+     1488     city1
+     1489     city2
+     1490     with frame Dialog-Frame.
+     1491   end.
+     1492   END.
+     1493   ON CHOOSE OF Imply-Cli IN FRAME Dialog-Frame
+     1494   DO:
+     1495   define variable ref-list as character no-undo .
+     1496   define variable ref-rec as recid no-undo .
+     1497     run ref/cli-all.w ( input parparentproc
+     1498                        ,input "b-sel"
+     1499                        ,input 'орг':U
+     1500                        ,input ?
+     1501                        ,input ?
+     1502                        ,input ?
+     1503                        ,input ?
+     1504                        ,input ?
+     1505                        ,output  ref-list).
+     1506    ref-rec = integer (ref-list).
+     1507   if  ref-rec <> ? then do:
+     1508     FIND first buf_clients no-lock WHERE recid (buf_clients) = ref-rec NO-error.
+     1509     if avail buf_clients then do:
+     1510       assign
+     1511       Cli-type = buf_clients.obj-type
+     1512       Cli-code = buf_clients.obj-code
+     1513       Cli-name = buf_clients.obj-name .
+     1514     end.
+     1515     display
+     1516     Cli-type
+     1517     Cli-code
+     1518     Cli-name
+     1519     with frame Dialog-Frame.
+     1520   end.
+     1521   END.
+     1522   IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+     1523   THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+     1524   MAIN-BLOCK:
+     1525   DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+     1526      ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+     1527   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1528     run mainmenu_getcntxt in parparentproc
+     1529       (output v-cntxt-db-num
+     1530       ,output v-cntxt-userid
+     1531       ,output v-cntxt-level
+     1532       ,output v-cntxt-host-code-obj
+     1533       ,output v-cntxt-obj-type
+     1534       ,output v-cntxt-obj-code
+     1535       ,output v-cntxt-db-num-obj
+     1536       ,output v-cntxt-is-admin
+     1537       ) .
+     1538     FIND first buf_clients no-lock WHERE
+     1539               buf_clients.obj-type = 'орг':U
+     1540           and buf_clients.obj-code = 8 no-error.
+     1541     if avail buf_clients then do:
+     1542       assign
+     1543       Cli-type = buf_clients.obj-type
+     1544       Cli-code = buf_clients.obj-code
+     1545       Cli-name = buf_clients.obj-name .
+     1546       display
+     1547       Cli-type
+     1548       Cli-code
+     1549       Cli-name
+     1550       with frame Dialog-Frame.
+     1551     end.
+     1552     else do:
+     1553       enable
+     1554       Imply-Cli
+     1555       with frame Dialog-Frame.
+     1556     end.
+     1557     RUN enable_UI.
+     1558     WAIT-FOR GO OF FRAME Dialog-Frame.
+     1559   END.
+     1560   RUN disable_UI.
+     1561   PROCEDURE add-color :
+     1562   define input  parameter new-scale like ub.gds-prt.f-name no-undo .
+     1563   define output parameter reply  as log no-undo .
+     1564   define buffer buf-gds-prt-1  for ub.gds-prt.
+     1565   define buffer buf-gds-prt-2  for ub.gds-prt.
+     1566   define buffer buf_gds-prt for ub.gds-prt.
+     1567   define buffer buf_lvl-name for ub.lvl-name.
+     1568   define variable u-c like ub.gds-prt.upper-code no-undo.
+     1569   define variable p-n like ub.gds-prt.prt-num no-undo.
+     1570   define variable n-c like ub.gds-prt.node-code no-undo.
+     1571   define variable p-r like ub.gds-prt.prt-root no-undo.
+     1572   for each ld :
+     1573     delete ld.
+     1574   end.
+     1575   reply = false.
+     1576   for each buf_gds-prt where
+     1577         buf_gds-prt.upper-code = 4 and
+     1578         buf_gds-prt.node-name <> buf_gds-prt.f-name and
+     1579         buf_gds-prt.is-term = yes
+     1580   no-lock:
+     1581       find first ld where
+     1582                ld.name = buf_gds-prt.node-name no-lock no-error.
+     1583       if not avail ld then do:
+     1584           create ld.
+     1585           assign
+     1586           ld.name = buf_gds-prt.node-name
+     1587           ld.num  = buf_gds-prt.prt-num
+     1588           .
+     1589       end.
+     1590   end.
+     1591   find first buf_lvl-name no-lock no-error.
+     1592   if not avail buf_lvl-name then do:
+     1593     reply = false.
+     1594     return.
+     1595   end.
+     1596   find buf_gds-prt where
+     1597         buf_gds-prt.upper-code = buf_lvl-name.upper-code and
+     1598         buf_gds-prt.prt-num    = 0
+     1599   no-lock no-error.
+     1600   if not avail buf_gds-prt then do:
+     1601     reply = false.
+     1602     return.
+     1603   end.
+     1604   u-c = buf_gds-prt.node-code .
+     1605   find last buf_gds-prt  no-lock use-index pi no-error.
+     1606   if not avail buf_gds-prt then do:
+     1607     reply = false.
+     1608     return.
+     1609   end.
+     1610   n-c = buf_gds-prt.node-code.
+     1611   find last buf_gds-prt no-lock  where
+     1612            buf_gds-prt.upper-code =  u-c
+     1613   use-index level no-error.
+     1614   if not avail buf_gds-prt then do:
+     1615     reply = false.
+     1616     return.
+     1617   end.
+     1618   p-n = buf_gds-prt.prt-num.
+     1619   do transaction:
+     1620     create buf-gds-prt-1.
+     1621     assign
+     1622     buf-gds-prt-1.node-code   =  n-c + 1
+     1623     buf-gds-prt-1.upper-code  = u-c
+     1624     buf-gds-prt-1.node-name    = new-scale
+     1625     buf-gds-prt-1.prt-num     = p-n + 1
+     1626     buf-gds-prt-1.root        = no
+     1627     buf-gds-prt-1.lvl-num     = ub.lvl-name.level
+     1628     buf-gds-prt-1.f-name      = new-scale
+     1629     buf-gds-prt-1.is-term     = no
+     1630     buf-gds-prt-1.prt-root    = lvl-name.upper-code
+     1631     .
+     1632     n-c = n-c + 1.
+     1633     for each ld no-lock :
+     1634       create buf-gds-prt-2.
+     1635       assign
+     1636       buf-gds-prt-2.node-code   = n-c  + 1
+     1637       buf-gds-prt-2.upper-code  = buf-gds-prt-1.node-code
+     1638       buf-gds-prt-2.node-name    = ld.name
+     1639       buf-gds-prt-2.prt-num     = ld.num
+     1640       buf-gds-prt-2.root        = no
+     1641       buf-gds-prt-2.lvl-num     = 1
+     1642       buf-gds-prt-2.f-name      = trim(buf-gds-prt-1.f-name) + "/" + trim(ld.name)
+     1643       buf-gds-prt-2.is-term     = yes
+     1644       buf-gds-prt-2.prt-root    = lvl-name.upper-code
+     1645       .
+     1646       n-c = n-c + 1.
+     1647     end.
+     1648     reply = true.
+     1649   end.
+     1650   END PROCEDURE.
+     1651   PROCEDURE add-size :
+     1652   define input  parameter new-scale like ub.gds-prt.f-name no-undo .
+     1653   define output parameter reply  as log no-undo .
+     1654   define buffer buf_gds-prt for ub.gds-prt.
+     1655   define buffer buf-gds-prt-1  for ub.gds-prt.
+     1656   define buffer buf-gds-prt-2  for ub.gds-prt.
+     1657   define buffer buf_lvl-name for ub.lvl-name.
+     1658   define variable u-c like ub.gds-prt.upper-code no-undo.
+     1659   define variable p-n like ub.gds-prt.prt-num no-undo.
+     1660   define variable n-c like ub.gds-prt.node-code no-undo.
+     1661   define variable p-r like ub.gds-prt.prt-root no-undo.
+     1662   for each ld :
+     1663     delete ld.
+     1664   end.
+     1665   reply = false.
+     1666   p-n = 0.
+     1667   find last buf_gds-prt no-lock where
+     1668       buf_gds-prt.upper-code = 4 use-index level no-error.
+     1669   if not avail buf_gds-prt then do:
+     1670     reply = false.
+     1671     return.
+     1672   end.
+     1673   p-n = buf_gds-prt.prt-num.
+     1674   for each buf_gds-prt where
+     1675       buf_gds-prt.upper-code = 3
+     1676   and buf_gds-prt.node-name = buf_gds-prt.f-name
+     1677   and buf_gds-prt.is-term = no
+     1678   no-lock:
+     1679     find first ld where
+     1680        ld.name = buf_gds-prt.node-name no-lock no-error.
+     1681     if not avail ld then do:
+     1682       create ld.
+     1683       assign
+     1684       ld.name = buf_gds-prt.node-name
+     1685       ld.num    = buf_gds-prt.prt-num
+     1686       ld.ord     = buf_gds-prt.node-code
+     1687       .
+     1688     end.
+     1689   end.
+     1690   find first buf_lvl-name no-lock no-error.
+     1691   if not avail buf_lvl-name then do:
+     1692     reply = false.
+     1693     return.
+     1694   end.
+     1695   find last buf_gds-prt  no-lock use-index pi no-error.
+     1696   if not avail buf_gds-prt then do:
+     1697     reply = false.
+     1698     return.
+     1699   end.
+     1700   n-c = buf_gds-prt.node-code.
+     1701   do transaction:
+     1702     for each ld no-lock:
+     1703       create buf-gds-prt-1.
+     1704       assign
+     1705       buf-gds-prt-1.node-code    =  n-c + 1
+     1706       buf-gds-prt-1.upper-code   = ld.ord
+     1707       buf-gds-prt-1.node-name    = new-scale
+     1708       buf-gds-prt-1.prt-num      = p-n + 1
+     1709       buf-gds-prt-1.root         = no
+     1710       buf-gds-prt-1.lvl-num      = 1
+     1711       buf-gds-prt-1.f-name       = ld.name + "/" + new-scale
+     1712       buf-gds-prt-1.is-term      = yes
+     1713       buf-gds-prt-1.prt-root     = buf_lvl-name.upper-code
+     1714         .
+     1715       n-c = n-c + 1.
+     1716       reply = true.
+     1717     end.
+     1718   end.
+     1719   END PROCEDURE.
+     1720   PROCEDURE disable_UI :
+     1721     HIDE FRAME Dialog-Frame.
+     1722   END PROCEDURE.
+     1723   PROCEDURE enable_UI :
+     1724     DISPLAY Cli-code Cli-type Cli-Name city1 city2
+     1725         WITH FRAME Dialog-Frame.
+     1726     ENABLE Imly-City b-exit b-quit Cli-code Cli-type Cli-Name city1 city2
+     1727         WITH FRAME Dialog-Frame.
+     1728     VIEW FRAME Dialog-Frame.
+     1729   END PROCEDURE.

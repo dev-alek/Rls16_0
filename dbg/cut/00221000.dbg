@@ -1,0 +1,172 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00221000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cut/00221000.p $".
+        7   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 8.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define buffer old-price-all                  for src.price-all                  .
+       13   define buffer new-price-all                  for dst.price-all                  .
+       14   define buffer old-price-all-attr             for src.price-all-attr             .
+       15   define buffer new-price-all-attr             for dst.price-all-attr             .
+       16   define buffer old-price-doc-forming          for src.price-doc-forming          .
+       17   define buffer old-price-doc-forming-attr     for src.price-doc-forming-attr     .
+       18   define buffer old-price-doc-forming-gds      for src.price-doc-forming-gds      .
+       19   define buffer old-price-doc-forming-gdsattr  for src.price-doc-forming-gdsattr  .
+       20   define buffer old-price-doc-forming-gds-qnty for src.price-doc-forming-gds-qnty .
+       21   define buffer old-price-doc-forming-gds-sum  for src.price-doc-forming-gds-sum  .
+       22   define buffer old-price-doc-forming-gds-tnv  for src.price-doc-forming-gds-tnv  .
+       23   define buffer new-price-doc-forming          for dst.price-doc-forming          .
+       24   define buffer new-price-doc-forming-attr     for dst.price-doc-forming-attr     .
+       25   define buffer new-price-doc-forming-gds      for dst.price-doc-forming-gds      .
+       26   define buffer new-price-doc-forming-gdsattr  for dst.price-doc-forming-gdsattr  .
+       27   define buffer new-price-doc-forming-gds-qnty for dst.price-doc-forming-gds-qnty .
+       28   define buffer new-price-doc-forming-gds-sum  for dst.price-doc-forming-gds-sum  .
+       29   define buffer new-price-doc-forming-gds-tnv  for dst.price-doc-forming-gds-tnv  .
+       30   define buffer buf_clients     for dst.clients.
+       31   do
+       32   on error undo, return error
+       33   :
+       34   define input parameter vartype-cut            as integer   no-undo.
+       35   define input parameter varlist-db             as character no-undo.
+       36   define input parameter vardate-actual-goods   as date      no-undo.
+       37   define input parameter vardate-actual-docs    as date      no-undo.
+       38   define input parameter vardate-actual-findoc  as date      no-undo.
+       39   define input parameter vardate-output-zone    as date      no-undo.
+       40   define input parameter varstay-recipe-goods   as logical   no-undo.
+       41   define input parameter varstay-weight-goods   as logical   no-undo.
+       42   define input parameter varnot-copy-del-goods  as logical   no-undo.
+       43   define input parameter varstay-history        as logical   no-undo.
+       44   define input parameter vargen-file            as character no-undo.
+       45   define stream str-gen.
+       46   output stream str-gen to vargen-file append.
+       47   if not connected("src") then do:
+       48      return error "Нет коннекта с базой 'src'.".
+       49   end.
+       50   if not connected("dst") then do:
+       51      return error "Нет коннекта с базой 'dst'.".
+       52   end.
+       53   find src.sys-ctrl no-lock.
+       54   if not available src.sys-ctrl then do:
+       55      return error "В базе данных src не найдена уникальная запись sys-ctrl.".
+       56   end.
+       57   if src.sys-ctrl.db-num <> 0 then do:
+       58      return error "Пакет обрезания работает только в главной базе данных. В данной версии удаленные БД создаются выгрузкой из главных.".
+       59   end.
+       60   if vardate-actual-docs <> ? and
+       61      (vardate-actual-goods   > vardate-actual-docs or
+       62       vardate-actual-goods   = ? )   then do:
+       63         return error SUBSTITUTE("Ошибка при задании дат актуальности." +
+       64                                 "Дата актуальности товаров &1."        +
+       65                                 "Дата актуальности документов &2."     +
+       66                                 "Дата актуальности документов должна быть больше или равна дат актуальностей товаров.",
+       67                                 vardate-actual-goods,
+       68                                 vardate-actual-docs).
+       69   end.
+       70     on WRITE of dst.price-all                   override do: end.
+       71     on WRITE of dst.price-all-attr              override do: end.
+       72     on WRITE of dst.price-doc-forming           override do: end.
+       73     on WRITE of dst.price-doc-forming-attr      override do: end.
+       74     on WRITE of dst.price-doc-forming-gds       override do: end.
+       75     on WRITE of dst.price-doc-forming-gdsattr   override do: end.
+       76     on WRITE of dst.price-doc-forming-gds-qnty  override do: end.
+       77     on WRITE of dst.price-doc-forming-gds-sum   override do: end.
+       78     on WRITE of dst.price-doc-forming-gds-tnv   override do: end.
+       79   define buffer new-price-doc for dst.price-doc  .
+       80   define buffer bufold_price-doc-forming for src.price-doc-forming  .
+       81       if vardate-actual-docs <> ? then do:
+       82           for each bufold_price-doc-forming  no-lock where
+       83                   bufold_price-doc-forming.sys-date >= vardate-actual-docs
+       84                   on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+       85             run move-doc (
+       86                 bufold_price-doc-forming.plt-id  ,
+       87                 bufold_price-doc-forming.plt-db-num ,
+       88                 bufold_price-doc-forming.pdf-id  ,
+       89                 bufold_price-doc-forming.pdf-db
+       90                 ) no-error .
+       91                 IF error-status :error THEN return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)).
+       92           end.
+       93           for each new-price-doc no-lock
+       94                 on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+       95             run move-doc (
+       96                 new-price-doc.plt-id  ,
+       97                 new-price-doc.plt-db-num ,
+       98                 new-price-doc.pdf-id  ,
+       99                 new-price-doc.pdf-db
+      100                 ) no-error .
+      101                 IF error-status :error THEN return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)).
+      102           end.
+      103       end.
+      104   output stream str-gen close.
+      105     return "Произведен экспорт таблиц: ~
+      106     price-all ~
+      107     price-all-attr ~
+      108     price-doc-forming ~
+      109     price-doc-forming-attr~
+      110     price-doc-forming-gds ~
+      111     price-doc-forming-gdsattr~
+      112     price-doc-forming-gds-qnty ~
+      113     price-doc-forming-gds-sum ~
+      114     price-doc-forming-gds-tnv "  + chr(10) +
+      115     "Игнорированы таблицы ~
+      116   c-price-doc-forming ~
+      117   c-price-doc-forming-attr ~
+      118   c-price-doc-forming-gds ~
+      119   c-price-doc-forming-gdsattr ~
+      120   c-price-doc-forming-gds-qnty ~
+      121   c-price-doc-forming-gds-sum  ~
+      122   c-price-doc-forming-gds-tnv  "
+      123     .
+      124   end.
+      125   procedure move-doc :
+      126   define input  parameter p-plt-id     as integer   no-undo .
+      127   define input  parameter p-plt-db-num as integer   no-undo .
+      128   define input  parameter p-pdf-id     as integer   no-undo .
+      129   define input  parameter p-pdf-db-num as integer   no-undo .
+      130     do
+      131     on error undo, return error return-value
+      132   :
+      133     find first  new-price-doc-forming no-lock where
+      134                 new-price-doc-forming.plt-id     = p-plt-id and
+      135                 new-price-doc-forming.plt-db-num = p-plt-db-num and
+      136                 new-price-doc-forming.pdf-id     = p-pdf-id and
+      137                 new-price-doc-forming.pdf-db     = p-pdf-db-num      no-error .
+      138     if available new-price-doc-forming then return .
+      139   for each old-price-doc-forming   where    old-price-doc-forming.plt-id     = p-plt-id and   old-price-doc-forming.plt-db-num = p-plt-db-num and   old-price-doc-forming.pdf-id     = p-pdf-id and   old-price-doc-forming.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      140      create new-price-doc-forming.
+      141      buffer-copy old-price-doc-forming to new-price-doc-forming.
+      142   end.
+      143   for each old-price-doc-forming-attr  where    old-price-doc-forming-attr.plt-id     = p-plt-id and   old-price-doc-forming-attr.plt-db-num = p-plt-db-num and   old-price-doc-forming-attr.pdf-id     = p-pdf-id and   old-price-doc-forming-attr.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      144      create new-price-doc-forming-attr.
+      145      buffer-copy old-price-doc-forming-attr to new-price-doc-forming-attr.
+      146   end.
+      147   for each old-price-doc-forming-gds  where    old-price-doc-forming-gds.plt-id     = p-plt-id and   old-price-doc-forming-gds.plt-db-num = p-plt-db-num and   old-price-doc-forming-gds.pdf-id     = p-pdf-id and   old-price-doc-forming-gds.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      148      create new-price-doc-forming-gds.
+      149      buffer-copy old-price-doc-forming-gds to new-price-doc-forming-gds.
+      150   end.
+      151   for each old-price-doc-forming-gdsattr  where    old-price-doc-forming-gdsattr.plt-id     = p-plt-id and   old-price-doc-forming-gdsattr.plt-db-num = p-plt-db-num and   old-price-doc-forming-gdsattr.pdf-id     = p-pdf-id and   old-price-doc-forming-gdsattr.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      152      create new-price-doc-forming-gdsattr.
+      153      buffer-copy old-price-doc-forming-gdsattr to new-price-doc-forming-gdsattr.
+      154   end.
+      155   for each old-price-doc-forming-gds-qnty  where    old-price-doc-forming-gds-qnty.plt-id     = p-plt-id and   old-price-doc-forming-gds-qnty.plt-db-num = p-plt-db-num and   old-price-doc-forming-gds-qnty.pdf-id     = p-pdf-id and   old-price-doc-forming-gds-qnty.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      156      create new-price-doc-forming-gds-qnty.
+      157      buffer-copy old-price-doc-forming-gds-qnty to new-price-doc-forming-gds-qnty.
+      158   end.
+      159   for each old-price-doc-forming-gds-sum  where    old-price-doc-forming-gds-sum.plt-id     = p-plt-id and   old-price-doc-forming-gds-sum.plt-db-num = p-plt-db-num and   old-price-doc-forming-gds-sum.pdf-id     = p-pdf-id and   old-price-doc-forming-gds-sum.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      160      create new-price-doc-forming-gds-sum.
+      161      buffer-copy old-price-doc-forming-gds-sum to new-price-doc-forming-gds-sum.
+      162   end.
+      163   for each old-price-doc-forming-gds-tnv  where    old-price-doc-forming-gds-tnv.plt-id     = p-plt-id and   old-price-doc-forming-gds-tnv.plt-db-num = p-plt-db-num and   old-price-doc-forming-gds-tnv.pdf-id     = p-pdf-id and   old-price-doc-forming-gds-tnv.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      164      create new-price-doc-forming-gds-tnv.
+      165      buffer-copy old-price-doc-forming-gds-tnv to new-price-doc-forming-gds-tnv.
+      166   end.
+      167   for each old-price-all  where    old-price-all.plt-id     = p-plt-id and   old-price-all.plt-db-num = p-plt-db-num and   old-price-all.pdf-id     = p-pdf-id and   old-price-all.pdf-db = p-pdf-db-num  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      168      create new-price-all.
+      169      buffer-copy old-price-all to new-price-all.
+      170   end.
+      171     end.
+      172   end procedure.

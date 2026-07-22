@@ -1,0 +1,427 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.str.mercury.*.
+        3   using ibs.th.gbl.storage.*.
+        4   using ibs.th.gbl.*.
+        5   using ibs.th.str.clients.*.
+        6   block-level on error undo, throw.
+        7   class ibs.th.gbl.storage.vsdtostorage:
+        8     define property Msg as character no-undo
+        9       get.
+       10       private set.
+       11     define buffer buf_vsd for ub.vsd.
+       12     method private void exception( arg as handle, invsdObj as class vsdsub, t-h as handle ):
+       13       invsdObj:setMsg(arg:get-message (1)).
+       14       invsdObj:setStatusErr(arg:error).
+       15       t-h:buffer-delete () no-error.
+       16       return.
+       17     end method.
+       18     method private void exception( arg as char ):
+       19       Msg = arg.
+       20       return.
+       21     end method.
+       22     method public void insertDB( input vsdsubObj as vsdsub  ):
+       23       def buffer bf_vsd_chk for ub.vsd.
+       24       create buf_vsd.
+       25       find first ub.sys-ctrl no-lock.
+       26       assign
+       27         buf_vsd.id     = next-value (s-vsd-id, ub)
+       28         buf_vsd.db-num = ub.sys-ctrl.db-num
+       29       no-error.
+       30       if error-status:error
+       31       then do:
+       32         find last bf_vsd_chk no-lock where bf_vsd_chk.db-num = ub.sys-ctrl.db-num use-index pi.
+       33         current-value (s-vsd-id, ub) = bf_vsd_chk.id.
+       34         assign
+       35           buf_vsd.id     = next-value (s-vsd-id, ub)
+       36           buf_vsd.db-num = ub.sys-ctrl.db-num
+       37         no-error.
+       38         if error-status:error
+       39         then do:
+       40           exception(error-status, vsdsubObj, buffer buf_vsd:handle).
+       41           return.
+       42         end.
+       43       end.
+       44       setDataStorage(input vsdsubObj, buffer buf_vsd).
+       45       return.
+       46     end method.
+       47     method public void updateDB( input vsdsubObj as vsdsub  ):
+       48       find first buf_vsd where
+       49         buf_vsd.id     = vsdsubObj:ID and
+       50         buf_vsd.db-num = vsdsubObj:DBNum no-error.
+       51       if not available (buf_vsd)
+       52       then do:
+       53         exception(error-status, vsdsubObj, buffer buf_vsd:handle).
+       54         return.
+       55       end.
+       56       setDataStorage(input vsdsubObj, buffer buf_vsd).
+       57       release buf_vsd.
+       58       return.
+       59     end method.
+       60     method public void deleteDB( input vsdsubObj as vsdsub  ):
+       61       define buffer buf_vsd-attr for ub.vsd-attr .
+       62       find first buf_vsd where
+       63         buf_vsd.id     = vsdsubObj:ID and
+       64         buf_vsd.db-num = vsdsubObj:DBNum no-error.
+       65       if not available (buf_vsd)
+       66       then do:
+       67         exception(error-status, vsdsubObj, buffer buf_vsd:handle).
+       68         return.
+       69       end.
+       70       for each buf_vsd-attr exclusive-lock where buf_vsd-attr.ID     = buf_vsd.ID
+       71                                              and buf_vsd-attr.db-num = buf_vsd.db-num :
+       72         delete buf_vsd-attr .
+       73       end.
+       74       delete buf_vsd.
+       75       return.
+       76     end method.
+       77     method public class vsdsubs getVSDsubs ( buffer buf_parts for ub.parts ):
+       78       define variable keyrecObj as class keyrec no-undo.
+       79       define variable keyrec as character no-undo.
+       80       keyrecObj = new keyrec ().
+       81       keyrecObj:GenKeyRec('parts':U, buffer buf_parts:handle, output keyrec).
+       82       delete object keyrecObj.
+       83       return getVSDsubs (input "part-key", input keyrec).
+       84     end.
+       85     method public class vsdsubs getVSDsubs (input inFieldName as character, input inValue as character ):
+       86       define variable vsdsubsObj as class vsdsubs no-undo.
+       87       vsdsubsObj = new vsdsubs ().
+       88       case inFieldName:
+       89       when "part-key" then do:
+       90         for each buf_vsd no-lock where buf_vsd.part-key = inValue by buf_vsd.vsd-type:
+       91           vsdsubsObj:AddItem(getDataStorage (buffer buf_vsd)).
+       92         end.
+       93       end.
+       94       when "UUID" then do:
+       95         for each buf_vsd no-lock where buf_vsd.UUID = inValue by buf_vsd.vsd-type:
+       96           vsdsubsObj:AddItem(getDataStorage (buffer buf_vsd)).
+       97         end.
+       98       end.
+       99       otherwise do:
+      100         exception( substitute ("Нет обработки для поля - &1", inFieldName) ).
+      101       end.
+      102       end case.
+      103       return vsdsubsObj.
+      104     end method.
+      105     method public class vsdsubs getVSDsubs (input inObjType    as character,
+      106                                             input  inObjCode    as int64 ,
+      107                                             input  inStatusList as character ):
+      108         define variable vsdsubsObj as class vsdsubs no-undo .
+      109         vsdsubsObj = new vsdsubs ().
+      110         for each buf_vsd where buf_vsd.obj-type eq inObjType
+      111                            and buf_vsd.obj-code eq inObjCode
+      112                            and can-do(inStatusList,string (buf_vsd.status_))
+      113         no-lock by buf_vsd.fact-datetime :
+      114             vsdsubsObj:AddItem(getDataStorage (BUFFER buf_vsd)).
+      115         end.
+      116         return vsdsubsObj.
+      117     end method.
+      118       method public class vsdsubs getVSDsubs ( buffer buf_vsd for ub.vsd ):
+      119       define variable vsdsubsObj as class vsdsubs no-undo .
+      120       vsdsubsObj = new vsdsubs ().
+      121       vsdsubsObj:AddItem(getDataStorage (buffer buf_vsd)).
+      122       return vsdsubsObj.
+      123     end.
+      124     method public class vsdsubs getVSDsubs ( objTHObj as class clisub, vsdStatusType as integer ):
+      125       define variable vsdsubsObj as class vsdsubs no-undo .
+      126       vsdsubsObj = new vsdsubs ().
+      127       for each buf_vsd no-lock where buf_vsd.obj-code = objTHObj:ObjCode and buf_vsd.obj-type = objTHObj:ObjType
+      128         and buf_vsd.status_ =  vsdStatusType:
+      129         vsdsubsObj:AddItem(getDataStorage (buffer buf_vsd)).
+      130       end.
+      131       return vsdsubsObj.
+      132     end method.
+      133     method public class vsdsubs getVSDsubs (input objTHObj as class clisub ):
+      134       define variable vsdsubsObj as class vsdsubs no-undo .
+      135       vsdsubsObj = new vsdsubs ().
+      136       for each buf_vsd no-lock where buf_vsd.obj-code = objTHObj:ObjCode and buf_vsd.obj-type = objTHObj:ObjType :
+      137         vsdsubsObj:AddItem(getDataStorage (buffer buf_vsd)).
+      138       end.
+      139       return vsdsubsObj.
+      140     end method.
+      141       method public class vsdsubs getVSDsubs ( iId as integer , idb-num as integer ):
+      142           define variable vsdsubsObj as class vsdsubs no-undo .
+      143           vsdsubsObj = new vsdsubs ().
+      144           for first buf_vsd no-lock where buf_vsd.id = iId and buf_vsd.db-num = idb-num:
+      145             vsdsubsObj:AddItem(getDataStorage (buffer buf_vsd)).
+      146           end.
+      147           return vsdsubsObj.
+      148       end.
+      149       method public class vsdsub getVSDsub ( iId as integer , idb-num as integer ):
+      150           define variable vsdsubObj as class vsdsub no-undo .
+      151           for first buf_vsd no-lock where buf_vsd.id = iId and buf_vsd.db-num = idb-num:
+      152              vsdsubObj = getDataStorage (buffer buf_vsd).
+      153           end.
+      154           return vsdsubObj.
+      155       end method.
+      156       method public handle getVSDQuery (input inObjType    as character,
+      157                                               input  inObjCode    as int64 ,
+      158                                               input inStatusList as character,
+      159                                               input ibegdate as date,
+      160                                               input ienddate as date  ):
+      161         define variable vsdsubsObj as class vsdsubs no-undo .
+      162         define variable vbegdate         as datetime-tz no-undo.
+      163         define variable venddate         as datetime-tz no-undo.
+      164         define variable vliststatusquery as character no-undo.
+      165         define variable hQuery           as handle  no-undo .
+      166         define variable vi               as integer no-undo.
+      167         define variable vsdSts as class ibs.th.str.mercury.vsdstatustype no-undo.
+      168         vsdSts     = new ibs.th.str.mercury.vsdstatustype ().
+      169         vsdsubsObj = new vsdsubs ().
+      170         assign
+      171            vbegdate = datetime-tz (ibegdate)
+      172            venddate = datetime-tz (ienddate + 1) - 1
+      173         .
+      174         define variable vHb as handle no-undo.
+      175         define variable v-inform as character no-undo.
+      176         define variable v-ind as integer no-undo.
+      177         vHb = buffer buf_vsd:HANDLE.
+      178         v-inform = vHb:INDEX-INFORMATION(1).
+      179         do while v-inform <> ? and not v-inform begins "objstst,"
+      180       on error undo, return error
+      181       :
+      182         assign
+      183           v-ind    = v-ind + 1
+      184           v-inform = vHb:index-information( v-ind )
+      185         .
+      186       end.
+      187         create query hQuery.
+      188         hQuery:set-buffers(buffer buf_vsd:HANDLE).
+      189         define variable mstrquery as character no-undo.
+      190         if v-inform begins "objstst,"
+      191         then
+      192         do:
+      193            mstrquery = "FOR EACH buf_vsd where " .
+      194            do vi = 1 to num-entries(inStatusList):
+      195               if vi ne 1 then mstrquery = mstrquery + " or ".
+      196               mstrquery = mstrquery  + " (                buf_vsd.obj-type eq " + QUOTER(inObjType) +
+      197                                                     " and buf_vsd.obj-code eq " + QUOTER(string (inObjCode)) +
+      198                                                     " and buf_vsd.status_ eq " + entry(vi,inStatusList) +
+      199                                                     (  (
+      200                                                       " and  buf_vsd.fact-datetime >= " + QUOTER(string (vbegdate)) +
+      201                                                       " and buf_vsd.fact-datetime <= " + QUOTER(string (venddate)) + " "
+      202                                                     ))
+      203                                                     + ")".
+      204            end.
+      205         end.
+      206         else do:
+      207            mstrquery = "FOR EACH buf_vsd where                buf_vsd.obj-type eq " + QUOTER(inObjType) +
+      208                                                         " and buf_vsd.obj-code eq " + QUOTER(string (inObjCode)) +
+      209                                                         " and can-do(" + QUOTER(inStatusList) + ",string (buf_vsd.status_))" +
+      210                                                         " and (( buf_vsd.fact-datetime >= " + QUOTER(string (vbegdate)) +
+      211                                                         " and buf_vsd.fact-datetime <= " + QUOTER(string (venddate)) + ") "
+      212                                                         + vliststatusquery + ")".
+      213         end.
+      214         hQuery:query-prepare(mstrquery).
+      215         hQuery:query-open.
+      216         hQuery:get-first().
+      217         return hquery.
+      218     end method.
+      219       method public class vsdsubs getVSDsubsForVsdSub (input inVsdSub    as class vsdsub ):
+      220           define variable vsdsubsObj as class vsdsubs no-undo .
+      221           vsdsubsObj = new vsdsubs ().
+      222           vsdsubsObj:AddItem(inVsdSub).
+      223           return vsdsubsObj.
+      224     end method.
+      225     method private void setDataStorage (input invsdObj as class vsdsub, buffer inbf_vsd for ub.vsd ):
+      226       inbf_vsd.UUID            = invsdObj:UUID.
+      227       inbf_vsd.economic-sub    = invsdObj:EconomicSub.
+      228       inbf_vsd.date-cr         = invsdObj:DateCr.
+      229       inbf_vsd.date-out        = invsdObj:DateOut.
+      230       inbf_vsd.type-prod       = invsdObj:TypeProd.
+      231       inbf_vsd.expiry-date-2   = invsdObj:ExpiryDate2.
+      232       inbf_vsd.qnty            = invsdObj:Qnty.
+      233       inbf_vsd.expiry-out-date = invsdObj:ExpiryOutDate.
+      234       inbf_vsd.num-part        = invsdObj:NumPart.
+      235       inbf_vsd.note            = invsdObj:Note.
+      236       inbf_vsd.msg-err         = invsdObj:MsgErr.
+      237       inbf_vsd.vsd-num         = invsdObj:VsdNum.
+      238       inbf_vsd.expiry-date     = invsdObj:ExpiryDate.
+      239       inbf_vsd.vsd-type        = invsdObj:VSDType.
+      240       inbf_vsd.part-key        = invsdObj:PartKey.
+      241       inbf_vsd.status_         = invsdObj:Status_.
+      242       inbf_vsd.gds-code        = invsdObj:GdsCode.
+      243       inbf_vsd.fact-datetime   = invsdObj:FactDatetime.
+      244       inbf_vsd.obj-type        = invsdObj:ObjType.
+      245       inbf_vsd.obj-code        = invsdObj:ObjCode.
+      246       inbf_vsd.cli-type        = invsdObj:CliType.
+      247       inbf_vsd.cli-code        = invsdObj:CliCode.
+      248       inbf_vsd.gds-guid        = invsdObj:GdsGuid.
+      249       inbf_vsd.gds-name-merc   = invsdObj:GdsName.
+      250       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"TransportType",invsdObj:TransportType).
+      251       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"Transport",invsdObj:Transport).
+      252       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"CarNum",invsdObj:CarNum).
+      253       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"ContainerNum",invsdObj:ContainerNum).
+      254       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"TrailerNum",invsdObj:TrailerNum).
+      255       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"OrigCountryGuid",invsdObj:OrigCountryGuid).
+      256       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"ProducerGuid",invsdObj:ProducerGuid).
+      257       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"ProducerRole",invsdObj:ProducerRole).
+      258       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"ProductGuid",invsdObj:ProductGuid).
+      259       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"SubProductGuid",invsdObj:SubProductGuid).
+      260       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"UnitGuid",invsdObj:UnitGuid).
+      261       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"Perishable",invsdObj:Perishable).
+      262       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"CLiBeGuid",invsdObj:CLiBeGuid).
+      263       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"CLiEntGuid",invsdObj:CLiEntGuid).
+      264       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"TTNissueSeries",invsdObj:TTNissueSeries).
+      265       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"TTNissueNumber",invsdObj:TTNissueNumber).
+      266       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"TTNissueDate",invsdObj:TTNissueDate).
+      267       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"TTNtype",invsdObj:TTNtype).
+      268       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"TTNrelationshipType",invsdObj:TTNrelationshipType).
+      269       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"PurposeGuid",invsdObj:PurposeGuid).
+      270       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"CargoInspected",invsdObj:CargoInspected).
+      271       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"CargoExpertized",invsdObj:CargoExpertized).
+      272       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"LocationProsperity",invsdObj:LocationProsperity).
+      273       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"BrokerGuid",invsdObj:BrokerGuid).
+      274       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"PackageLevel",invsdObj:PackageLevel).
+      275       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"PackageGuid",invsdObj:PackageGuid).
+      276       setAttr(inbf_vsd.ID,inbf_vsd.db-num,"PackageQnty",invsdObj:PackageQnty).
+      277       release inbf_vsd.
+      278     end.
+      279     method private class vsdsub getDataStorage ( buffer inbf_vsd for ub.vsd ):
+      280       define variable vsdsubObj  as class vsdsub  no-undo .
+      281       vsdsubObj = new vsdsub ().
+      282       assign
+      283         vsdsubObj:ID            = inbf_vsd.id
+      284         vsdsubObj:DBNum         = inbf_vsd.db-num
+      285         vsdsubObj:UUID          = trim (inbf_vsd.UUID)
+      286         vsdsubObj:EconomicSub   = inbf_vsd.economic-sub
+      287         vsdsubObj:DateCr        = inbf_vsd.date-cr
+      288         vsdsubObj:DateOut       = inbf_vsd.date-out
+      289         vsdsubObj:TypeProd      = inbf_vsd.type-prod
+      290         vsdsubObj:ExpiryDate2   = inbf_vsd.expiry-date-2
+      291         vsdsubObj:Qnty          = inbf_vsd.qnty
+      292         vsdsubObj:ExpiryOutDate = inbf_vsd.expiry-out-date
+      293         vsdsubObj:NumPart       = inbf_vsd.num-part
+      294         vsdsubObj:Note          = inbf_vsd.note
+      295         vsdsubObj:MsgErr        = inbf_vsd.msg-err
+      296         vsdsubObj:VsdNum        = inbf_vsd.vsd-num
+      297         vsdsubObj:ExpiryDate    = inbf_vsd.expiry-date
+      298         vsdsubObj:PartKey       = inbf_vsd.part-key
+      299         vsdsubObj:Status_       = inbf_vsd.status_
+      300         vsdsubObj:GdsCode       = inbf_vsd.gds-code
+      301         vsdsubObj:FactDatetime  = inbf_vsd.fact-datetime
+      302         vsdsubObj:ObjType       = inbf_vsd.obj-type
+      303         vsdsubObj:ObjCode       = inbf_vsd.obj-code
+      304         vsdsubObj:VSDType       = inbf_vsd.vsd-type
+      305         vsdsubObj:CliType       = inbf_vsd.cli-type
+      306         vsdsubObj:CliCode       = inbf_vsd.cli-code
+      307         vsdsubObj:GdsGuid       = inbf_vsd.gds-guid
+      308         vsdsubObj:GdsName       = inbf_vsd.gds-name-merc
+      309         vsdsubObj:VsdRecid      = recid (inbf_vsd).
+      310       .
+      311       return vsdsubObj.
+      312     end.
+      313     method public character  GetAttr (iID as integer, idb-num as integer ,iattrcode as character ):
+      314        define buffer buf_vsd-attr for ub.vsd-attr.
+      315        find first buf_vsd-attr where buf_vsd-attr.ID        = iID
+      316                                  and buf_vsd-attr.db-num    = idb-num
+      317                                  and buf_vsd-attr.attr-code = iAttrCode
+      318        no-lock no-error.
+      319        return if not available buf_vsd-attr then "" else buf_vsd-attr.attr-value.
+      320     end.
+      321     method public void  setAttr (iID as integer, idb-num as integer ,iattrcode as character,iattrvalue as character  ):
+      322       define buffer buf_vsd-attr for ub.vsd-attr.
+      323       find first buf_vsd-attr exclusive-lock where buf_vsd-attr.ID        = iID
+      324                                                and buf_vsd-attr.db-num    = idb-num
+      325                                                and buf_vsd-attr.attr-code = iattrcode
+      326                                                no-error .
+      327       if not available buf_vsd-attr
+      328       then do :
+      329         if  iattrvalue > ""
+      330         then do:
+      331             create buf_vsd-attr.
+      332             assign
+      333               buf_vsd-attr.ID        = iID
+      334               buf_vsd-attr.db-num    = idb-num
+      335               buf_vsd-attr.attr-code = iattrcode
+      336               buf_vsd-attr.attr-value = iattrvalue
+      337             .
+      338          end.
+      339       end.
+      340       else do:
+      341         if  iattrvalue > ""
+      342         then
+      343            buf_vsd-attr.attr-value = iattrvalue.
+      344         else
+      345            delete buf_vsd-attr.
+      346       end.
+      347     end.
+      348     method public logical exsistuuid (inVsdSubObj as class vsdsub):
+      349       define variable trnDoc as character no-undo.
+      350       define variable isExsistTRN as logical no-undo.
+      351       return exsistuuid(inVsdSubObj, output isExsistTRN ).
+      352     end.
+      353     method public logical exsistuuidwithtrn (inVsdSubObj as class vsdsub):
+      354       define variable trnDoc as character no-undo.
+      355       define variable isExsistTRN as logical no-undo.
+      356       if exsistuuid(inVsdSubObj, output isExsistTRN )
+      357       then
+      358         if isExsistTRN
+      359           then return true.
+      360       return false.
+      361     end.
+      362     method private logical exsistuuid (inVsdSubObj as class vsdsub, output isExsistTRN as log):
+      363       define variable trnDoc as character no-undo.
+      364       find first buf_vsd no-lock where recid (buf_vsd) <> inVsdSubObj:VsdRecid and buf_vsd.UUID = inVsdSubObj:UUID no-error.
+      365       if available (buf_vsd)
+      366       then do:
+      367         trnDoc = entry (8,buf_vsd.part-key, chr(3)) no-error.
+      368         if can-find (first ub.trn-doc no-lock where ub.trn-doc.doc-code = trnDoc)
+      369           then isExsistTRN = true.
+      370           else isExsistTRN = false.
+      371         Msg = substitute ("ВСД UUID &1 уже заведен в системе. Документ - &2. Товар - &3.", buf_vsd.UUID, trnDoc, buf_vsd.gds-code ).
+      372         inVsdSubObj:setStatusErr(true).
+      373         inVsdSubObj:MsgErr = Msg.
+      374         release buf_vsd.
+      375         return true.
+      376       end.
+      377       return false.
+      378     end.
+      379     method public logical exsistvsd (buffer inbf_dl for ub.doc-line):
+      380       define variable keyrecObj as class keyrec no-undo.
+      381       define variable keyrec as character no-undo.
+      382       define variable vOk       as logical no-undo.
+      383       define buffer buf_parts for ub.parts.
+      384       keyrecObj = new keyrec ().
+      385       block-part:
+      386       for each buf_parts no-lock where buf_parts.out-code = inbf_dl.doc-code
+      387                                    and buf_parts.obj-type  = inbf_dl.obj-type
+      388                                    and buf_parts.obj-code  = inbf_dl.obj-code
+      389                                    and buf_parts.artic = inbf_dl.artic
+      390                                    and buf_parts.prod-type = inbf_dl.prod-type
+      391                                    and buf_parts.prod-code = inbf_dl.prod-code
+      392       :
+      393         if buf_parts.fact-qnty <= 0
+      394         and inbf_dl.fact-qnty > 0
+      395         then next block-part .
+      396         keyrecObj:GenKeyRec('parts':U, buffer buf_parts:handle, output keyrec).
+      397         vok = can-find (first buf_vsd where buf_vsd.part-key = keyrec and buf_vsd.UUID <> "" and buf_vsd.UUID <> ?) .
+      398         if not vok then leave block-part.
+      399       end.
+      400       delete object keyrecObj.
+      401       return vok.
+      402     end.
+      403     method public logical exsistvsd (buffer inbf_gd-dtl for ub.gds-dtl):
+      404       define variable keyrecObj as class keyrec no-undo.
+      405       define variable keyrec as character no-undo.
+      406       define variable vOk       as logical no-undo.
+      407       define buffer buf_parts for ub.parts.
+      408       keyrecObj = new keyrec ().
+      409       block-part:
+      410       for each buf_parts no-lock where buf_parts.out-code = inbf_gd-dtl.doc-code
+      411                                    and buf_parts.obj-type  = inbf_gd-dtl.obj-type
+      412                                    and buf_parts.obj-code  = inbf_gd-dtl.obj-code
+      413                                    and buf_parts.artic = inbf_gd-dtl.artic
+      414                                    and buf_parts.prod-type = inbf_gd-dtl.prod-type
+      415                                    and buf_parts.prod-code = inbf_gd-dtl.prod-code
+      416       :
+      417         if buf_parts.fact-qnty <= 0
+      418         and inbf_gd-dtl.fact-qnty > 0
+      419         then next block-part .
+      420         keyrecObj:GenKeyRec('parts':U, buffer buf_parts:handle, output keyrec).
+      421         vok = can-find ( first buf_vsd where buf_vsd.part-key = keyrec and buf_vsd.UUID <> "" and buf_vsd.UUID <> ?) .
+      422         if not vok then leave block-part.
+      423       end.
+      424       delete object keyrecObj.
+      425       return vok.
+      426     end.
+      427   end class.

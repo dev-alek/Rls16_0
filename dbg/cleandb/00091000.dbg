@@ -1,0 +1,254 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00091000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cut/00091000.p $":U .
+        7   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 91.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define input parameter vardate-actual-docs    as date      no-undo.
+       13   define input parameter varcall-back           as handle no-undo.
+       14   define variable vDeleted as int64     no-undo.
+       15   define variable vResult  as character no-undo.
+       16   define buffer buf_clients for ub.clients.
+       17   find ub.sys-ctrl no-lock.
+       18   if not available ub.sys-ctrl then do:
+       19      return error "Не найдена уникальная запись sys-ctrl.".
+       20   end.
+       21   define variable v-cash-pay              as integer no-undo .
+       22   define variable v-obj-type              as character no-undo .
+       23   define variable v-obj-code              as integer no-undo .
+       24   define variable v-export                as logical no-undo .
+       25   define buffer fin-doc       for ub.fin-doc.
+       26   define buffer c-fin-doc     for ub.c-fin-doc.
+       27   define buffer ord-doc       for ub.ord-doc.
+       28   define buffer trn-doc       for ub.trn-doc.
+       29   define buffer c-trn-doc     for ub.trn-doc.
+       30   define buffer inkas         for ub.inkas.
+       31   define buffer c-inkas       for ub.inkas.
+       32   define buffer payment       for ub.payment.
+       33   define buffer buf_payment   for ub.payment.
+       34   define buffer stop-list     for ub.stop-list.
+       35   define buffer buf_stop-list for ub.stop-list.
+       36   on delete of ub.payment   override do: end.
+       37   on delete of ub.stop-list override do: end.
+       38   for each buf_clients no-lock
+       39      where buf_clients.db-num <> ?
+       40   :
+       41   _payment:
+       42   for each payment no-lock where
+       43            payment.host-code = buf_clients.host-code
+       44        and payment.status_ <> ""
+       45        and payment.fact-date < vardate-actual-docs
+       46   break
+       47   by payment.source-type
+       48   by payment.source-ref
+       49   on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+       50     v-export = no.
+       51     if payment.d-card = '':u
+       52     or not (payment.source-type = 'накл':U
+       53            or
+       54            payment.source-type = 'касс':U)
+       55     then do:
+       56       case payment.source-type:
+       57         when 'платеж':U then do:
+       58           if payment.pmnt-code begins "-" then do:
+       59             find first c-fin-doc no-lock where
+       60                        c-fin-doc.host-code = payment.host-code
+       61                    and c-fin-doc.fin-doc-code = integer(entry(2, payment.source-ref, "-"))
+       62                    and c-fin-doc.is-del = yes
+       63             no-error.
+       64             if available c-fin-doc then do:
+       65               v-export = yes.
+       66             end.
+       67           end.
+       68           else do:
+       69             find first fin-doc no-lock where
+       70                        fin-doc.host-code = payment.host-code
+       71                    and fin-doc.fin-doc-code = integer(payment.source-ref)
+       72             no-error.
+       73             if available fin-doc then do:
+       74               v-export = yes.
+       75             end.
+       76           end.
+       77         end.
+       78         when 'заказ':U then do:
+       79           find first ord-doc no-lock where
+       80                      ord-doc.doc-code = payment.source-ref no-error.
+       81           if available ord-doc then do:
+       82             v-export = yes.
+       83           end.
+       84         end.
+       85       end case.
+       86       if not v-export then do:
+       87         run cleanPayment in this-procedure.
+       88         find first buf_payment exclusive-lock where
+       89              recid(buf_payment) = recid(payment) no-error no-wait.
+       90   if not avail buf_payment then
+       91   do:
+       92     undo, return error "Ошибка удаления payment. Запись занята другим пользователем.".
+       93   end.
+       94   delete buf_payment.
+       95   vDeleted = vDeleted + 1.
+       96         next _payment.
+       97       end.
+       98     end.
+       99     else do:
+      100       if payment.source-type = 'накл':U then do:
+      101         find first trn-doc no-lock where
+      102                    trn-doc.doc-code = payment.source-ref no-error.
+      103         if not available trn-doc then do:
+      104           find first c-trn-doc no-lock where
+      105                      c-trn-doc.doc-code = payment.source-ref no-error.
+      106           if not available c-trn-doc then do:
+      107             run cleanPayment in this-procedure.
+      108             find first buf_payment exclusive-lock where
+      109              recid(buf_payment) = recid(payment) no-error no-wait.
+      110   if not avail buf_payment then
+      111   do:
+      112     undo, return error "Ошибка удаления payment. Запись занята другим пользователем.".
+      113   end.
+      114   delete buf_payment.
+      115   vDeleted = vDeleted + 1.
+      116           end.
+      117         end.
+      118       end.
+      119       if payment.source-type = 'касс':U then do:
+      120         find first inkas no-lock where
+      121                    inkas.inkas-code = payment.source-ref no-error.
+      122         if not available inkas then do:
+      123           find first c-inkas no-lock where
+      124                      c-inkas.inkas-code = payment.source-ref no-error.
+      125           if not available c-inkas then do:
+      126             run cleanPayment in this-procedure.
+      127             find first buf_payment exclusive-lock where
+      128              recid(buf_payment) = recid(payment) no-error no-wait.
+      129   if not avail buf_payment then
+      130   do:
+      131     undo, return error "Ошибка удаления payment. Запись занята другим пользователем.".
+      132   end.
+      133   delete buf_payment.
+      134   vDeleted = vDeleted + 1.
+      135           end.
+      136         end.
+      137       end.
+      138     end.
+      139   end.
+      140   for each stop-list no-lock where
+      141            stop-list.status_  = 'факт':U
+      142       and stop-list.fact-date < vardate-actual-docs
+      143   on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      144   :
+      145     run cleanStopList in this-procedure.
+      146     find first buf_stop-list exclusive-lock where
+      147              recid(buf_stop-list) = recid(stop-list) no-error no-wait.
+      148   if not avail buf_stop-list then
+      149   do:
+      150     undo, return error "Ошибка удаления stop-list. Запись занята другим пользователем.".
+      151   end.
+      152   delete buf_stop-list.
+      153   vDeleted = vDeleted + 1.
+      154   end.
+      155   end.
+      156   vResult = substitute("Произведена чистка таблиц: &1~nУдалено записей - &2.", "Платежи с историей Стоп-листы с историей", vDeleted).
+      157   return vResult.
+      158   procedure cleanPayment:
+      159     define buffer payment-attr for ub.payment-attr.
+      160   on delete of ub.payment-attr override do: end.
+      161   for each payment-attr exclusive-lock
+      162       where payment-attr.pmnt-code = payment.pmnt-code
+      163   on error undo, return error
+      164   :
+      165         delete payment-attr no-error.
+      166         if error-status:error then
+      167           undo, return error error-status:get-message(1).
+      168         vDeleted = vDeleted + 1.
+      169   end.
+      170     define buffer c-payment for ub.c-payment.
+      171   on delete of ub.c-payment override do: end.
+      172   for each c-payment exclusive-lock
+      173       where c-payment.pmnt-code = c-payment.pmnt-code
+      174   on error undo, return error
+      175   :
+      176         delete c-payment no-error.
+      177         if error-status:error then
+      178           undo, return error error-status:get-message(1).
+      179         vDeleted = vDeleted + 1.
+      180   end.
+      181     define buffer c-payment-attr for ub.c-payment-attr.
+      182   on delete of ub.c-payment-attr override do: end.
+      183   for each c-payment-attr exclusive-lock
+      184       where c-payment-attr.pmnt-code = payment.pmnt-code
+      185   on error undo, return error
+      186   :
+      187         delete c-payment-attr no-error.
+      188         if error-status:error then
+      189           undo, return error error-status:get-message(1).
+      190         vDeleted = vDeleted + 1.
+      191   end.
+      192   end procedure.
+      193   procedure cleanStopList:
+      194     define buffer stop-list-attr for ub.stop-list-attr.
+      195   on delete of ub.stop-list-attr override do: end.
+      196   for each stop-list-attr exclusive-lock
+      197       where stop-list-attr.classif-type = stop-list.classif-type
+      198          and stop-list-attr.stop-list-code = stop-list.stop-list-code
+      199   on error undo, return error
+      200   :
+      201         delete stop-list-attr no-error.
+      202         if error-status:error then
+      203           undo, return error error-status:get-message(1).
+      204         vDeleted = vDeleted + 1.
+      205   end.
+      206     define buffer stop-list-line for ub.stop-list-line.
+      207   on delete of ub.stop-list-line override do: end.
+      208   for each stop-list-line exclusive-lock
+      209       where stop-list-line.classif-type = stop-list.classif-type
+      210          and stop-list-line.stop-list-code = stop-list.stop-list-code
+      211   on error undo, return error
+      212   :
+      213         delete stop-list-line no-error.
+      214         if error-status:error then
+      215           undo, return error error-status:get-message(1).
+      216         vDeleted = vDeleted + 1.
+      217   end.
+      218     define buffer stop-list-line-attr for ub.stop-list-line-attr.
+      219   on delete of ub.stop-list-line-attr override do: end.
+      220   for each stop-list-line-attr exclusive-lock
+      221       where stop-list-line-attr.classif-type = stop-list.classif-type
+      222          and stop-list-line-attr.stop-list-code = stop-list.stop-list-code
+      223   on error undo, return error
+      224   :
+      225         delete stop-list-line-attr no-error.
+      226         if error-status:error then
+      227           undo, return error error-status:get-message(1).
+      228         vDeleted = vDeleted + 1.
+      229   end.
+      230     define buffer c-stop-list for ub.c-stop-list.
+      231   on delete of ub.c-stop-list override do: end.
+      232   for each c-stop-list exclusive-lock
+      233       where c-stop-list.classif-type = stop-list.classif-type
+      234          and c-stop-list.stop-list-code = stop-list.stop-list-code
+      235   on error undo, return error
+      236   :
+      237         delete c-stop-list no-error.
+      238         if error-status:error then
+      239           undo, return error error-status:get-message(1).
+      240         vDeleted = vDeleted + 1.
+      241   end.
+      242     define buffer c-stop-list-line for ub.c-stop-list-line.
+      243   on delete of ub.c-stop-list-line override do: end.
+      244   for each c-stop-list-line exclusive-lock
+      245       where c-stop-list-line.classif-type   = stop-list.classif-type
+      246          and c-stop-list-line.stop-list-code = stop-list.stop-list-code
+      247   on error undo, return error
+      248   :
+      249         delete c-stop-list-line no-error.
+      250         if error-status:error then
+      251           undo, return error error-status:get-message(1).
+      252         vDeleted = vDeleted + 1.
+      253   end.
+      254   end procedure.

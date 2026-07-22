@@ -1,0 +1,189 @@
+        1   block-level on error undo, throw.
+        2   define input  parameter ipar as character no-undo.
+        3   define output parameter oOk as logical no-undo.
+        4   define variable vss-revision    as character no-undo init "$Revision: d7c9134a48bd, 4585, rls $":U .
+        5   define variable vss-author      as character no-undo init "$Author: DRuban $":U .
+        6   define variable vss-date        as character no-undo init "$Date: 2022/11/15 11:20:19 $":U .
+        7   define variable vss-workfile    as character no-undo init "$Workfile: shiftfactordercheck.p $":U .
+        8   define variable vss-archive     as character no-undo init "$Archive: upd/shiftfactordercheck.p $":U .
+        9   define variable vss-description as character no-undo init "Выставление корректного факт ордера".
+       10   procedure vss-get-info :
+       11     define output parameter p-vss-revision    like vss-revision    no-undo .
+       12     define output parameter p-vss-author      like vss-author      no-undo .
+       13     define output parameter p-vss-date        like vss-date        no-undo .
+       14     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       15     define output parameter p-vss-archive     like vss-archive     no-undo .
+       16     define output parameter p-vss-description like vss-description no-undo .
+       17     assign
+       18       p-vss-revision    = vss-revision
+       19       p-vss-author      = vss-author
+       20       p-vss-date        = vss-date
+       21       p-vss-workfile    = vss-workfile
+       22       p-vss-archive     = vss-archive
+       23       p-vss-description = vss-description
+       24     .
+       25   end procedure.
+       26   procedure vss-get-parameters :
+       27     define output parameter p-vss-parameters as character no-undo .
+       28   end procedure.
+       29   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       30   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       31   define variable v-vssrevis-logger                   as handle    no-undo .
+       32   procedure vss-logevent :
+       33     define input  parameter p-extra-paramters as character no-undo .
+       34     define variable v-vssrevis-parameters as character no-undo .
+       35     do
+       36     on error undo, return error return-value
+       37     :
+       38       if  valid-handle(v-vssrevis-logger)
+       39       and v-vssrevis-logger :get-signature("logevent") <> ""
+       40       then do:
+       41         run vss-get-parameters in this-procedure
+       42           (output v-vssrevis-parameters
+       43           ).
+       44         run logevent in v-vssrevis-logger
+       45           (input vss-workfile
+       46           ,input vss-revision
+       47           ,input v-vssrevis-parameters
+       48           ,input p-extra-paramters
+       49           ).
+       50       end.
+       51     end.
+       52   end procedure.
+       53   assign
+       54     v-vssrevis-logger = g#vssrevis-logger
+       55   .
+       56   if  valid-handle(v-vssrevis-logger)
+       57   and v-vssrevis-logger :get-signature("logevent") <> ""
+       58   then do:
+       59     assign
+       60       v-vssrevis-logevent = true
+       61     .
+       62     run vss-logevent in this-procedure (input vss-description) .
+       63   end.
+       64   define new global shared variable g#language as character no-undo .
+       65   if g#language <> '' and g#language <> 'rus':U then do:
+       66     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       67   end.
+       68   define variable logFile  as character no-undo.
+       69   define buffer buf_clob-bind for ub.clob-bind.
+       70   define stream logOutput.
+       71   find first _file where
+       72              _file._file-name = "pl-level-mm"
+       73        no-lock no-error.
+       74   if not avail _file then do:
+       75     oOk = false.
+       76     return.
+       77   end.
+       78   find first sys-ctrl no-lock no-error.
+       79   if     available sys-ctrl
+       80      and sys-ctrl.db-num = 0 then do:
+       81       logFile = "si_pokmi.log".
+       82   define variable v-param     as decimal no-undo.
+       83   define variable v-delta-min as decimal   no-undo.
+       84   define variable v-delta     as decimal   no-undo.
+       85   define buffer sr-izmerenia for ub.sr-izmerenia.
+       86   for each sr-izmerenia no-lock break by sr-izmerenia.node-code:
+       87     if first(sr-izmerenia.node-code) then
+       88       output stream logOutput to value(logFile).
+       89     put stream logOutput unformatted
+       90       substitute("Код СИ: &1; Модель: &2",
+       91                sr-izmerenia.node-code,
+       92                sr-izmerenia.sr-model)
+       93       skip
+       94     .
+       95     v-delta-min = 0.
+       96     if sr-izmerenia.sr-level then
+       97     do:
+       98       case sr-izmerenia.sr-type-izm:
+       99         when 1 then assign v-delta-min = 0.01 v-delta = 3.
+      100         when 2 then assign v-delta-min = 0.01 v-delta = 3.
+      101         when 3 then assign v-delta-min = 0.01 v-delta = ?.
+      102       end case.
+      103       v-param = sr-izmerenia.sr-abs-err-neft-water.
+      104       if abs(v-param) < v-delta-min or v-param > v-delta or v-param < (-1) * v-delta then
+      105         put stream logOutput unformatted
+      106           substitute("  Значение ~"Абс. погрешность измерений ур. нефтепродукта и подтоварной воды~" &1 выходит за границы допустимого диапазона  &2...&3",
+      107                      right-trim(right-trim(string(v-param,"9.999"),"0"),"."),
+      108                      right-trim(right-trim(string(v-delta-min,"9.99"),"0"),"."),
+      109                      if v-delta = ? then "-" else right-trim(right-trim(string(v-delta,"9.999"),"0"),"."))
+      110           skip
+      111         .
+      112       v-delta-min = 0.
+      113       v-param = sr-izmerenia.sr-abs-err-water.
+      114       if v-param > v-delta or v-param < (-1) * v-delta then
+      115         put stream logOutput unformatted
+      116           substitute("  Значение ~"Абс. погрешность измерений ур. подтоварной воды~" &1 выходит за границы допустимого диапазона  &2...&3",
+      117                      right-trim(right-trim(string(v-param,"9.999"),"0"),"."),
+      118                      right-trim(right-trim(string(v-delta-min,"9.99"),"0"),"."),
+      119                      if v-delta = ? then "-" else right-trim(right-trim(string(v-delta,"9.999"),"0"),"."))
+      120           skip
+      121         .
+      122     end.
+      123     if sr-izmerenia.sr-temperature then
+      124     do:
+      125       case sr-izmerenia.sr-type-izm:
+      126         when 1 then v-delta = 0.5.
+      127         when 2 then v-delta = 0.5.
+      128         when 3 then v-delta = 0.2.
+      129       end case.
+      130       v-param = sr-izmerenia.sr-abs-err-temp-vol.
+      131       if v-param > v-delta or v-param < (-1) * v-delta then
+      132         put stream logOutput unformatted
+      133           substitute("  Значение ~"Абс. погрешность из. температуры (объем)~" &1 выходит за границы допустимого диапазона  &2...&3",
+      134                      right-trim(right-trim(string(v-param,"9.999"),"0"),"."),
+      135                      right-trim(right-trim(string(v-delta-min,"9.99"),"0"),"."),
+      136                      if v-delta = ? then "-" else right-trim(right-trim(string(v-delta,"9.999"),"0"),"."))
+      137           skip
+      138         .
+      139       v-param = sr-izmerenia.sr-abs-err-temp-dens.
+      140       if v-param > v-delta or v-param < (-1) * v-delta then
+      141         put stream logOutput unformatted
+      142           substitute("  Значение ~"Абс. погрешность из. температуры (плотность)~" &1 выходит за границы допустимого диапазона  &2...&3",
+      143                      right-trim(right-trim(string(v-param,"9.999"),"0"),"."),
+      144                      right-trim(right-trim(string(v-delta-min,"9.99"),"0"),"."),
+      145                      if v-delta = ? then "-" else right-trim(right-trim(string(v-delta,"9.999"),"0"),"."))
+      146           skip
+      147         .
+      148     end.
+      149     if sr-izmerenia.sr-density then
+      150     do:
+      151       case sr-izmerenia.sr-type-izm:
+      152         when 1 then v-delta = 1.
+      153         when 2 then v-delta = 0.5.
+      154         when 3 then v-delta = 0.5.
+      155       end case.
+      156       v-param = sr-izmerenia.sr-abs-err-dens.
+      157       if v-param > v-delta or v-param < (-1) * v-delta then
+      158         put stream logOutput unformatted
+      159           substitute("  Значение ~"Абсолютная погрешность измерений плотности~" &1 выходит за границы допустимого диапазона  &2...&3",
+      160                      right-trim(right-trim(string(v-param,"9.999"),"0"),"."),
+      161                      right-trim(right-trim(string(v-delta-min,"9.99"),"0"),"."),
+      162                      if v-delta = ? then "-" else right-trim(right-trim(string(v-delta,"9.999"),"0"),"."))
+      163           skip
+      164         .
+      165       v-delta = 1.5.
+      166       v-param = sr-izmerenia.sr-abs-err-dens-lgas-liquid.
+      167       if v-param > v-delta or v-param < (-1) * v-delta then
+      168         put stream logOutput unformatted
+      169           substitute("  Значение ~"Абсолютная погрешность измерений плотности ЖФ~" &1 выходит за границы допустимого диапазона  &2...&3",
+      170                      right-trim(right-trim(string(v-param,"9.999"),"0"),"."),
+      171                      right-trim(right-trim(string(v-delta-min,"9.99"),"0"),"."),
+      172                      if v-delta = ? then "-" else right-trim(right-trim(string(v-delta,"9.999"),"0"),"."))
+      173           skip
+      174         .
+      175       v-param = sr-izmerenia.sr-abs-err-dens-lgas-vapor.
+      176       if v-param > v-delta or v-param < (-1) * v-delta then
+      177         put stream logOutput unformatted
+      178           substitute("  Значение ~"Абсолютная погрешность измерений плотности ПГФ~" &1 выходит за границы допустимого диапазона  &2...&3",
+      179                      right-trim(right-trim(string(v-param,"9.999"),"0"),"."),
+      180                      right-trim(right-trim(string(v-delta-min,"9.99"),"0"),"."),
+      181                      if v-delta = ? then "-" else right-trim(right-trim(string(v-delta,"9.999"),"0"),"."))
+      182           skip
+      183         .
+      184     end.
+      185     if last(sr-izmerenia.node-code) then
+      186       output stream logOutput close.
+      187   end.
+      188   end.
+      189   oOk = true.

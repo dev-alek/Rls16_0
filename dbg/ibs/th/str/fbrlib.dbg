@@ -1,0 +1,238 @@
+        1   using Progress.Lang.*.
+        2   block-level on error undo, throw.
+        3   class ibs.th.str.fbrlib:
+        4     define property ReturnMsg as character no-undo
+        5       get.
+        6       private set.
+        7     define variable hndl-proc-key-rec as handle.
+        8     constructor public fbrlib ():
+        9       run str/fbrlib.p persistent set hndl-proc-key-rec .
+       10     end constructor.
+       11     destructor public fbrlib ():
+       12       if valid-handle(hndl-proc-key-rec) then delete object hndl-proc-key-rec .
+       13     end destructor.
+       14     method public void fbrcode-gen-recipe-code (
+       15       input p-obj-type        as character,
+       16       input p-obj-code        as integer,
+       17      output p-new-recipe-code as character
+       18     ):
+       19       run fbrcode-gen-recipe-code in hndl-proc-key-rec
+       20         (input p-obj-type
+       21         ,input p-obj-code
+       22        ,output p-new-recipe-code
+       23         ) .
+       24     end method.
+       25     method public void fbrlib-set-default-recipe (
+       26       input p-obj-type        as character,
+       27       input p-obj-code        as integer,
+       28       input p-gds-code        as integer
+       29     ):
+       30       run fbrlib-set-default-recipe in hndl-proc-key-rec
+       31         (input p-obj-type
+       32         ,input p-obj-code
+       33         ,input p-gds-code
+       34         ) .
+       35     end method.
+       36     method public void fbrlib-create-or-update-recipe-gds (
+       37       input p-recipe-code as character,
+       38       input p-gds-code    as integer,
+       39       input p-is-waste    as logical,
+       40       input p-qnty        as decimal,
+       41       input p-proc-number as integer,
+       42       input p-nws-self    as logical
+       43     ):
+       44       run fbrlib-create-or-update-recipe-gds in hndl-proc-key-rec
+       45         (input p-recipe-code
+       46         ,input p-gds-code
+       47         ,input p-is-waste
+       48         ,input p-qnty
+       49         ,input p-proc-number
+       50         ,input p-nws-self
+       51         ) .
+       52     end method.
+       53     method private int find-next-proc-number (
+       54       input p-recipe-code as character
+       55     ):
+       56     define variable v-max-proc-num as integer no-undo .
+       57     define buffer buf_proc_recipe-gds for ub.recipe-gds .
+       58       v-max-proc-num = 0 .
+       59       for each buf_proc_recipe-gds no-lock
+       60          where buf_proc_recipe-gds.recipe-code = p-recipe-code :
+       61          assign
+       62            v-max-proc-num = buf_proc_recipe-gds.proc-number when (v-max-proc-num < buf_proc_recipe-gds.proc-number)
+       63          .
+       64       end .
+       65       return (v-max-proc-num + 1) .
+       66     end method.
+       67     method public rowid create-new-recipe-gds (
+       68       input p-recipe-code as character,
+       69       input p-gds-code    as integer,
+       70       input p-qnty-net    as decimal,
+       71       input p-qnty-gross  as decimal,
+       72       input p-lf          as decimal,
+       73       input p-gds-recipe-code as character,
+       74       input p-wst         as integer
+       75     ):
+       76     define variable v-rowid        as rowid no-undo .
+       77     define variable v-max-proc-num as integer no-undo .
+       78     define buffer buf_goods      for ub.goods .
+       79     define buffer buf_recipe-gds for ub.recipe-gds .
+       80       v-rowid = ? .
+       81       find first buf_goods no-lock where buf_goods.gds-code = p-gds-code no-error .
+       82       if not available buf_goods then do:
+       83       undo, throw new Progress.Lang.AppError(
+       84         substitute("Код товара [&1] из рецепта [&2] отсутствует в справочнике товаров.", p-gds-code, p-recipe-code)
+       85       ) .
+       86       end .
+       87       find first buf_recipe-gds exclusive-lock
+       88            where buf_recipe-gds.recipe-code = p-recipe-code
+       89              and buf_recipe-gds.prod-type   = buf_goods.prod-type
+       90              and buf_recipe-gds.prod-code   = buf_goods.prod-code
+       91              and buf_recipe-gds.artic       = buf_goods.artic no-error no-wait .
+       92       if locked(buf_recipe-gds) then do:
+       93         undo, throw new Progress.Lang.AppError(
+       94           substitute("Запись о товаре [&1] в рецепте с ид. [&2] занята другим пользователем", p-gds-code, p-recipe-code)
+       95         ) .
+       96       end .
+       97       if available buf_recipe-gds then do:
+       98       end .
+       99       else do:
+      100         v-max-proc-num = find-next-proc-number (p-recipe-code) .
+      101         create buf_recipe-gds .
+      102         assign
+      103           buf_recipe-gds.recipe-code = p-recipe-code
+      104           buf_recipe-gds.prod-type   = buf_goods.prod-type
+      105           buf_recipe-gds.prod-code   = buf_goods.prod-code
+      106           buf_recipe-gds.artic       = buf_goods.artic
+      107           buf_recipe-gds.gds-code    = p-gds-code
+      108           buf_recipe-gds.proc-number = v-max-proc-num
+      109           buf_recipe-gds.coeff-waste = 0
+      110           buf_recipe-gds.calc-method = 1
+      111           buf_recipe-gds.nws-self    = no
+      112         .
+      113       end .
+      114       assign
+      115         buf_recipe-gds.qnty        = p-qnty-net
+      116         buf_recipe-gds.brutto-qnty = p-qnty-gross
+      117         buf_recipe-gds.coeff-waste = p-lf when p-lf <> ?
+      118         buf_recipe-gds.is-waste    = if p-wst = 1 then yes else no
+      119         buf_recipe-gds.gds-recipe-code = p-gds-recipe-code when p-gds-recipe-code <> ?
+      120       .
+      121       v-rowid = rowid(buf_recipe-gds) .
+      122       return v-rowid .
+      123     end method.
+      124     method public void fbrlib-create-or-update-recipe (
+      125       input p-mode            as character,
+      126       input p-obj-type        as character,
+      127       input p-obj-code        as integer,
+      128       input p-recipe-code     as character,
+      129       input p-recipe-type     as character,
+      130       input p-gds-code        as integer,
+      131       input p-name            as character,
+      132       input p-design          as character,
+      133       input p-order           as integer,
+      134       input p-quality         as character,
+      135       input p-ref-num         as character,
+      136       input p-technique       as character,
+      137       input p-template        as character,
+      138       input p-qnty            as decimal,
+      139       input p-portion-qnty    as integer,
+      140       input p-portion-weight  as decimal,
+      141      output p-new-recipe-code as character
+      142     ):
+      143       run fbrlib-create-or-update-recipe in hndl-proc-key-rec
+      144         ( input p-mode
+      145          ,input p-obj-type
+      146          ,input p-obj-code
+      147          ,input p-recipe-code
+      148          ,input p-recipe-type
+      149          ,input p-gds-code
+      150          ,input p-name
+      151          ,input p-design
+      152          ,input p-order
+      153          ,input p-quality
+      154          ,input p-ref-num
+      155          ,input p-technique
+      156          ,input p-template
+      157          ,input p-qnty
+      158          ,input p-portion-qnty
+      159          ,input p-portion-weight
+      160          ,output p-new-recipe-code
+      161         ) .
+      162     end method.
+      163     method public void create-new-recipe (
+      164       input p-mode            as character,
+      165       input p-recipe-code     as character,
+      166       input p-recipe-type     as character,
+      167       input p-recipe-name     as character,
+      168       input p-recipe-num      as character,
+      169       input p-gds-code        as integer,
+      170       input p-qnty-netto      as decimal,
+      171       input p-portion-qnty    as integer,
+      172       input p-portion-weight  as decimal,
+      173       input p-stts            as integer
+      174     ):
+      175     define buffer buf_recipe for ub.recipe .
+      176     define buffer buf_goods  for ub.goods .
+      177       find first buf_goods no-lock where buf_goods.gds-code = p-gds-code no-error.
+      178       if not available buf_goods then do:
+      179       undo, throw new Progress.Lang.AppError(
+      180         substitute("Код товара [&1] отсутствует в справочнике товаров.", p-gds-code)
+      181       ) .
+      182       end.
+      183       case p-mode:
+      184         when 'ДОБАВЛЕНИЕ':U then do:
+      185           if p-recipe-code > "":U then . else undo, throw new Progress.Lang.AppError("Не задан ид. рецепта при создании") .
+      186           create buf_recipe .
+      187           assign
+      188             buf_recipe.recipe-code      = p-recipe-code
+      189             buf_recipe.recipe-type      = p-recipe-type
+      190             buf_recipe.recipe-design    = ""
+      191             buf_recipe.recipe-order     = 0
+      192             buf_recipe.recipe-quality   = ""
+      193             buf_recipe.recipe-technique = ""
+      194             buf_recipe.recipe-template  = ""
+      195           .
+      196         end.
+      197         when 'ИЗМЕНЕНИЕ':U then do:
+      198           find first buf_recipe exclusive-lock where buf_recipe.recipe-code = p-recipe-code no-error no-wait .
+      199           if locked(buf_recipe) then do:
+      200             undo, throw new Progress.Lang.AppError(
+      201               substitute("Запись о рецепте с ид. [&1] занята другим пользователем", p-recipe-code)
+      202             ) .
+      203           end .
+      204           if not available buf_recipe then do:
+      205             undo, throw new Progress.Lang.AppError(
+      206               substitute("Запись о рецепте с ид. [&1] отсутствует", p-recipe-code)
+      207             ) .
+      208           end .
+      209           if buf_recipe.recipe-type <> p-recipe-type then do:
+      210             undo, throw new Progress.Lang.AppError(
+      211               substitute("Ошибка в типе при изменении рецепта с ид. [&1]. Тип рецепта изменять нельзя. Новый тип [&3], текущий тип [&2]",
+      212                          p-recipe-code, p-recipe-type, buf_recipe.recipe-type)
+      213             ) .
+      214           end .
+      215         end.
+      216         otherwise do:
+      217           undo, throw new Progress.Lang.AppError(
+      218             substitute("Ошибка задания типа операции для создания или измения рецепта. Задан тип операции: [&1]", p-mode)
+      219           ) .
+      220         end.
+      221       end case.
+      222       assign
+      223         buf_recipe.recipe-name    = ( if p-recipe-name > "" then p-recipe-name else buf_goods.gds-name )
+      224         buf_recipe.recipe-ref-num = p-recipe-num
+      225         buf_recipe.gds-code      = p-gds-code
+      226         buf_recipe.artic         = buf_goods.artic
+      227         buf_recipe.prod-type     = buf_goods.prod-type
+      228         buf_recipe.prod-code     = buf_goods.prod-code
+      229         buf_recipe.host-code     = 0
+      230         buf_recipe.obj-type      = "":U
+      231         buf_recipe.obj-code      = 0
+      232         buf_recipe.qnty           = p-qnty-netto
+      233         buf_recipe.portion-qnty   = p-portion-qnty
+      234         buf_recipe.portion-weight = p-portion-weight
+      235         buf_recipe.stts           = p-stts
+      236       .
+      237     end method.
+      238   end class.

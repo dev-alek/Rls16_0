@@ -1,0 +1,175 @@
+block-level on error undo, throw.
+on write of ub.trn-doc override do: end.
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+define variable vss-author      as character no-undo init "$Author: expertek $":U .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: setbgedt.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: bge/setbgedt.p $":U .
+define variable vss-description as character no-undo init "Устанавливает дату в поле bge-date".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define input parameter p-table-name as character    no-undo.
+define input parameter p-doc-code   as character    no-undo.
+define input parameter p-cur-date   as date         no-undo.
+    define buffer buf_trn-doc       for ub.trn-doc.
+    define buffer buf_c-trn-doc     for ub.c-trn-doc.
+    define buffer buf_price-doc     for ub.price-doc.
+    define buffer buf_ord-doc       for ub.ord-doc.
+    define variable v-err-message as character no-undo .
+do
+for buf_trn-doc
+  , buf_c-trn-doc
+  , buf_price-doc
+  , buf_ord-doc
+on error undo, return error
+:
+    case p-table-name
+    :
+        when 'trn-doc':U
+        then do:
+          find first buf_trn-doc exclusive-lock
+            where buf_trn-doc.doc-code = p-doc-code
+          no-wait
+          no-error
+          .
+          if not available buf_trn-doc
+          then do:
+            if locked buf_trn-doc
+            then do:
+              assign
+                v-err-message = substitute("&1 Документ &2 &3 заблокирован." , vss-workfile , p-table-name , p-doc-code )
+              .
+            end.
+            else do:
+              assign
+                v-err-message = substitute("&1 Документ &2 &3 не найден." , vss-workfile , p-table-name , p-doc-code )
+              .
+            end.
+            undo, return error v-err-message.
+          end.
+          assign
+            buf_trn-doc.bge-date = p-cur-date
+          .
+        end.
+        when 'c-trn-doc':U
+        then do:
+          for each buf_c-trn-doc exclusive-lock
+            where buf_c-trn-doc.doc-code = p-doc-code
+          :
+            assign
+              buf_c-trn-doc.bge-date = p-cur-date
+            .
+          end.
+        end.
+        when 'price-doc':U
+        then do:
+          on write of ub.price-doc override do: end.
+          find first buf_price-doc exclusive-lock
+            where buf_price-doc.doc-num = p-doc-code
+          no-wait
+          no-error
+          .
+          if not available buf_price-doc
+          then do:
+            if locked buf_price-doc
+            then do:
+              assign
+                v-err-message = substitute("&1 Документ &2 &3 заблокирован." , vss-workfile , p-table-name , p-doc-code )
+              .
+            end.
+            else do:
+              assign
+                v-err-message = substitute("&1 Документ &2 &3 не найден." , vss-workfile , p-table-name , p-doc-code )
+              .
+            end.
+            undo, return error v-err-message.
+          end.
+          assign
+            buf_price-doc.bge-date = p-cur-date
+          .
+        end.
+        when 'ord-doc':U
+        then do:
+          on write of ub.ord-doc override do: end.
+          find first buf_ord-doc exclusive-lock
+            where buf_ord-doc.doc-code = p-doc-code
+          no-wait
+          no-error
+          .
+          if not available buf_ord-doc
+          then do:
+            if locked buf_ord-doc
+            then do:
+              assign
+                v-err-message = substitute("&1 Документ &2 &3 заблокирован." , vss-workfile , p-table-name , p-doc-code )
+              .
+            end.
+            else do:
+              assign
+                v-err-message = substitute("&1 Документ &2 &3 не найден." , vss-workfile , p-table-name , p-doc-code )
+              .
+            end.
+            undo, return error v-err-message.
+          end.
+          assign
+            buf_ord-doc.bge-date = p-cur-date
+          .
+        end.
+    end case.
+end.

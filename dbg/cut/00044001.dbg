@@ -1,0 +1,473 @@
+        1   block-level on error undo, throw.
+        2   define input parameter vartype-cut            as integer   no-undo.
+        3   define input parameter varlist-db             as character no-undo.
+        4   define input parameter vardate-actual-goods   as date      no-undo.
+        5   define input parameter vardate-actual-docs    as date      no-undo.
+        6   define input parameter vardate-actual-findoc  as date      no-undo.
+        7   define input parameter vardate-output-zone    as date      no-undo.
+        8   define input parameter varstay-recipe-goods   as logical   no-undo.
+        9   define input parameter varstay-weight-goods   as logical   no-undo.
+       10   define input parameter varnot-copy-del-goods  as logical   no-undo.
+       11   define input parameter varstay-history        as logical   no-undo.
+       12   define input parameter vargen-file            as character no-undo.
+       13   define stream str-gen.
+       14   output stream str-gen to vargen-file append.
+       15   if not connected("src") then do:
+       16      return error "Нет коннекта с базой 'src'.".
+       17   end.
+       18   if not connected("dst") then do:
+       19      return error "Нет коннекта с базой 'dst'.".
+       20   end.
+       21   find src.sys-ctrl no-lock.
+       22   if not available src.sys-ctrl then do:
+       23      return error "В базе данных src не найдена уникальная запись sys-ctrl.".
+       24   end.
+       25   if src.sys-ctrl.db-num <> 0 then do:
+       26      return error "Пакет обрезания работает только в главной базе данных. В данной версии удаленные БД создаются выгрузкой из главных.".
+       27   end.
+       28   if vardate-actual-docs <> ? and
+       29      (vardate-actual-goods   > vardate-actual-docs or
+       30       vardate-actual-goods   = ? )   then do:
+       31         return error SUBSTITUTE("Ошибка при задании дат актуальности." +
+       32                                 "Дата актуальности товаров &1."        +
+       33                                 "Дата актуальности документов &2."     +
+       34                                 "Дата актуальности документов должна быть больше или равна дат актуальностей товаров.",
+       35                                 vardate-actual-goods,
+       36                                 vardate-actual-docs).
+       37   end.
+       38   define variable vss-revision    as character no-undo init "$Revision: e9c7fc100672, 222, rls $":U .
+       39   define variable vss-author      as character no-undo init "$Author: EShklyar $":U .
+       40   define variable vss-date        as character no-undo init "$Date: Tue Jul 14 11:27:05 2015 +0400 $":U .
+       41   define variable vss-workfile    as character no-undo init "$Workfile: 00044001.p $":U .
+       42   define variable vss-archive     as character no-undo init "$Archive  /cut/pie/00031001.p $":U .
+       43   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 31." .
+       44   define new global shared variable g#language as character no-undo .
+       45   if g#language <> '' and g#language <> 'rus':U then do:
+       46     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       47   end.
+       48   define  shared temp-table tt-objs no-undo
+       49     field obj-type as character
+       50     field obj-code as integer
+       51     index pi is unique primary obj-type obj-code
+       52     .
+       53   define buffer buf_clients for src.clients .
+       54   define buffer old-price-doc     for src.price-doc.
+       55   define buffer old-price-list    for src.price-list.
+       56   define buffer old-n-price-list  for src.price-list.
+       57   define buffer old-doc-line      for src.doc-line.
+       58   define variable v-total-parts-qnty like dst.parts.qnty no-undo .
+       59   define variable v-qnty        like dst.parts.qnty no-undo .
+       60   define variable p-nakat       like dst.parts.qnty no-undo .
+       61   define buffer new-price-doc   for dst.price-doc.
+       62   define buffer new-price-list  for dst.price-list.
+       63   define buffer new-trn-doc     for dst.trn-doc.
+       64   define buffer new-gds-obj     for dst.gds-obj.
+       65   define buffer new-gds-prt     for dst.gds-prt.
+       66   define buffer new-goods       for dst.goods.
+       67   define buffer new-bar-code    for dst.bar-code.
+       68   define buffer new-shop        for dst.shop.
+       69   define buffer new-store       for dst.store.
+       70   define buffer new-prt-obj     for dst.prt-obj.
+       71   define buffer new-n-bar-code  for dst.bar-code.
+       72   define variable v-exist     as logical   no-undo .
+       73   define variable v-doc-num   as character no-undo .
+       74   define variable v-sale-base as decimal   no-undo .
+       75   define variable v-i         as integer   no-undo .
+       76   define variable v-temp-date as date      no-undo .
+       77   define variable  v-fact-order as decimal no-undo .
+       78   define variable  find-fact-order as decimal no-undo .
+       79   define variable p-bar-code           as integer   no-undo .
+       80   define variable p-root-node  as integer no-undo .
+       81   procedure moved :
+       82     do
+       83     on error undo, return error return-value
+       84     :
+       85   define input  parameter p-obj-type as character no-undo .
+       86   define input  parameter p-obj-code as integer   no-undo .
+       87   define input  parameter p-host-code as integer   no-undo .
+       88     v-exist = false .
+       89     V-DOC-NUM = "2-" + p-obj-type  + string( p-obj-code) + "_" + string(v-temp-date).
+       90     v-sale-base = 0 .
+       91     v-qnty      = 0 .
+       92     for each new-gds-obj no-lock where
+       93              new-gds-obj.obj-type   = p-obj-type                and
+       94              new-gds-obj.obj-code   = p-obj-code
+       95              on error undo, return error SubSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)) :
+       96       find first new-goods where
+       97                  new-goods.artic     = new-gds-obj.artic and
+       98                  new-goods.prod-code = new-gds-obj.prod-code and
+       99                  new-goods.prod-type = new-gds-obj.prod-type
+      100                  no-lock no-error .
+      101        if error-status:error then next .
+      102        if not can-find (first old-doc-line no-lock
+      103                         where old-doc-line.obj-type  = new-gds-obj.obj-type
+      104                           and old-doc-line.obj-code  = new-gds-obj.obj-code
+      105                           and old-doc-line.prod-type = new-gds-obj.prod-type
+      106                           and old-doc-line.prod-code = new-gds-obj.prod-code
+      107                           and old-doc-line.artic     = new-gds-obj.artic
+      108                           and old-doc-line.status_   = 'факт':U
+      109                           and old-doc-line.fact-order > v-fact-order)
+      110           and
+      111           new-goods.stts        = 1  and
+      112           new-gds-obj.fact-qnty = 0 and
+      113           new-gds-obj.free-qnty = 0 then next .
+      114       find new-gds-prt no-lock where
+      115            new-gds-prt.upper-code = new-goods.prt-root
+      116            no-error .
+      117       if available new-gds-prt then do:
+      118          assign
+      119            p-root-node = new-gds-prt.node-code
+      120            .
+      121        end.
+      122        find first  new-bar-code no-lock
+      123         where new-bar-code.gds-code  = new-goods.gds-code
+      124           and new-bar-code.node-code = p-root-node
+      125           and new-bar-code.part-code = ""
+      126           and new-bar-code.in-code   = ""
+      127           and new-bar-code.unit-cli  = new-goods.unit-base
+      128         no-error .
+      129             if (avail new-bar-code and error-status:error  = false ) then p-bar-code = new-bar-code.b-code .
+      130                                                                      else p-bar-code = 0 .
+      131       run c-nakat( input new-gds-obj.obj-code , input  new-gds-obj.obj-type ,
+      132                    input  new-goods.artic, input new-goods.prod-code,
+      133                    input new-goods.prod-type, output p-nakat) .
+      134       run ff.
+      135      end.
+      136     if v-exist then do :
+      137         v-i = v-i + 1 .
+      138         create new-price-doc .
+      139         assign
+      140             new-price-doc.PS         = "Переоценка создана в процессе обрезания базы (по товарам на объекте) "
+      141             new-price-doc.creid      =  USERID("dst")
+      142             new-price-doc.doc-date   =  v-temp-date
+      143             new-price-doc.doc-num    =  V-DOC-NUM
+      144             new-price-doc.fact-date  =  v-temp-date
+      145             new-price-doc.fact-num   =  2
+      146             new-price-doc.fact-order =  v-fact-order
+      147             new-price-doc.fact-time  =  time
+      148             new-price-doc.host-code  =  p-host-code
+      149             new-price-doc.obj-type   =  p-obj-type
+      150             new-price-doc.obj-code   =  p-obj-code
+      151             new-price-doc.sale-base  =  v-sale-base
+      152             new-price-doc.rest-qnty  =  v-qnty
+      153             new-price-doc.shift-date =  ?
+      154             new-price-doc.shift-num  =  ?
+      155             new-price-doc.status_    = 'акт':U
+      156             new-price-doc.cr-db-num  =  0
+      157         .
+      158    end.
+      159     end.
+      160   end procedure.
+      161   do
+      162   on error undo, return error SubSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      163   on WRITE of dst.price-doc  override do: end.
+      164   on WRITE of dst.price-list override do: end.
+      165   if vardate-actual-docs <> ? then  v-temp-date = vardate-actual-docs  - 1 .
+      166                               else  v-temp-date = today .
+      167             v-fact-order =  integer(v-temp-date) + 0.97 + 2 * 0.0000000001  .
+      168             find-fact-order =  integer(v-temp-date) + 0.99 .
+      169       for each buf_clients no-lock  where
+      170               buf_clients.db-num <> ?
+      171       on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      172         :
+      173         if vartype-cut = 1 then do:
+      174             find first tt-objs where tt-objs.obj-type = buf_clients.obj-type and
+      175                                      tt-objs.obj-code = buf_clients.obj-code no-error.
+      176         end.
+      177       if vartype-cut = 0      or
+      178             (vartype-cut = 1 and available tt-objs) then do:
+      179               if buf_clients.obj-type = 'маг':U then do:
+      180                   for each new-shop no-lock where new-shop.obj-code = buf_clients.obj-code
+      181                       on error undo, return error SubSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      182                       run moved ( buf_clients.obj-type ,buf_clients.obj-code, new-shop.host-code ) .
+      183                   end.
+      184               end.
+      185               if buf_clients.obj-type = 'скл':U then do:
+      186                   for each new-store no-lock  where new-store.obj-code = buf_clients.obj-code
+      187                       on error undo, return error SubSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      188                       run moved ( buf_clients.obj-type ,buf_clients.obj-code, new-store.host-code ) .
+      189                   end.
+      190               end.
+      191       end.
+      192       else do:
+      193               if buf_clients.obj-type = 'маг':U then do:
+      194                   for each new-shop no-lock where new-shop.obj-code = buf_clients.obj-code
+      195                       on error undo, return error SubSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      196                       run moved ( buf_clients.obj-type ,buf_clients.obj-code, new-shop.host-code ) .
+      197                   end.
+      198               end.
+      199               if buf_clients.obj-type = 'скл':U then do:
+      200                   for each new-store no-lock  where new-store.obj-code = buf_clients.obj-code
+      201                       on error undo, return error SubSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      202                       run moved ( buf_clients.obj-type ,buf_clients.obj-code, new-store.host-code ) .
+      203                   end.
+      204               end.
+      205       end.
+      206    end.
+      207   If v-i > 0 Then
+      208     return "Произведено добавление переоценок по товарам. Довавлено " + string(v-i) + " закрытых переоценок.".
+      209   Else
+      210     return "Проверка на наличие переоценок по товару закончена. Добавлений переоценок не было.".
+      211   output stream str-gen close.
+      212   end.
+      213   procedure copy-parts :
+      214     define input parameter  p-out-code         like dst.parts.out-code  no-undo .
+      215     define input parameter  p-obj-type         like dst.parts.obj-type  no-undo .
+      216     define input parameter  p-obj-code         like dst.parts.obj-code  no-undo .
+      217     define input parameter  p-artic            like dst.parts.artic     no-undo .
+      218     define input parameter  p-prod-type        like dst.parts.prod-type no-undo .
+      219     define input parameter  p-prod-code        like dst.parts.prod-code no-undo .
+      220     define output parameter p-total-parts-qnty like dst.parts.qnty      no-undo .
+      221     def buffer buf_parts for dst.parts .
+      222     do
+      223     on error undo, return error
+      224     :
+      225       assign
+      226         p-total-parts-qnty = 0
+      227       .
+      228       for each dst.parts
+      229         where dst.parts.obj-type  = p-obj-type
+      230           and dst.parts.obj-code  = p-obj-code
+      231           and dst.parts.artic     = p-artic
+      232           and dst.parts.prod-type = p-prod-type
+      233           and dst.parts.prod-code = p-prod-code
+      234           and dst.parts.rsrv-free = yes
+      235           and dst.parts.status_   = no
+      236           and dst.parts.in-code   <> dst.parts.out-code
+      237       on error undo, return error
+      238       :
+      239         run partcopy_pr-docw in this-procedure
+      240           (input  p-out-code
+      241           ,buffer dst.parts
+      242           ,buffer buf_parts
+      243           ) no-error .
+      244         if error-status :error then do:
+      245           message
+      246             "Ошибка при создании партии" skip
+      247             "Объект" dst.parts.obj-type dst.parts.obj-code skip
+      248             "Артикул" dst.parts.artic dst.parts.prod-type dst.parts.prod-code skip
+      249             "Партия" dst.parts.in-code dst.parts.part-code skip
+      250             "Резерв" p-out-code skip
+      251             error-status :get-message(1) skip
+      252             return-value skip
+      253             view-as alert-box error .
+      254           undo, return error .
+      255         end.
+      256         define variable v-parts-qnty     like dst.parts.qnty no-undo .
+      257         define variable v-parts-cli-qnty like dst.parts.cli-qnty no-undo .
+      258         if dst.parts.out-code = 'free-zone':U then do:
+      259           assign
+      260             v-parts-qnty     = dst.parts.qnty
+      261             v-parts-cli-qnty = dst.parts.cli-qnty
+      262           .
+      263         end.
+      264         else do:
+      265           assign
+      266             v-parts-qnty     = abs(dst.parts.qnty)
+      267             v-parts-cli-qnty = abs(dst.parts.cli-qnty)
+      268           .
+      269         end.
+      270         assign
+      271           buf_parts.qnty      = buf_parts.qnty     + v-parts-qnty
+      272           buf_parts.fact-qnty = buf_parts.qnty
+      273           buf_parts.real-qnty = buf_parts.qnty
+      274           buf_parts.cli-qnty  = buf_parts.cli-qnty + v-parts-cli-qnty
+      275         .
+      276         assign
+      277           p-total-parts-qnty  = p-total-parts-qnty + v-parts-qnty
+      278         .
+      279       end.
+      280     end.
+      281   end procedure.
+      282   procedure partcopy_pr-docw :
+      283     define input parameter  p-out-code         like dst.parts.out-code no-undo .
+      284     define parameter buffer buf_orig_parts     for dst.parts .
+      285     define parameter buffer buf_parts          for dst.parts .
+      286     do transaction
+      287     on error undo, return error
+      288     :
+      289       find first buf_parts exclusive-lock
+      290         where buf_parts.obj-type  = buf_orig_parts.obj-type
+      291           and buf_parts.obj-code  = buf_orig_parts.obj-code
+      292           and buf_parts.artic     = buf_orig_parts.artic
+      293           and buf_parts.prod-type = buf_orig_parts.prod-type
+      294           and buf_parts.prod-code = buf_orig_parts.prod-code
+      295           and buf_parts.in-code   = buf_orig_parts.in-code
+      296           and buf_parts.out-code  = p-out-code
+      297           and buf_parts.part-code = buf_orig_parts.part-code
+      298         no-error.
+      299       if not available buf_parts then do:
+      300         create buf_parts .
+      301         buffer-copy buf_orig_parts to buf_parts
+      302         assign
+      303           buf_parts.out-code  = p-out-code
+      304           buf_parts.status_   = yes
+      305           buf_parts.rsrv-free = ?
+      306           buf_parts.doc-type  = 'акт':U
+      307           buf_parts.PS        = 'архив переоценки ' + p-out-code
+      308           buf_parts.qnty      = 0
+      309           buf_parts.fact-qnty = 0
+      310           buf_parts.real-qnty = 0
+      311           buf_parts.cli-qnty  = 0
+      312         .
+      313         validate buf_parts .
+      314       end.
+      315       else do:
+      316         if buf_parts.status_   <> yes
+      317         or buf_parts.rsrv-free <> ?
+      318         or buf_parts.doc-type  <> 'акт':U
+      319         or buf_parts.PS        <> 'архив переоценки ' + p-out-code then do:
+      320           message
+      321             "Ошибка при поиске архивной партии, привязанной к переоценке" skip
+      322             "Переоценка" p-out-code skip
+      323             "Артикул"    buf_parts.artic buf_parts.prod-type buf_parts.prod-code skip
+      324             "status_"    buf_parts.status_   skip
+      325             "rsrv-free"  buf_parts.rsrv-free skip
+      326             "doc-type"   buf_parts.doc-type  skip
+      327             "PS"         buf_parts.PS skip
+      328             view-as alert-box error .
+      329           undo, return error .
+      330         end.
+      331       end.
+      332     end.
+      333   end procedure.
+      334   procedure c-nakat :
+      335   define input parameter   l-obj-code  like dst.goods.prod-code no-undo .
+      336   define input parameter   l-obj-type  like dst.goods.prod-type no-undo .
+      337   define input parameter   l-artic     like dst.goods.artic     no-undo .
+      338   define input parameter   l-prod-code like dst.goods.prod-code no-undo .
+      339   define input parameter   l-prod-type like dst.goods.prod-type no-undo .
+      340   define output parameter  l-nakat     like dst.obj-gds.fact-qnty   no-undo .
+      341   define buffer new-trn-doc     for dst.trn-doc.
+      342   define buffer new-doc-line    for dst.doc-line.
+      343    l-nakat = 0 .
+      344   for each new-doc-line where
+      345             new-doc-line.obj-type  = l-obj-type  and
+      346             new-doc-line.obj-code  = l-obj-code  and
+      347             new-doc-line.artic     = l-artic     and
+      348             new-doc-line.prod-code = l-prod-code and
+      349             new-doc-line.prod-type = l-prod-type no-lock ,
+      350             first new-trn-doc where
+      351                   new-doc-line.doc-code = new-trn-doc.doc-code  and
+      352                 ( new-trn-doc.doc-type  = 'при':U OR
+      353                   new-trn-doc.doc-type  = 'рас':U or
+      354                   new-trn-doc.doc-type  = 'возврат':U or
+      355                   new-trn-doc.doc-type  = 'спи':U )  no-lock :
+      356                   if new-doc-line.fact-qnty <> ? then do:
+      357                   if new-trn-doc.doc-type  = 'при':U or
+      358                      new-trn-doc.doc-type  = 'возврат':U
+      359                   then
+      360                      l-nakat =  l-nakat + new-doc-line.fact-qnty .
+      361                   else
+      362                      l-nakat =  l-nakat - new-doc-line.fact-qnty .
+      363                   end.
+      364   end.
+      365   end procedure.
+      366   PROCEDURE  FF :
+      367   define variable p-nakat2 as decimal no-undo .
+      368           find last  old-price-list  no-lock where
+      369             old-price-list.b-code     = p-bar-code    and
+      370             old-price-list.main-price = true         and
+      371             old-price-list.fact-order < find-fact-order and
+      372             old-price-list.fact-order <> 0           and
+      373             old-price-list.fact-order <> ?           and
+      374             old-price-list.price-type = ""            and
+      375             old-price-list.obj-type   = new-gds-obj.obj-type   and
+      376             old-price-list.obj-code   = new-gds-obj.obj-code
+      377             use-index fact-close no-error .
+      378             if avail old-price-list then do :
+      379                v-exist = true .
+      380                create new-price-list.
+      381                buffer-copy old-price-list to new-price-list
+      382                assign
+      383                  new-price-list.doc-num     = V-DOC-NUM
+      384                  new-price-list.fact-order  = v-fact-order
+      385                  new-price-list.b-code      = p-bar-code
+      386                  new-price-list.calc-method = 'Не-считать':U
+      387                  new-price-list.price-prev  = 0
+      388                  new-price-list.doc-qnty    = (if new-gds-obj.fact-qnty <> ? then new-gds-obj.fact-qnty else 0 )  - p-nakat
+      389                  .
+      390                   for each  old-n-price-list  no-lock where
+      391                     old-n-price-list.doc-num    = old-price-list.doc-num     and
+      392                     old-n-price-list.main-price = false  and
+      393                     old-n-price-list.price-type = ""                      and
+      394                     old-n-price-list.artic     = old-price-list.artic     and
+      395                     old-n-price-list.prod-code = old-price-list.prod-code and
+      396                     old-n-price-list.prod-type = old-price-list.prod-type ,
+      397                     first new-n-bar-code no-lock where  new-n-bar-code.b-code = old-n-price-list.b-code ,
+      398                     each new-prt-obj no-lock where
+      399                         new-prt-obj.artic     = old-price-list.artic     and
+      400                         new-prt-obj.prod-code = old-price-list.prod-code and
+      401                         new-prt-obj.prod-type = old-price-list.prod-type and
+      402                         new-prt-obj.obj-type  = new-gds-obj.obj-type     and
+      403                         new-prt-obj.obj-code  = new-gds-obj.obj-code     and
+      404                         new-prt-obj.prt-code  = new-n-bar-code.node-code   :
+      405                         run c-nakat2( input new-gds-obj.obj-code , input  new-gds-obj.obj-type ,
+      406                             input new-goods.artic ,
+      407                             input new-prt-obj.prt-code ,
+      408                             input new-goods.prod-code, input new-goods.prod-type,
+      409                             output p-nakat2) .
+      410                         create new-price-list.
+      411                         buffer-copy old-n-price-list to new-price-list
+      412                         assign
+      413                           new-price-list.doc-num     = V-DOC-NUM
+      414                           new-price-list.fact-order  = v-fact-order
+      415                           new-price-list.calc-method = 'Не-считать':U
+      416                           new-price-list.price-prev  = 0
+      417                           new-price-list.doc-qnty    = (if new-prt-obj.fact-qnty <> ? then new-prt-obj.fact-qnty else 0 )  - p-nakat2
+      418                           .
+      419                     end.
+      420             end.
+      421             Else do:
+      422             end.
+      423           if available new-price-list then do:
+      424               v-sale-base = v-sale-base  + new-price-list.price-sale * new-price-list.doc-qnty .
+      425               v-qnty      = v-qnty       + new-price-list.doc-qnty .
+      426               run copy-parts
+      427                 (input   new-price-list.doc-num
+      428                 , input  new-price-list.obj-type
+      429                 , input  new-price-list.obj-code
+      430                 , input  new-price-list.artic
+      431                 , input  new-price-list.prod-type
+      432                 , input  new-price-list.prod-code
+      433                 , output v-total-parts-qnty
+      434                 )  no-error .
+      435               if error-status :error then message error-status :get-message(1)
+      436                   view-as alert-box .
+      437            end.
+      438   end procedure.
+      439   procedure c-nakat2 :
+      440   define input parameter   l-obj-code  like dst.goods.prod-code no-undo .
+      441   define input parameter   l-obj-type  like dst.goods.prod-type no-undo .
+      442   define input parameter   l-artic     like dst.goods.artic     no-undo .
+      443   define input parameter   l-prt-code  as integer no-undo .
+      444   define input parameter   l-prod-code like dst.goods.prod-code no-undo .
+      445   define input parameter   l-prod-type like dst.goods.prod-type no-undo .
+      446   define output parameter  l-nakat     like dst.obj-gds.fact-qnty   no-undo .
+      447   define buffer new-trn-doc     for dst.trn-doc.
+      448   define buffer new-doc-line    for dst.doc-line.
+      449   define buffer new-gds-dtl for dst.gds-dtl.
+      450    l-nakat = 0 .
+      451   for each new-gds-dtl where
+      452             new-gds-dtl.obj-type  = l-obj-type  and
+      453             new-gds-dtl.obj-code  = l-obj-code  and
+      454             new-gds-dtl.artic     = l-artic     and
+      455             new-gds-dtl.prt-code  = l-prt-code  and
+      456             new-gds-dtl.prod-code = l-prod-code and
+      457             new-gds-dtl.prod-type = l-prod-type no-lock ,
+      458             first new-trn-doc where
+      459                   new-gds-dtl.doc-code = new-trn-doc.doc-code  and
+      460                 ( new-trn-doc.doc-type  = 'при':U OR
+      461                   new-trn-doc.doc-type  = 'рас':U or
+      462                   new-trn-doc.doc-type  = 'возврат':U or
+      463                   new-trn-doc.doc-type  = 'спи':U )  no-lock :
+      464                   if new-gds-dtl.fact-qnty <> ? then do:
+      465                   if new-trn-doc.doc-type  = 'при':U or
+      466                      new-trn-doc.doc-type  = 'возврат':U
+      467                   then
+      468                      l-nakat =  l-nakat + new-gds-dtl.fact-qnty .
+      469                   else
+      470                      l-nakat =  l-nakat - new-gds-dtl.fact-qnty .
+      471                   end.
+      472   end.
+      473   end procedure.

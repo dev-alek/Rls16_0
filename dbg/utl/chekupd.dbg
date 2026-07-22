@@ -1,0 +1,173 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision:$":U .
+        3   define variable vss-author      as character no-undo init "$Author:$":U .
+        4   define variable vss-date        as character no-undo init "$Date:$":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile:$":U .
+        6   define variable vss-archive     as character no-undo init "$Archive:$":U .
+        7   define variable vss-description as character no-undo init "Проверка обновления".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   procedure vss-get-info :
+       13     define output parameter p-vss-revision    like vss-revision    no-undo .
+       14     define output parameter p-vss-author      like vss-author      no-undo .
+       15     define output parameter p-vss-date        like vss-date        no-undo .
+       16     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       17     define output parameter p-vss-archive     like vss-archive     no-undo .
+       18     define output parameter p-vss-description like vss-description no-undo .
+       19     assign
+       20       p-vss-revision    = vss-revision
+       21       p-vss-author      = vss-author
+       22       p-vss-date        = vss-date
+       23       p-vss-workfile    = vss-workfile
+       24       p-vss-archive     = vss-archive
+       25       p-vss-description = vss-description
+       26     .
+       27   end procedure.
+       28   procedure vss-get-parameters :
+       29     define output parameter p-vss-parameters as character no-undo .
+       30   end procedure.
+       31   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       32   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       33   define variable v-vssrevis-logger                   as handle    no-undo .
+       34   procedure vss-logevent :
+       35     define input  parameter p-extra-paramters as character no-undo .
+       36     define variable v-vssrevis-parameters as character no-undo .
+       37     do
+       38     on error undo, return error return-value
+       39     :
+       40       if  valid-handle(v-vssrevis-logger)
+       41       and v-vssrevis-logger :get-signature("logevent") <> ""
+       42       then do:
+       43         run vss-get-parameters in this-procedure
+       44           (output v-vssrevis-parameters
+       45           ).
+       46         run logevent in v-vssrevis-logger
+       47           (input vss-workfile
+       48           ,input vss-revision
+       49           ,input v-vssrevis-parameters
+       50           ,input p-extra-paramters
+       51           ).
+       52       end.
+       53     end.
+       54   end procedure.
+       55   assign
+       56     v-vssrevis-logger = g#vssrevis-logger
+       57   .
+       58   if  valid-handle(v-vssrevis-logger)
+       59   and v-vssrevis-logger :get-signature("logevent") <> ""
+       60   then do:
+       61     assign
+       62       v-vssrevis-logevent = true
+       63     .
+       64     run vss-logevent in this-procedure (input vss-description) .
+       65   end.
+       66   define new global shared variable g#library  as handle no-undo .
+       67   define new global shared variable g#library2 as handle no-undo .
+       68   define new  shared variable g#auto as logical no-undo.
+       69   define new  shared variable g#news as logical no-undo.
+       70   define new  shared variable g#oxml as logical no-undo.
+       71   define new  shared variable g#esys as logical no-undo.
+       72   define new  shared variable g#news-source-db as integer no-undo.
+       73   define new  shared variable g#esys-source-esys as integer no-undo.
+       74   define new  shared variable g#db-num as integer   no-undo .
+       75   define new  shared variable g#userid as character no-undo .
+       76   define new  shared variable g#passwd as character no-undo .
+       77   define input  parameter iChek as logical no-undo.
+       78   define input  parameter iTarg as integer no-undo.
+       79   define output parameter oUpd  as logical no-undo.
+       80   define variable mdb-ver as integer  no-undo init ?.
+       81   define variable mdbverd as integer no-undo.
+       82   define variable mdbveri as integer no-undo.
+       83   define buffer sys-ctrl     for ub.sys-ctrl.
+       84   define buffer db-attr      for ub.db-attr.
+       85   define buffer db           for ub.db.
+       86   define buffer b_file       for ub._file.
+       87   define buffer b_field      for ub._field.
+       88   define buffer b_Connect    for ub._Connect.
+       89   find first sys-ctrl no-lock no-error.
+       90   if not available sys-ctrl then do: oUpd = yes. return. end.
+       91   g#db-num = sys-ctrl.db-num.
+       92   find first db-attr where db-attr.db-num    eq sys-ctrl.db-num
+       93                        and db-attr.attr-code eq  'ver-db':U
+       94   no-lock no-error.
+       95   if available db-attr then mdb-ver = integer (db-attr.attr-value) no-error.
+       96   release db-attr.
+       97   release sys-ctrl.
+       98   if    iChek
+       99   then do:
+      100      oUpd = mdb-ver ne ? and mdb-ver < iTarg.
+      101      publish "putstat" (substitute ("Проверка Нужно обновление бд? &1",oUpd) ).
+      102   end.
+      103   else do:
+      104      if mdb-ver eq ? or mdb-ver >= iTarg
+      105      then do:
+      106         oUpd = true.
+      107         return.
+      108      end.
+      109      define variable v-process-id   as integer   no-undo.
+      110      define variable v-process-list as character no-undo.
+      111      define variable vUserIgnor     as character no-undo.
+      112      define variable Msg            as character no-undo.
+      113      run gbl/getprcid.p ( output v-process-id ) no-error.
+      114      if error-status:error
+      115      then do:
+      116         Msg = ( "Невозможно получить PID процесса. Обновление схемы БД невозможно. Работа с ней запрещена!" ).
+      117         return Msg.
+      118      end.
+      119      publish "putstat" (substitute ("Запускаем понижение версии БД ") ).
+      120      vUserIgnor = "nws".
+      121      for each b_Connect where b_Connect._Connect-Type = "REMC"
+      122                           and b_Connect._Connect-Pid <> ?
+      123                           and b_Connect._Connect-Pid <> v-process-id
+      124                           and not can-do(vUserIgnor,b_Connect._Connect-Name)
+      125      no-lock:
+      126         v-process-list = v-process-list + chr(10) + string (b_Connect._Connect-Pid) + " - " + b_Connect._Connect-Name +  " - " + b_Connect._Connect-Device.
+      127      end.
+      128      if v-process-list <> ""
+      129      then do:
+      130         publish "putstat" (substitute ("Есть не завершенные процесы &1 ", v-process-list) ).
+      131         Msg = substitute ( "Для обновления схемы БД завершите процессы. &1",  v-process-list).
+      132         return Msg.
+      133      end.
+      134      find first sys-ctrl no-lock.
+      135      find first db no-lock where db.db-num = sys-ctrl.db-num no-error.
+      136      publish "putstat" (substitute ("Понижаем версию БД  ") ).
+      137      find first b_file no-lock where b_file._file-name = "db"  no-error.
+      138      if available b_file
+      139      then do:
+      140         find first b_field of b_file where b_field._Field-Name =  "reserve1-char" no-lock no-error.
+      141         release b_file.
+      142      end.
+      143      mdbverd = int(db.reserve1-char) no-error.
+      144      release db.
+      145      mdbveri = int(b_field._initial ) no-error.
+      146      release _field.
+      147      do trans:
+      148         if mdbverd > mdb-ver
+      149         then do:
+      150            find first db where db.db-num = sys-ctrl.db-num.
+      151            db.reserve1-char = string(mdb-ver).
+      152            release db.
+      153         end.
+      154         if mdbveri > mdb-ver
+      155         then do:
+      156            find first b_file no-lock where b_file._file-name = "db"  no-error.
+      157            if available b_file
+      158            then do:
+      159               find first b_field of b_file where b_field._Field-Name =  "reserve1-char"  no-error.
+      160               b_field._initial = string(mdb-ver).
+      161               release b_file.
+      162               release b_field.
+      163            end.
+      164         end.
+      165         find first db-attr where db-attr.db-num    eq sys-ctrl.db-num
+      166                              and db-attr.attr-code eq  'ver-db':U
+      167         exclusive-lock.
+      168         delete db-attr.
+      169         release sys-ctrl.
+      170         publish "putstat" (substitute ("Версия Бд понижена. Нужен перезапуск Th  ") ).
+      171         return "Для обновление структуры базы запустите TH еще раз.".
+      172      end.
+      173   end.

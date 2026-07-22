@@ -1,0 +1,1231 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-mode as character no-undo .
+        3   define input parameter p-clob-mode as character no-undo .
+        4   define input parameter p-bh as handle no-undo.
+        5   define input parameter p-uniq-key-rec as character no-undo .
+        6   define input parameter p-field as character no-undo .
+        7   define input parameter p-descr as character no-undo .
+        8   define input-output parameter p-part-num as integer no-undo .
+        9   define input parameter p-resource-type as character no-undo .
+       10   define input-output parameter p-clob-db-num as integer no-undo .
+       11   define input-output parameter p-int64-id as int64 no-undo .
+       12   define input parameter p-file as character no-undo .
+       13   define input parameter p-encoding as character no-undo .
+       14   define variable vss-revision    as character no-undo init "$Revision: e41006018ff7, 3417, rls $":U .
+       15   define variable vss-author      as character no-undo init "$Author: DRuban $":U .
+       16   define variable vss-date        as character no-undo init "$Date: 2023/10/16 15:13:30 $":U .
+       17   define variable vss-workfile    as character no-undo init "$Workfile: file2clb.p $":U .
+       18   define variable vss-archive     as character no-undo init "$Archive: gbl/file2clb.p $":U .
+       19   define variable vss-description as character no-undo init "Копирование файла в CLOB".
+       20   procedure vss-get-info :
+       21     define output parameter p-vss-revision    like vss-revision    no-undo .
+       22     define output parameter p-vss-author      like vss-author      no-undo .
+       23     define output parameter p-vss-date        like vss-date        no-undo .
+       24     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       25     define output parameter p-vss-archive     like vss-archive     no-undo .
+       26     define output parameter p-vss-description like vss-description no-undo .
+       27     assign
+       28       p-vss-revision    = vss-revision
+       29       p-vss-author      = vss-author
+       30       p-vss-date        = vss-date
+       31       p-vss-workfile    = vss-workfile
+       32       p-vss-archive     = vss-archive
+       33       p-vss-description = vss-description
+       34     .
+       35   end procedure.
+       36   procedure vss-get-parameters :
+       37     define output parameter p-vss-parameters as character no-undo .
+       38   end procedure.
+       39   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       40   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       41   define variable v-vssrevis-logger                   as handle    no-undo .
+       42   procedure vss-logevent :
+       43     define input  parameter p-extra-paramters as character no-undo .
+       44     define variable v-vssrevis-parameters as character no-undo .
+       45     do
+       46     on error undo, return error return-value
+       47     :
+       48       if  valid-handle(v-vssrevis-logger)
+       49       and v-vssrevis-logger :get-signature("logevent") <> ""
+       50       then do:
+       51         run vss-get-parameters in this-procedure
+       52           (output v-vssrevis-parameters
+       53           ).
+       54         run logevent in v-vssrevis-logger
+       55           (input vss-workfile
+       56           ,input vss-revision
+       57           ,input v-vssrevis-parameters
+       58           ,input p-extra-paramters
+       59           ).
+       60       end.
+       61     end.
+       62   end procedure.
+       63   assign
+       64     v-vssrevis-logger = g#vssrevis-logger
+       65   .
+       66   if  valid-handle(v-vssrevis-logger)
+       67   and v-vssrevis-logger :get-signature("logevent") <> ""
+       68   then do:
+       69     assign
+       70       v-vssrevis-logevent = true
+       71     .
+       72     run vss-logevent in this-procedure (input vss-description) .
+       73   end.
+       74   define new global shared variable g#language as character no-undo .
+       75   if g#language <> '' and g#language <> 'rus':U then do:
+       76     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       77   end.
+       78   define new global shared variable g#library  as handle no-undo .
+       79   define new global shared variable g#library2 as handle no-undo .
+       80   define   shared variable g#auto as logical no-undo.
+       81   define   shared variable g#news as logical no-undo.
+       82   define   shared variable g#oxml as logical no-undo.
+       83   define   shared variable g#esys as logical no-undo.
+       84   define   shared variable g#news-source-db as integer no-undo.
+       85   define   shared variable g#esys-source-esys as integer no-undo.
+       86   define   shared variable g#db-num as integer   no-undo .
+       87   define   shared variable g#userid as character no-undo .
+       88   define   shared variable g#passwd as character no-undo .
+       89   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       90   procedure gen-key-rec :
+       91     define input  parameter p-tbl-name    as character no-undo.
+       92     define input  parameter p-bh_tbl-name as handle    no-undo.
+       93     define output parameter p-key-rec     as character no-undo.
+       94     do
+       95     on error  undo, return error substitute( "&1 (gen-key-rec). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       96     on stop   undo, return error substitute( "&1 (gen-key-rec). stop", vss-workfile )
+       97     on endkey undo, return error substitute( "&1 (gen-key-rec). endkey", vss-workfile )
+       98     :
+       99       define variable fh               as handle    no-undo .
+      100       define variable v-ok             as logical   no-undo .
+      101       define variable v-inform         as character no-undo .
+      102       define variable v-ind            as integer   no-undo .
+      103       define variable v-idx-field-qnty as integer   no-undo .
+      104       if p-tbl-name = ?
+      105         or p-tbl-name = "":U
+      106       then do:
+      107         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Не задано имя таблицы.", vss-include-info0 ).
+      108       end.
+      109       if not p-bh_tbl-name:available then do:
+      110         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Переданый буфер таблицы &2 не доступен", vss-include-info0, p-tbl-name ).
+      111       end.
+      112       assign
+      113         p-key-rec = p-tbl-name
+      114         v-inform  = p-bh_tbl-name:index-information(1)
+      115         v-ind     = 2
+      116       .
+      117       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      118       on error undo, return error
+      119       :
+      120         assign
+      121           v-inform = p-bh_tbl-name:index-information( v-ind )
+      122           v-ind    = v-ind + 1
+      123         .
+      124       end.
+      125       if v-inform = ?
+      126         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      127         or entry( 3, v-inform, ",":U ) <> "1":U
+      128       then do:
+      129         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, p-tbl-name ).
+      130       end.
+      131       else do:
+      132         assign
+      133           v-idx-field-qnty = num-entries( v-inform ) - 4
+      134         .
+      135         if v-idx-field-qnty < 2 then do:
+      136           return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, p-tbl-name ).
+      137         end.
+      138         do v-ind = 1 to v-idx-field-qnty by 2
+      139         on error undo, return error
+      140         :
+      141           assign
+      142             fh = p-bh_tbl-name:buffer-field( entry( 4 + v-ind, v-inform, ",":U ) ).
+      143             p-key-rec = p-key-rec + chr(3) + substitute("&1", replace(fh:buffer-value(),chr(3),chr(2) + chr(9) + chr (2)))
+      144           .
+      145         end.
+      146       end.
+      147       if p-key-rec = ? then do:
+      148         assign
+      149           p-key-rec = "":U
+      150         .
+      151         return error substitute( "&1. Поле(поля) первичного ключа таблицы &2 имеет(ют) неопределенное значение", vss-include-info0, p-tbl-name ).
+      152       end.
+      153     end.
+      154     return.
+      155   end procedure.
+      156   procedure gen-where-keyr-tab :
+      157     define input  parameter i-tableSerach as character no-undo.
+      158     define input  parameter i-tablekey   as character  no-undo.
+      159     define input  parameter p-key-rec    as character  no-undo.
+      160     define input  parameter p-key-handle as handle     no-undo .
+      161     define input  parameter p-db-name    as character  no-undo .
+      162     define input  parameter p-tt-handle  as handle     no-undo .
+      163     define output parameter o-Where      as character  no-undo.
+      164     do
+      165     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      166     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      167     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile )
+      168     :
+      169       define variable v-full-tbl-name  as character no-undo .
+      170       define variable bh_tbl-name      as handle    no-undo .
+      171       define variable fh_key           as handle    no-undo .
+      172       define variable fh_search        as handle    no-undo .
+      173       define variable v-field-num      as integer   no-undo .
+      174       define variable v-count-fld      as integer   no-undo .
+      175       define variable v-inform         as character no-undo .
+      176       define variable v-ind            as integer   no-undo .
+      177       define variable v-idx-field-qnty as integer   no-undo .
+      178       define variable v-field-name     as character no-undo .
+      179       define variable v-field-val      as character no-undo .
+      180       define variable v-word-link      as character no-undo .
+      181       define variable vTable           as character no-undo.
+      182       define variable bh_tbl-key       as handle    no-undo .
+      183       assign
+      184         p-key-rec = trim( p-key-rec )
+      185       .
+      186       if p-key-handle <> ? then do:
+      187         if not valid-handle(p-key-handle)
+      188            or p-key-handle:type <> "buffer"
+      189         then do:
+      190           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Задан невалидный буфер для поиска.", vss-include-info0 ).
+      191         end.
+      192         if num-entries( p-key-rec, chr(3) ) > 1
+      193           or p-key-rec = ?
+      194           or p-key-rec = "":U
+      195         then do:
+      196           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. При поиске по буферу вместо ключа (&2) должено быть 'имя таблицы'.", vss-include-info0, p-key-rec ).
+      197         end.
+      198       end.
+      199       else do:
+      200         if p-key-rec = ?
+      201           or p-key-rec = "":U
+      202         then do:
+      203           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      204         end.
+      205       end.
+      206       assign
+      207         vTable = entry( 1 , p-key-rec, chr(3) )
+      208       .
+      209       if p-tt-handle <> ?
+      210         and ( not valid-handle(p-tt-handle)
+      211               or p-tt-handle:type <> "buffer"
+      212             )
+      213       then do:
+      214         return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. &2&3Передан невалидный handle для поиска или handle не типа BUFFER", vss-include-info0, vTable, chr(10) ).
+      215       end.
+      216       if p-tt-handle = ? then do:
+      217         assign
+      218           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable )
+      219         .
+      220         create buffer bh_tbl-name for table v-full-tbl-name .
+      221       end.
+      222       else do:
+      223         create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      224       end.
+      225       assign
+      226         v-inform = bh_tbl-name:index-information(1)
+      227         v-ind    = 2
+      228       .
+      229       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      230       on error undo, return error
+      231       :
+      232         assign
+      233           v-inform = bh_tbl-name:index-information( v-ind )
+      234           v-ind    = v-ind + 1
+      235         .
+      236       end.
+      237       if v-inform = ?
+      238         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      239         or entry( 3, v-inform, ",":U ) <> "1":U
+      240       then do:
+      241         delete object bh_tbl-name no-error.
+      242         return error substitute( "&1. Таблица &2 не имеет первичного ключа", vss-include-info0, vTable ).
+      243       end.
+      244       assign
+      245         v-idx-field-qnty = num-entries( v-inform ) - 4
+      246       .
+      247       if v-idx-field-qnty < 2 then do:
+      248         delete object bh_tbl-name no-error.
+      249         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, vTable ).
+      250       end.
+      251       assign
+      252         o-where     = "where":U
+      253         v-word-link = "":U
+      254         v-field-num = num-entries( p-key-rec, chr(3) ) - 1
+      255         v-count-fld = 0
+      256       .
+      257       if i-tablekey ne "" and i-tablekey ne ?
+      258       then do:
+      259         assign
+      260           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tablekey )
+      261         .
+      262         create buffer bh_tbl-key for table v-full-tbl-name .
+      263       end.
+      264       if i-tableSerach ne "" and i-tableSerach ne ?
+      265       then do:
+      266         delete object bh_tbl-name no-error.
+      267         assign
+      268           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach )
+      269         .
+      270         create buffer bh_tbl-name for table v-full-tbl-name .
+      271       end.
+      272       block_where:
+      273       do v-ind = 1 to v-idx-field-qnty by 2
+      274       on error undo, return error
+      275       :
+      276         assign
+      277           v-count-fld = v-count-fld + 1
+      278         .
+      279         if p-key-handle = ?
+      280           and v-count-fld > v-field-num
+      281         then do:
+      282           leave block_where.
+      283         end.
+      284         define variable VfieldKeyTable as handle no-undo.
+      285         assign
+      286           v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      287           fh_search    = bh_tbl-name:buffer-field( v-field-name )
+      288         .
+      289         if     bh_tbl-key ne ?
+      290         then do:
+      291            VfieldKeyTable = bh_tbl-key:buffer-field( v-field-name ) no-error.
+      292            if VfieldKeyTable eq ?
+      293            then next block_where.
+      294         end.
+      295         if v-full-tbl-name ne "" and v-full-tbl-name ne ?
+      296         then
+      297            o-where = substitute( "&1 &2 &3.&4 =", o-where, v-word-link,v-full-tbl-name, v-field-name ).
+      298         else
+      299            o-where = substitute( "&1 &2 &3 =", o-where, v-word-link, v-field-name ).
+      300         if p-key-handle = ? then do:
+      301           assign
+      302             v-field-val = replace (entry( v-count-fld + 1 , p-key-rec, chr(3) ),chr(2) + chr(9) + chr (2),chr(3))
+      303           .
+      304         end.
+      305         else do:
+      306           assign
+      307             fh_key = p-key-handle:buffer-field( v-field-name )
+      308           .
+      309           if fh_key = ?
+      310             or not valid-handle( fh_key )
+      311           then do:
+      312             delete object bh_tbl-name.
+      313             if     bh_tbl-key ne ?
+      314             then
+      315                delete object bh_tbl-key.
+      316             return error substitute( "&1. Буфер &2 не содержит поля &3 необходимого для поиска.", vss-include-info0, p-key-handle:name, v-field-name ).
+      317           end.
+      318           assign
+      319             v-field-val = fh_key:buffer-value
+      320           .
+      321         end.
+      322         if fh_search:data-type ="character":U then do:
+      323           assign
+      324             v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+      325             v-field-val = replace( v-field-val, '"':U, '~~"':U )
+      326             v-field-val = replace( v-field-val, "'":U, "~~'":U )
+      327             v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+      328             v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+      329             v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+      330             v-field-val = replace( v-field-val, chr(10), '~~n':U )
+      331             v-field-val = replace( v-field-val, chr(9), '~~t':U )
+      332             v-field-val = replace( v-field-val, chr(13), '~~r':U )
+      333             v-field-val = replace( v-field-val, chr(27), '~~E':U )
+      334             v-field-val = replace( v-field-val, chr(8), '~~b':U )
+      335             v-field-val = replace( v-field-val, chr(12), '~~f':U )
+      336             v-field-val = substitute( '"&1"', v-field-val )
+      337           .
+      338         end.
+      339         assign
+      340           o-where = substitute( "&1 &2", o-where, v-field-val )
+      341         .
+      342         if v-word-link = "":U then do:
+      343           assign
+      344             v-word-link = "and":U
+      345           .
+      346         end.
+      347       end.
+      348       delete object bh_tbl-name.
+      349       if     bh_tbl-key ne ?
+      350       then
+      351          delete object bh_tbl-key.
+      352       if p-key-handle = ?
+      353         and v-count-fld <> v-field-num
+      354       then do:
+      355         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2", vss-include-info0, vTable ).
+      356       end.
+      357     end.
+      358   end procedure.
+      359   procedure gen-hn-keyr-tab :
+      360     define input  parameter i-tableSerach as character no-undo.
+      361     define input  parameter i-tablekey   as character no-undo.
+      362     define input  parameter p-key-rec    as character no-undo.
+      363     define input  parameter p-key-handle as handle    no-undo .
+      364     define input  parameter p-db-name    as character no-undo .
+      365     define input  parameter p-tt-handle  as handle    no-undo .
+      366     define input  parameter p-stts-lock  as integer   no-undo .
+      367     define output parameter o-hn         as handle    no-undo.
+      368     define variable v-full-tbl-name as character no-undo.
+      369     define variable v-where         as character no-undo.
+      370     define variable bh_tbl-name     as handle    no-undo.
+      371     define variable vTable          as character no-undo.
+      372     do
+      373     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      374     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      375     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile ):
+      376         run gen-where-keyr-tab(i-tableSerach,
+      377                                i-tablekey,
+      378                                p-key-rec,
+      379                                p-key-handle,
+      380                                p-db-name,
+      381                                p-tt-handle,
+      382                                output v-where).
+      383         if i-tableSerach ne "" and i-tableSerach ne ?
+      384         then do:
+      385            v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach ).
+      386            create buffer bh_tbl-name for table v-full-tbl-name .
+      387         end.
+      388         else do:
+      389            if p-tt-handle = ? then do:
+      390               assign
+      391                  vTable = entry( 1 , p-key-rec, chr(3) )
+      392               .
+      393               v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable ).
+      394               create buffer bh_tbl-name for table v-full-tbl-name .
+      395            end.
+      396            else do:
+      397               create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      398            end.
+      399         end.
+      400         if p-tt-handle = ? then do:
+      401            bh_tbl-name:find-first( v-where, p-stts-lock ) no-error .
+      402         end.
+      403         else do:
+      404            bh_tbl-name:find-first( v-where ) no-error .
+      405         end.
+      406         o-hn = bh_tbl-name.
+      407      end.
+      408   end procedure.
+      409   procedure gen-hn-keyr :
+      410     define input  parameter p-key-rec    as character no-undo.
+      411     define input  parameter p-key-handle as handle    no-undo .
+      412     define input  parameter p-db-name    as character no-undo .
+      413     define input  parameter p-tt-handle  as handle    no-undo .
+      414     define input  parameter p-stts-lock  as integer   no-undo .
+      415     define output parameter o-hn         as handle    no-undo.
+      416     run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output o-hn).
+      417   end.
+      418   procedure gen-row-keyr :
+      419     define input  parameter p-key-rec    as character no-undo.
+      420     define input  parameter p-key-handle as handle    no-undo .
+      421     define input  parameter p-db-name    as character no-undo .
+      422     define input  parameter p-tt-handle  as handle    no-undo .
+      423     define input  parameter p-stts-lock  as integer   no-undo .
+      424     define output parameter p-tbl-row    as rowid     no-undo.
+      425     define output parameter p-tbl-name   as character no-undo.
+      426     define variable vHn as handle no-undo.
+      427       run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output vHn).
+      428       p-tbl-row = if vHn:available then vHn:rowid else ?.
+      429       p-tbl-name =  vHn:table.
+      430       delete object vHn no-error.
+      431     if p-tbl-row = ? then do:
+      432       return substitute( "Не найдена запись таблицы &2 по ключу &3", vss-include-info0, p-tbl-name, p-key-rec ).
+      433     end.
+      434     else do:
+      435       return.
+      436     end.
+      437   end procedure.
+      438   procedure gen-key-fv :
+      439     define input  parameter p-key-rec    as character no-undo .
+      440     define output parameter p-field-list as character no-undo .
+      441     define output parameter p-value-list as character no-undo.
+      442     do
+      443     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      444     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      445     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      446     :
+      447       define variable v-full-tbl-name  as character no-undo .
+      448       define variable bh_tbl-name      as handle    no-undo .
+      449       define variable v-tbl-name       as character no-undo .
+      450       define variable v-field-num      as integer   no-undo .
+      451       define variable v-count-fld      as integer   no-undo .
+      452       define variable v-inform         as character no-undo .
+      453       define variable v-ind            as integer   no-undo .
+      454       define variable v-idx-field-qnty as integer   no-undo .
+      455       define variable v-delim-key      as character no-undo .
+      456       if p-key-rec = ?
+      457         or p-key-rec = "":U
+      458       then do:
+      459         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      460       end.
+      461       assign
+      462         v-tbl-name      = entry( 1 , p-key-rec, chr(3) )
+      463         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      464       .
+      465       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      466       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверный уникальный ключ.", vss-include-info0 ).
+      467       assign
+      468         v-inform = bh_tbl-name:index-information(1)
+      469         v-ind    = 2
+      470       .
+      471       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      472       on error undo, return error
+      473       :
+      474         assign
+      475           v-inform = bh_tbl-name:index-information( v-ind )
+      476           v-ind    = v-ind + 1
+      477         .
+      478       end.
+      479       if v-inform = ?
+      480         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      481         or entry( 3, v-inform, ",":U ) <> "1":U
+      482       then do:
+      483         delete object bh_tbl-name no-error.
+      484         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      485       end.
+      486       assign
+      487         v-idx-field-qnty = num-entries( v-inform ) - 4
+      488       .
+      489       if v-idx-field-qnty < 2 then do:
+      490         delete object bh_tbl-name no-error.
+      491         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      492       end.
+      493       assign
+      494         p-field-list = "":U
+      495         p-value-list = "":U
+      496         v-delim-key  = "":U
+      497         v-field-num  = num-entries( p-key-rec, chr(3) ) - 1
+      498         v-count-fld  = 0
+      499       .
+      500       block_where:
+      501       do v-ind = 1 to v-idx-field-qnty by 2
+      502       on error undo, return error
+      503       :
+      504         assign
+      505           v-count-fld = v-count-fld + 1
+      506         .
+      507         if v-count-fld > v-field-num then do:
+      508           leave block_where.
+      509         end.
+      510         assign
+      511           p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U )
+      512           p-value-list = p-value-list + v-delim-key + entry( v-count-fld + 1 , p-key-rec, chr(3) )
+      513         .
+      514         if v-ind = 1 then do:
+      515           assign
+      516             v-delim-key = chr(3)
+      517           .
+      518         end.
+      519       end.
+      520       delete object bh_tbl-name.
+      521       if v-count-fld <> v-field-num then do:
+      522         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2 в БД", vss-include-info0, v-tbl-name ).
+      523       end.
+      524     end.
+      525   end procedure.
+      526   procedure gen-key-field :
+      527     define input  parameter p-table      as character no-undo .
+      528     define output parameter p-field-list as character no-undo .
+      529     do
+      530     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      531     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      532     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      533     :
+      534       define variable v-full-tbl-name  as character no-undo .
+      535       define variable bh_tbl-name      as handle    no-undo .
+      536       define variable v-tbl-name       as character no-undo .
+      537       define variable v-field-num      as integer   no-undo .
+      538       define variable v-count-fld      as integer   no-undo .
+      539       define variable v-inform         as character no-undo .
+      540       define variable v-ind            as integer   no-undo .
+      541       define variable v-idx-field-qnty as integer   no-undo .
+      542       define variable v-delim-key      as character no-undo .
+      543       if p-table = ?
+      544         or p-table = "":U
+      545       then do:
+      546         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан таблица.", vss-include-info0 ).
+      547       end.
+      548       assign
+      549         v-tbl-name      = p-table
+      550         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      551       .
+      552       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      553       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверная таблица.", vss-include-info0 ).
+      554       assign
+      555         v-inform = bh_tbl-name:index-information(1)
+      556         v-ind    = 2
+      557       .
+      558       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      559       on error undo, return error
+      560       :
+      561         assign
+      562           v-inform = bh_tbl-name:index-information( v-ind )
+      563           v-ind    = v-ind + 1
+      564         .
+      565       end.
+      566       if v-inform = ?
+      567         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      568         or entry( 3, v-inform, ",":U ) <> "1":U
+      569       then do:
+      570         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      571       end.
+      572       assign
+      573         v-idx-field-qnty = num-entries( v-inform ) - 4
+      574       .
+      575       if v-idx-field-qnty < 2 then do:
+      576         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      577       end.
+      578       assign
+      579         p-field-list = "":U
+      580         v-delim-key  = "":U
+      581         v-count-fld  = 0
+      582       .
+      583       block_where:
+      584       do v-ind = 1 to v-idx-field-qnty by 2
+      585       on error undo, return error
+      586       :
+      587         assign
+      588           v-count-fld = v-count-fld + 1
+      589         .
+      590         p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U ).
+      591         if v-ind = 1 then do:
+      592           assign
+      593             v-delim-key = chr(3)
+      594           .
+      595         end.
+      596       end.
+      597       delete object bh_tbl-name.
+      598     end.
+      599   end procedure.
+      600   define variable v-path             as character no-undo .
+      601   DEFINE VARIABLE v-full-path        as character no-undo .
+      602   DEFINE VARIABLE v-file-name        as character no-undo .
+      603   DEFINE VARIABLE v-file-name-no-ext as character no-undo .
+      604   DEFINE VARIABLE v-file-name-ext    as character no-undo .
+      605   define variable v-uniq-key-rec     as character no-undo .
+      606   define variable v-md5-signature    as character no-undo .
+      607   define variable v-part-num         as integer   no-undo .
+      608   define variable glog               as logical   no-undo .
+      609   define variable v-int64-id         as int64     no-undo .
+      610   define variable v-clob-db-num      as integer   no-undo .
+      611   define variable v-longchar1        as longchar  no-undo .
+      612   define variable v-longchar2        as longchar  no-undo .
+      613   define variable v-file-size        as integer   no-undo .
+      614   define variable v-save-clob        as logical   no-undo .
+      615   define variable v-send-nws         as logical   no-undo .
+      616   define buffer buf_clob-data   for ub.clob-data.
+      617   define buffer other_clob-data for ub.clob-data.
+      618   define buffer other_clob-bind for ub.clob-bind.
+      619   define buffer self_clob-bind  for ub.clob-bind.
+      620   FUNCTION is-abs-path returns logical ( input p-path-string as character):
+      621       if index(p-path-string, ":") > 0
+      622           or p-path-string begins (chr(47) + chr(47))
+      623           or p-path-string begins (chr(92) + chr(92))
+      624           or (index(p-path-string, chr(47)) = 0
+      625           and index(p-path-string, chr(92)) = 0) then return yes.
+      626       return no.
+      627   end function.
+      628   do
+      629       on error undo, return error
+      630       :
+      631       if p-mode <> 'удаление':U then
+      632       do:
+      633           run gbl/filename.p (
+      634               input p-file
+      635               ,output v-full-path
+      636               ,output v-path
+      637               ,output v-file-name
+      638               ,output v-file-name-no-ext
+      639               ,output v-file-name-ext
+      640               ) no-error .
+      641           if error-status:error then
+      642           do:
+      643               return error substitute("Не удается найти файл &1", p-file).
+      644           end.
+      645       end.
+      646       if p-resource-type = 'data':U
+      647           or ((p-resource-type = 'report':U
+      648           or p-resource-type = 'report-xml':U)
+      649           and p-bh <> ? )
+      650           then
+      651       do:
+      652           if p-resource-type = 'data':U then
+      653           do:
+      654               run gen-key-rec in this-procedure ( input p-bh:table
+      655                   ,input p-bh
+      656                   ,output v-uniq-key-rec) no-error .
+      657               if error-status:error then
+      658               do:
+      659                   return error return-value .
+      660               end.
+      661           end.
+      662           else
+      663           do:
+      664               v-uniq-key-rec = p-uniq-key-rec.
+      665           end.
+      666           if p-bh <> ? then
+      667           do:
+      668               glog = p-bh:find-current( exclusive-lock) no-error.
+      669               if error-status:error
+      670                   or not glog
+      671                   then
+      672               do:
+      673                   undo, return error substitute("Не удалось заблокировать &1 для записи файла &2  в CLOB&3&4&3&5"
+      674                       ,v-uniq-key-rec
+      675                       ,p-file
+      676                       ,chr(10)
+      677                       , error-status:get-message(1)
+      678                       , return-value ).
+      679               end.
+      680           end.
+      681       end.
+      682       else
+      683       do:
+      684           v-uniq-key-rec = p-uniq-key-rec.
+      685       end.
+      686       if num-entries(p-clob-mode) > 1 then
+      687       do:
+      688           v-send-nws = logical(entry(2, p-clob-mode)).
+      689           p-clob-mode = entry(1, p-clob-mode).
+      690       end.
+      691       else
+      692       do:
+      693           v-send-nws = yes.
+      694       end.
+      695       case p-mode :
+      696           when 'ПРОСМОТР':U then
+      697               do:
+      698                   find first self_clob-bind  no-lock where
+      699                       self_clob-bind.uniq-key-rec = v-uniq-key-rec
+      700                       and self_clob-bind.field-name = p-field
+      701                       and self_clob-bind.part-num = p-part-num
+      702                       no-error.
+      703                   if not available self_clob-bind then
+      704                   do:
+      705                       undo, return error substitute("Не найдена ссылка на CLOB для &1 &2 номер части &3"
+      706                           ,v-uniq-key-rec
+      707                           ,p-field
+      708                           ,p-part-num).
+      709                   end.
+      710                   find first buf_clob-data  no-lock where
+      711                       buf_clob-data.db-num = self_clob-bind.db-num
+      712                       and buf_clob-data.int64-id = self_clob-bind.int64-id no-error.
+      713                   if not available buf_clob-data then
+      714                   do:
+      715                       undo, return error substitute("Не найден CLOB БД &1 id &2 для &3 &4 номер части &5"
+      716                           ,self_clob-bind.db-num
+      717                           ,self_clob-bind.int64-id
+      718                           ,v-uniq-key-rec
+      719                           ,p-field
+      720                           ,p-part-num).
+      721                   end.
+      722                   assign
+      723                       p-clob-db-num = self_clob-bind.db-num
+      724                       p-int64-id    = self_clob-bind.int64-id
+      725                       .
+      726                   return '':U.
+      727               end.
+      728           when 'ДОБАВЛЕНИЕ':U then
+      729               do:
+      730                   run gbl/md5.p (
+      731                       input  v-full-path
+      732                       ,output v-md5-signature
+      733                       ) no-error .
+      734                   if error-status:error then
+      735                   do:
+      736                       undo, return error substitute("&1 &2 &3&4&5&4&6"
+      737                           ,vss-workfile
+      738                           ,vss-revision
+      739                           ,vss-description
+      740                           ,chr(10)
+      741                           , error-status:get-message(1)
+      742                           , return-value ).
+      743                   end.
+      744                   assign
+      745                       file-info:file-name = v-full-path.
+      746                   v-file-size = file-info:file-size.
+      747                   if v-file-size > 100000000 then
+      748                   do:
+      749                       undo, return error substitute("Слишком большой файл &1 (> 100000000Б)", v-full-path).
+      750                   end.
+      751                   if not (p-clob-db-num = ?
+      752                       and
+      753                       p-int64-id = 0) then
+      754                   do:
+      755                       find first buf_clob-data  share-lock where
+      756                           buf_clob-data.db-num = p-clob-db-num
+      757                           and buf_clob-data.int64-id = p-int64-id no-error.
+      758                       if not available buf_clob-data then
+      759                       do:
+      760                           undo, return error substitute("Не найден CLOB БД &1 id &2"
+      761                               ,p-clob-db-num
+      762                               ,p-int64-id).
+      763                       end.
+      764                   end.
+      765                   find last self_clob-bind  no-lock where
+      766                       self_clob-bind.uniq-key-rec = v-uniq-key-rec
+      767                       and self_clob-bind.field-name = p-field no-error.
+      768                   if available self_clob-bind
+      769                       and (self_clob-bind.resource-type = 'data':U
+      770                       or
+      771                       self_clob-bind.resource-type = 'report':U
+      772                       or
+      773                       self_clob-bind.resource-type = 'report-xml':U
+      774                       or
+      775                       self_clob-bind.resource-type = 'list':U
+      776                       or
+      777                       self_clob-bind.resource-type = 'list-macro':U
+      778                       )
+      779                       then
+      780                   do:
+      781                       assign
+      782                           v-part-num = self_clob-bind.part-num + 1.
+      783                   end.
+      784                   else
+      785                   do:
+      786                       v-part-num = 1.
+      787                   end.
+      788                   if not available buf_clob-data then
+      789                   do:
+      790                       create buf_clob-data.
+      791                       assign
+      792                           buf_clob-data.int64-id      = next-value( s-clob-int64, ub)
+      793                           buf_clob-data.db-num        = g#db-num
+      794                           buf_clob-data.crc-field     = v-md5-signature
+      795                           buf_clob-data.file-size     = v-file-size
+      796                           buf_clob-data.encoding      = (if p-encoding <> ?
+      797                                  and p-encoding <> ""
+      798                                  then p-encoding
+      799                                  else "")
+      800                           buf_clob-data.is-cs         = v-send-nws
+      801                           buf_clob-data.resource-type = p-resource-type
+      802                           .
+      803                       buf_clob-data.file-name_ = (if is-abs-path(p-file) then v-file-name else p-file).
+      804                       if p-encoding <> ?
+      805                           and p-encoding <> '':U
+      806                           and p-encoding <> "1251" then
+      807                       do:
+      808                           COPY-LOB
+      809                               FROM  FILE v-full-path
+      810                               TO  OBJECT v-longchar1
+      811                               no-convert
+      812                               NO-ERROR .
+      813                           if error-status :error then
+      814                           do:
+      815                               v-longchar1 = '':U.
+      816                               v-longchar2 = '':U.
+      817                               undo, return error substitute("Ошибка при перекодировке файла &1:&2&3"
+      818                                   , v-full-path
+      819                                   , chr(10)
+      820                                   , error-status:get-message(1) ).
+      821                           end.
+      822                           assign
+      823                               v-longchar2 = codepage-convert(v-longchar1, p-encoding, "1251")
+      824                               .
+      825                           buf_clob-data.cdata = v-longchar2 .
+      826                           v-longchar1 = '':U.
+      827                           v-longchar2 = '':U.
+      828                       end.
+      829                       else
+      830                       do:
+      831                           COPY-LOB
+      832                               FROM  FILE v-full-path
+      833                               TO  OBJECT v-longchar1
+      834                               No-convert
+      835                               NO-ERROR .
+      836                           buf_clob-data.cdata = v-longchar1 .
+      837                       end.
+      838                       if error-status:error then
+      839                       do:
+      840                           if error-status :error then
+      841                           do:
+      842                               v-longchar1 = '':U.
+      843                               v-longchar2 = '':U.
+      844                               undo, return error substitute("Ошибка при записи файла в БД&1:&2&3"
+      845                                   , v-full-path
+      846                                   , chr(10)
+      847                                   , error-status:get-message(1) ).
+      848                           end.
+      849                       end.
+      850                   end.
+      851                   create self_clob-bind.
+      852                   assign
+      853                       self_clob-bind.uniq-key-rec  = v-uniq-key-rec
+      854                       self_clob-bind.field-name    = (if p-resource-type = 'list':U
+      855                                    or p-resource-type = 'list-macro':U
+      856                                    then substitute("&1-&2", buf_clob-data.db-num, buf_clob-data.int64-id)
+      857                                    else p-field)
+      858                       self_clob-bind.part-num      = v-part-num
+      859                       self_clob-bind.resource-type = p-resource-type
+      860                       self_clob-bind.db-num        = buf_clob-data.db-num
+      861                       self_clob-bind.int64-id      = buf_clob-data.int64-id
+      862                       self_clob-bind.descr         = p-descr
+      863                       p-part-num                   = self_clob-bind.part-num
+      864                       p-clob-db-num                = self_clob-bind.db-num
+      865                       p-int64-id                   = self_clob-bind.int64-id
+      866                       buf_clob-data.file-name_     = (if p-resource-type = 'list':U
+      867                                   or p-resource-type = 'list-macro':U
+      868                                   then  p-resource-type
+      869                                   else buf_clob-data.file-name_)
+      870                       .
+      871                   run trg/userlog.p (
+      872                       input 'create':U
+      873                       , input 'clob-bind':U
+      874                       , input ( buffer self_clob-bind :handle )
+      875                       , input ?
+      876                       , input ""
+      877                       ) no-error.
+      878                   if error-status :error
+      879                       then
+      880                   do:
+      881                       undo, return error substitute( "&2&1Ошибка при записи истории пользователя&1&3&1&4"
+      882                           , chr(10)
+      883                           , vss-workfile
+      884                           , return-value
+      885                           , error-status :get-message ( 1 ) ).
+      886                   end.
+      887                   release self_clob-bind no-error.
+      888                   if error-status:error then
+      889                   do:
+      890                       undo, return error substitute("&1 &2 &3Ошибки при сохранении связи clob с записью-владельцем &4 &5 &6&7&6&8"
+      891                           ,vss-workfile
+      892                           ,vss-revision
+      893                           ,vss-description
+      894                           ,v-uniq-key-rec
+      895                           ,p-field
+      896                           ,chr(10)
+      897                           , error-status:get-message(1)
+      898                           , return-value ).
+      899                   end.
+      900                   release buf_clob-data no-error.
+      901                   if error-status:error then
+      902                   do:
+      903                       undo, return error substitute("&1 &2 &3Ошибки при сохранении clob для &6&7&6&8"
+      904                           ,vss-workfile
+      905                           ,vss-revision
+      906                           ,vss-description
+      907                           ,v-uniq-key-rec
+      908                           ,p-field
+      909                           ,chr(10)
+      910                           , error-status:get-message(1)
+      911                           , return-value ).
+      912                   end.
+      913               end.
+      914           when 'ИЗМЕНЕНИЕ':U then
+      915               do:
+      916                   if p-clob-mode <> "override"
+      917                       and p-clob-mode <> "add-new"
+      918                       and p-clob-mode <> "add-new-old-delete"
+      919                       then
+      920                   do:
+      921                       undo, return error  substitute("Неверное значение параметра p-clob-mode = &1", p-clob-mode).
+      922                   end.
+      923                   v-save-clob = yes.
+      924                   run gbl/md5.p (
+      925                       input  v-full-path
+      926                       ,output v-md5-signature
+      927                       ) no-error .
+      928                   if error-status:error then
+      929                   do:
+      930                       undo, return error substitute("&1 &2 &3&4&5&4&6"
+      931                           ,vss-workfile
+      932                           ,vss-revision
+      933                           ,vss-description
+      934                           ,chr(10)
+      935                           , error-status:get-message(1)
+      936                           , return-value ).
+      937                   end.
+      938                   assign
+      939                       file-info:file-name = v-full-path.
+      940                   v-file-size = file-info:file-size.
+      941                   if v-file-size > 100000000 then
+      942                   do:
+      943                       undo, return error substitute("Слишком большой файл &1 (> 100000000Б)", v-full-path).
+      944                   end.
+      945                   find first self_clob-bind  exclusive-lock where
+      946                       self_clob-bind.uniq-key-rec = v-uniq-key-rec
+      947                       and self_clob-bind.field-name = p-field
+      948                       and self_clob-bind.part-num = p-part-num
+      949                       no-error.
+      950                   if not available self_clob-bind then
+      951                   do:
+      952                       undo, return error substitute("Не найдена ссылка на CLOB для &1 &2 номер части &3"
+      953                           ,v-uniq-key-rec
+      954                           ,p-field
+      955                           ,p-part-num).
+      956                   end.
+      957                   find first buf_clob-data  share-lock where
+      958                       buf_clob-data.db-num = self_clob-bind.db-num
+      959                       and buf_clob-data.int64-id = self_clob-bind.int64-id no-error.
+      960                   if not available buf_clob-data then
+      961                   do:
+      962                       undo, return error substitute("Не найден CLOB БД &1 id &2 для &3 &4 номер части &5"
+      963                           ,self_clob-bind.db-num
+      964                           ,self_clob-bind.int64-id
+      965                           ,v-uniq-key-rec
+      966                           ,p-field
+      967                           ,p-part-num).
+      968                   end.
+      969                   v-send-nws = buf_clob-data.is-cs.
+      970                   if p-clob-mode = "override" then
+      971                   do:
+      972                       for each other_clob-bind no-lock where
+      973                           other_clob-bind.db-num = self_clob-bind.db-num
+      974                           and other_clob-bind.int64-id = self_clob-bind.int64-id :
+      975                           if not (other_clob-bind.uniq-key-rec = self_clob-bind.uniq-key-rec
+      976                               and
+      977                               other_clob-bind.field-name = self_clob-bind.field-name
+      978                               and
+      979                               other_clob-bind.part-num = self_clob-bind.part-num
+      980                               ) then leave.
+      981                       end.
+      982                   end.
+      983                   if available other_clob-bind
+      984                       or (p-resource-type = 'gate':U
+      985                       and not (v-md5-signature = buf_clob-data.crc-field
+      986                       and
+      987                       p-file = buf_clob-data.file-name_)
+      988                       )
+      989                       or (p-resource-type = 'upgrade':U
+      990                       and not (v-md5-signature = buf_clob-data.crc-field
+      991                       and
+      992                       p-file = buf_clob-data.file-name_)
+      993                       )
+      994                       or p-clob-mode = "add-new"
+      995                       or p-clob-mode = "add-new-old-delete"
+      996                       then
+      997                   do:
+      998                       create buf_clob-data.
+      999                       assign
+     1000                           buf_clob-data.int64-id      = next-value( s-clob-int64, ub)
+     1001                           buf_clob-data.db-num        = g#db-num
+     1002                           buf_clob-data.crc-field     = v-md5-signature
+     1003                           buf_clob-data.file-size     = v-file-size
+     1004                           buf_clob-data.encoding      = (if p-encoding <> ?
+     1005                                 and p-encoding <> ""
+     1006                                 then p-encoding
+     1007                                 else "")
+     1008                           buf_clob-data.resource-type = p-resource-type
+     1009                           v-save-clob                 = yes
+     1010                           buf_clob-data.is-cs         = v-send-nws
+     1011                           .
+     1012                       buf_clob-data.file-name_ = (if is-abs-path(p-file) then v-file-name else p-file).
+     1013                   end.
+     1014                   else
+     1015                   do:
+     1016                       if buf_clob-data.crc-field = v-md5-signature
+     1017                           and buf_clob-data.file-name_ = (if is-abs-path(p-file) then v-file-name
+     1018                       else p-file) then
+     1019                       do:
+     1020                           v-save-clob = no.
+     1021                       end.
+     1022                       if v-save-clob then
+     1023                       do:
+     1024                           assign
+     1025                               buf_clob-data.crc-field  = v-md5-signature
+     1026                               buf_clob-data.file-size  = v-file-size
+     1027                               buf_clob-data.file-name_ = (if is-abs-path(p-file) then v-file-name else p-file)
+     1028                               .
+     1029                       end.
+     1030                   end.
+     1031                   if v-save-clob then
+     1032                   do:
+     1033                       if p-encoding <> ?
+     1034                           and p-encoding <> '':U
+     1035                           and p-encoding <> "1251" then
+     1036                       do:
+     1037                           COPY-LOB
+     1038                               FROM  FILE v-full-path
+     1039                               TO  OBJECT v-longchar1
+     1040                               no-convert
+     1041                               NO-ERROR .
+     1042                           if error-status :error then
+     1043                           do:
+     1044                               v-longchar1 = '':U.
+     1045                               v-longchar2 = '':U.
+     1046                               undo, return error substitute("Ошибка при перекодировке файла &1:&2&3"
+     1047                                   , v-full-path
+     1048                                   , chr(10)
+     1049                                   , error-status:get-message(1) ).
+     1050                           end.
+     1051                           assign
+     1052                               v-longchar2 = codepage-convert(v-longchar1, p-encoding, "1251")
+     1053                               .
+     1054                           buf_clob-data.cdata = v-longchar2 .
+     1055                           v-longchar1 = '':U.
+     1056                           v-longchar2 = '':U.
+     1057                       end.
+     1058                       else
+     1059                       do:
+     1060                           COPY-LOB
+     1061                               FROM  FILE v-full-path
+     1062                               TO  OBJECT v-longchar1
+     1063                               No-convert
+     1064                               NO-ERROR .
+     1065                           buf_clob-data.cdata = v-longchar1 .
+     1066                       end.
+     1067                       if error-status :error then
+     1068                       do:
+     1069                           undo, return error substitute("Ошибка при записи файла в БД&1:&2&3"
+     1070                               , v-full-path
+     1071                               , chr(10)
+     1072                               , error-status:get-message(1) ).
+     1073                       end.
+     1074                       assign
+     1075                           self_clob-bind.resource-type = p-resource-type
+     1076                           self_clob-bind.db-num        = buf_clob-data.db-num
+     1077                           self_clob-bind.int64-id      = buf_clob-data.int64-id
+     1078                           self_clob-bind.descr         = p-descr
+     1079                           p-part-num                   = self_clob-bind.part-num
+     1080                           p-clob-db-num                = self_clob-bind.db-num
+     1081                           p-int64-id                   = self_clob-bind.int64-id
+     1082                           .
+     1083                   end.
+     1084                   assign
+     1085                       buf_clob-data.file-name_ = (if p-resource-type = 'list':U
+     1086                                   or p-resource-type = 'list-macro':U
+     1087                                   then  p-resource-type
+     1088                                   else buf_clob-data.file-name_)
+     1089                       .
+     1090                   release self_clob-bind no-error.
+     1091                   if error-status:error then
+     1092                   do:
+     1093                       undo, return error substitute("&1 &2 &3Ошибки при сохранении связи clob с записью-владельцем &4 &5 &6&7&6&8"
+     1094                           ,vss-workfile
+     1095                           ,vss-revision
+     1096                           ,vss-description
+     1097                           ,v-uniq-key-rec
+     1098                           ,p-field
+     1099                           ,chr(10)
+     1100                           , error-status:get-message(1)
+     1101                           , return-value ).
+     1102                   end.
+     1103                   release buf_clob-data no-error.
+     1104                   if error-status:error then
+     1105                   do:
+     1106                       undo, return error substitute("&1 &2 &3Ошибки при сохранении clob для &6&7&6&8"
+     1107                           ,vss-workfile
+     1108                           ,vss-revision
+     1109                           ,vss-description
+     1110                           ,v-uniq-key-rec
+     1111                           ,p-field
+     1112                           ,chr(10)
+     1113                           , error-status:get-message(1)
+     1114                           , return-value ).
+     1115                   end.
+     1116                   if p-clob-mode = "add-new-old-delete" then
+     1117                   do:
+     1118                       delete self_clob-bind no-error.
+     1119                       if error-status:error then
+     1120                       do:
+     1121                           undo, return error substitute("&1 &2 &3Ошибки при удалении связи старого clob с записью-владельцем &4 &5 &6&7&6&8"
+     1122                               ,vss-workfile
+     1123                               ,vss-revision
+     1124                               ,vss-description
+     1125                               ,v-uniq-key-rec
+     1126                               ,p-field
+     1127                               ,chr(10)
+     1128                               , error-status:get-message(1)
+     1129                               , return-value ).
+     1130                       end.
+     1131                   end.
+     1132               end.
+     1133           when 'удаление':U then
+     1134               do:
+     1135                   if p-clob-mode <> "delete"
+     1136                       and p-clob-mode <> "leave" then
+     1137                   do:
+     1138                       undo, return error  substitute("Неверное значение параметра p-clob-mode = &1", p-clob-mode).
+     1139                   end.
+     1140                   find first self_clob-bind  exclusive-lock where
+     1141                       self_clob-bind.uniq-key-rec = v-uniq-key-rec
+     1142                       and self_clob-bind.field-name = p-field
+     1143                       and self_clob-bind.part-num = p-part-num
+     1144                       no-error.
+     1145                   if not available self_clob-bind then
+     1146                   do:
+     1147                       undo, return error substitute("Не найдена ссылка на CLOB для &1 &2 номер части &3"
+     1148                           ,v-uniq-key-rec
+     1149                           ,p-field
+     1150                           ,p-part-num).
+     1151                   end.
+     1152                   if self_clob-bind.db-num <> g#db-num
+     1153                       and not (p-resource-type = 'data':U
+     1154                       or p-resource-type = 'report':U
+     1155                       or p-resource-type = 'report-xml':U)
+     1156                       then
+     1157                   do:
+     1158                       undo, return error substitute("Нельзя удалить файл, созданный в другой БД").
+     1159                   end.
+     1160                   assign
+     1161                       v-clob-db-num = self_clob-bind.db-num
+     1162                       v-int64-id    = self_clob-bind.int64-id
+     1163                       .
+     1164                   run trg/userlog.p (
+     1165                           input 'delete':U
+     1166                           , input 'clob-bind':U
+     1167                           , input ( buffer self_clob-bind :handle )
+     1168                           , input ?
+     1169                           , input ""
+     1170                           ) no-error.
+     1171                   if error-status :error
+     1172                   then
+     1173                   do:
+     1174                      undo, return error substitute( "&2&1Ошибка при записи истории пользователя&1&3&1&4"
+     1175                               , chr(10)
+     1176                               , vss-workfile
+     1177                               , return-value
+     1178                               , error-status :get-message ( 1 ) ).
+     1179                   end.
+     1180                   delete self_clob-bind no-error .
+     1181                   if error-status:error then
+     1182                   do:
+     1183                       undo, return error substitute("&1 &2 &3Ошибки при удалении связи clob с записью-владельцем &4 &5 &6&7&6&8"
+     1184                           ,vss-workfile
+     1185                           ,vss-revision
+     1186                           ,vss-description
+     1187                           ,v-uniq-key-rec
+     1188                           ,p-field
+     1189                           ,chr(10)
+     1190                           , error-status:get-message(1)
+     1191                           , return-value ).
+     1192                   end.
+     1193                   if p-clob-mode  = "delete" then
+     1194                   do:
+     1195                       find first buf_clob-data exclusive-lock where
+     1196                           buf_clob-data.db-num = v-clob-db-num
+     1197                           and  buf_clob-data.int64-id  = v-int64-id.
+     1198                       delete buf_clob-data no-error.
+     1199                       if error-status:error then
+     1200                       do:
+     1201                           undo, return error substitute("&1 &2 &3Ошибки при удалении clob для &6&7&6&8"
+     1202                               ,vss-workfile
+     1203                               ,vss-revision
+     1204                               ,vss-description
+     1205                               ,v-uniq-key-rec
+     1206                               ,p-field
+     1207                               ,chr(10)
+     1208                               , error-status:get-message(1)
+     1209                               , return-value ).
+     1210                       end.
+     1211                   end.
+     1212                   assign
+     1213                       p-part-num    = ?
+     1214                       p-clob-db-num = ?
+     1215                       p-int64-id    = 0
+     1216                       .
+     1217               end.
+     1218           otherwise
+     1219           do:
+     1220               undo, return error  substitute("Неверное значение параметра p-mode = &1", p-mode).
+     1221           end.
+     1222       end case.
+     1223   end.
+     1224   procedure cb_set-send-nws :
+     1225       define output  parameter p-send-nws as logical   no-undo .
+     1226       do
+     1227           on error undo, return error return-value
+     1228           :
+     1229           p-send-nws = v-send-nws.
+     1230       end.
+     1231   end procedure.

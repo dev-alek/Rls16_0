@@ -1,0 +1,142 @@
+        1   block-level on error undo, throw.
+        2   define parameter buffer buf_chk-doc for ub.chk-doc.
+        3   define input parameter p-chk-doc-code  like ub.chk-doc.doc-code no-undo .
+        4   define input parameter p-with-question as logical no-undo .
+        5   define output parameter p-ok as logical no-undo .
+        6   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        7   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        8   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        9   define variable vss-workfile    as character no-undo init "$Workfile: chklinfx.p $":U .
+       10   define variable vss-archive     as character no-undo init "$Archive: str/chklinfx.p $":U .
+       11   define variable vss-description as character no-undo init "Заполнение номеров товарных строк и строк оплат по чеку, созданному в версиях TH < 11.1".
+       12   procedure vss-get-info :
+       13     define output parameter p-vss-revision    like vss-revision    no-undo .
+       14     define output parameter p-vss-author      like vss-author      no-undo .
+       15     define output parameter p-vss-date        like vss-date        no-undo .
+       16     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       17     define output parameter p-vss-archive     like vss-archive     no-undo .
+       18     define output parameter p-vss-description like vss-description no-undo .
+       19     assign
+       20       p-vss-revision    = vss-revision
+       21       p-vss-author      = vss-author
+       22       p-vss-date        = vss-date
+       23       p-vss-workfile    = vss-workfile
+       24       p-vss-archive     = vss-archive
+       25       p-vss-description = vss-description
+       26     .
+       27   end procedure.
+       28   procedure vss-get-parameters :
+       29     define output parameter p-vss-parameters as character no-undo .
+       30       assign
+       31         p-vss-parameters = substitute('&1', (if avail buf_chk-doc then buf_chk-doc.doc-code else p-chk-doc-code))
+       32       .
+       33   end procedure.
+       34   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       35   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       36   define variable v-vssrevis-logger                   as handle    no-undo .
+       37   procedure vss-logevent :
+       38     define input  parameter p-extra-paramters as character no-undo .
+       39     define variable v-vssrevis-parameters as character no-undo .
+       40     do
+       41     on error undo, return error return-value
+       42     :
+       43       if  valid-handle(v-vssrevis-logger)
+       44       and v-vssrevis-logger :get-signature("logevent") <> ""
+       45       then do:
+       46         run vss-get-parameters in this-procedure
+       47           (output v-vssrevis-parameters
+       48           ).
+       49         run logevent in v-vssrevis-logger
+       50           (input vss-workfile
+       51           ,input vss-revision
+       52           ,input v-vssrevis-parameters
+       53           ,input p-extra-paramters
+       54           ).
+       55       end.
+       56     end.
+       57   end procedure.
+       58   assign
+       59     v-vssrevis-logger = g#vssrevis-logger
+       60   .
+       61   if  valid-handle(v-vssrevis-logger)
+       62   and v-vssrevis-logger :get-signature("logevent") <> ""
+       63   then do:
+       64     assign
+       65       v-vssrevis-logevent = true
+       66     .
+       67     run vss-logevent in this-procedure (input vss-description) .
+       68   end.
+       69   define new global shared variable g#language as character no-undo .
+       70   if g#language <> '' and g#language <> 'rus':U then do:
+       71     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       72   end.
+       73   define variable choice as integer no-undo .
+       74   define variable ii as integer no-undo .
+       75   define buffer buf_chk-gds for ub.chk-gds.
+       76   define buffer buf_chk-pay for ub.chk-pay.
+       77   do
+       78   on error undo, return error
+       79   :
+       80     find first buf_chk-gds no-lock where
+       81               buf_chk-gds.doc-code = p-chk-doc-code no-error.
+       82     if available buf_chk-gds
+       83     and buf_chk-gds.line-num = ?  then do:
+       84       if p-with-question then do:
+       85         run gbl/d-askw.w (input "Внимание",
+       86                               input  ("Чек создан в предыдущих версиях TH,"
+       87                                       + chr(10)
+       88                                       + "Для корректного просмотра необходимо заполнить номера товарных строк и строк оплаты,"
+       89                                       + chr(10)
+       90                                       +  "причем номера строк НЕ БУДУТ СОВПАДАТЬ с номерами строк в ОРИГИНАЛЕ ЧЕКА НА КАССЕ!"
+       91                                       + chr(10)
+       92                                       + "(По СПН изменения не передаются!)"
+       93                                       ),
+       94                               input "|",
+       95                               input "Заполнить|Отменить просмотр чека",
+       96                               input "|",
+       97                               input 1,
+       98                               input 2,
+       99                               output choice).
+      100         if choice = 2 then do:
+      101           return.
+      102         end.
+      103       end.
+      104       if not available buf_chk-doc then do:
+      105         find first buf_chk-doc exclusive-lock where
+      106                   buf_chk-doc.doc-code = p-chk-doc-code no-wait no-error .
+      107         if locked buf_chk-doc then do:
+      108            if p-with-question then do:
+      109               undo, return error substitute("Запись чека с №1 занята", p-chk-doc-code).
+      110            end.
+      111         end.
+      112         if not available buf_chk-doc then undo, return error substitute("Не найден чек с №1 занята", p-chk-doc-code).
+      113       end.
+      114       for each buf_chk-gds where
+      115               buf_chk-gds.doc-code = buf_chk-doc.doc-code
+      116        on error undo, return error
+      117               :
+      118         assign
+      119         ii = ii + 1
+      120         buf_chk-gds.line-num = ii
+      121         .
+      122       end.
+      123       ii = 0.
+      124       for each buf_chk-pay where
+      125               buf_chk-pay.doc-code = buf_chk-doc.doc-code
+      126        on error undo, return error
+      127               :
+      128         assign
+      129         ii = ii + 1
+      130         buf_chk-pay.line-num = ii
+      131         .
+      132       end.
+      133       assign
+      134       p-ok = yes
+      135       .
+      136     end.
+      137     else do:
+      138       assign
+      139       p-ok = yes
+      140       .
+      141     end.
+      142   end.

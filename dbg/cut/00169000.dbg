@@ -1,0 +1,471 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00169000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cut/00169000.p $".
+        7   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 169.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define  shared temp-table tt-objs no-undo
+       13     field obj-type as character
+       14     field obj-code as integer
+       15     index pi is unique primary obj-type obj-code
+       16     .
+       17   define temp-table temp_obj no-undo
+       18       field obj-type as character
+       19       field obj-code as integer
+       20   .
+       21   on WRITE of dst.shift-obj override do: end.
+       22   on WRITE of dst.c-shift-obj override do: end.
+       23   on WRITE of dst.obj-date  override do: end.
+       24   on WRITE of dst.shift-attr  override do: end.
+       25   on WRITE of dst.c-shift-attr  override do: end.
+       26   on WRITE of dst.shift-obj-attr  override do: end.
+       27   on WRITE of dst.shift-staff  override do: end.
+       28   on WRITE of dst.shift-staff-attr  override do: end.
+       29   on WRITE of dst.c-shift-staff  override do: end.
+       30   on WRITE of dst.c-sht-hist  override do: end.
+       31   define buffer old-shift-obj     for src.shift-obj.
+       32   define buffer new-shift-obj     for dst.shift-obj.
+       33   define buffer old-c-shift-obj     for src.c-shift-obj.
+       34   define buffer new-c-shift-obj     for dst.c-shift-obj.
+       35   define buffer old-shift-attr     for src.shift-attr.
+       36   define buffer new-shift-attr     for dst.shift-attr.
+       37   define buffer old-c-shift-attr     for src.c-shift-attr.
+       38   define buffer new-c-shift-attr     for dst.c-shift-attr.
+       39   define buffer old-shift-obj-attr     for src.shift-obj-attr.
+       40   define buffer new-shift-obj-attr     for dst.shift-obj-attr.
+       41   define buffer old-shift-staff   for src.shift-staff.
+       42   define buffer new-shift-staff   for dst.shift-staff.
+       43   define buffer old-c-shift-staff   for src.c-shift-staff.
+       44   define buffer new-c-shift-staff   for dst.c-shift-staff.
+       45   define buffer old-shift-staff-attr   for src.shift-staff-attr.
+       46   define buffer new-shift-staff-attr   for dst.shift-staff-attr.
+       47   define buffer buf_old_obj-date  for src.obj-date.
+       48   define buffer buf_new_obj-date  for dst.obj-date.
+       49   define buffer old-c-sht-hist   for src.c-sht-hist.
+       50   define buffer new-c-sht-hist   for dst.c-sht-hist.
+       51   define buffer new-clients   for dst.clients.
+       52   do
+       53   on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)) :
+       54   define input parameter vartype-cut            as integer   no-undo.
+       55   define input parameter varlist-db             as character no-undo.
+       56   define input parameter vardate-actual-goods   as date      no-undo.
+       57   define input parameter vardate-actual-docs    as date      no-undo.
+       58   define input parameter vardate-actual-findoc  as date      no-undo.
+       59   define input parameter vardate-output-zone    as date      no-undo.
+       60   define input parameter varstay-recipe-goods   as logical   no-undo.
+       61   define input parameter varstay-weight-goods   as logical   no-undo.
+       62   define input parameter varnot-copy-del-goods  as logical   no-undo.
+       63   define input parameter varstay-history        as logical   no-undo.
+       64   define input parameter vargen-file            as character no-undo.
+       65   define stream str-gen.
+       66   output stream str-gen to vargen-file append.
+       67   if not connected("src") then do:
+       68      return error "Нет коннекта с базой 'src'.".
+       69   end.
+       70   if not connected("dst") then do:
+       71      return error "Нет коннекта с базой 'dst'.".
+       72   end.
+       73   find src.sys-ctrl no-lock.
+       74   if not available src.sys-ctrl then do:
+       75      return error "В базе данных src не найдена уникальная запись sys-ctrl.".
+       76   end.
+       77   if src.sys-ctrl.db-num <> 0 then do:
+       78      return error "Пакет обрезания работает только в главной базе данных. В данной версии удаленные БД создаются выгрузкой из главных.".
+       79   end.
+       80   if vardate-actual-docs <> ? and
+       81      (vardate-actual-goods   > vardate-actual-docs or
+       82       vardate-actual-goods   = ? )   then do:
+       83         return error SUBSTITUTE("Ошибка при задании дат актуальности." +
+       84                                 "Дата актуальности товаров &1."        +
+       85                                 "Дата актуальности документов &2."     +
+       86                                 "Дата актуальности документов должна быть больше или равна дат актуальностей товаров.",
+       87                                 vardate-actual-goods,
+       88                                 vardate-actual-docs).
+       89   end.
+       90   define variable v-fact-order               as decimal      no-undo.
+       91   define variable v-shift-end-fact-order     as decimal      no-undo.
+       92   define variable v-day-end-fact-order       as decimal      no-undo.
+       93   RUN init-temphost in this-procedure .
+       94   if vardate-actual-docs <> ?
+       95   then do:
+       96       run factord in this-procedure (
+       97           input vardate-actual-docs - 1
+       98         , input 0
+       99         , input 1
+      100         , input vardate-actual-docs - 1
+      101         , input 1
+      102         , input yes
+      103         , output v-fact-order
+      104         , output v-shift-end-fact-order
+      105         , output v-day-end-fact-order
+      106       ).
+      107       for each temp_obj
+      108       :
+      109           find first tt-objs
+      110                where tt-objs.obj-type = temp_obj.obj-type
+      111                  and tt-objs.obj-code = temp_obj.obj-code
+      112           no-error.
+      113           if vartype-cut = 0
+      114           or ( vartype-cut = 1 and available tt-objs )
+      115           then do:
+      116               for each old-shift-obj no-lock
+      117                  where old-shift-obj.obj-type     = temp_obj.obj-type
+      118                    and old-shift-obj.obj-code     = temp_obj.obj-code
+      119                    and old-shift-obj.fact-order   > v-shift-end-fact-order
+      120                , first new-clients no-lock
+      121                  where new-clients.obj-type = old-shift-obj.obj-type
+      122                    and new-clients.obj-code = old-shift-obj.obj-code
+      123               :
+      124                   create new-shift-obj.
+      125                   buffer-copy old-shift-obj to new-shift-obj.
+      126               end.
+      127               for each old-c-shift-obj no-lock
+      128                  where old-c-shift-obj.obj-type     = temp_obj.obj-type
+      129                    and old-c-shift-obj.obj-code     = temp_obj.obj-code
+      130                    and old-c-shift-obj.fact-order   > v-shift-end-fact-order
+      131                , first new-clients no-lock
+      132                  where new-clients.obj-type = old-c-shift-obj.obj-type
+      133                    and new-clients.obj-code = old-c-shift-obj.obj-code
+      134               :
+      135                   create new-c-shift-obj.
+      136                   buffer-copy old-c-shift-obj to new-c-shift-obj.
+      137               end.
+      138               for each old-shift-staff no-lock
+      139                  where old-shift-staff.obj-type    = temp_obj.obj-type
+      140                    and old-shift-staff.obj-code    = temp_obj.obj-code
+      141                    and old-shift-staff.shift-date >= vardate-actual-docs
+      142                , first new-clients no-lock
+      143                  where new-clients.obj-type = old-shift-staff.obj-type
+      144                    and new-clients.obj-code = old-shift-staff.obj-code
+      145               :
+      146                   create new-shift-staff.
+      147                   buffer-copy old-shift-staff to new-shift-staff.
+      148               end.
+      149               for each old-c-shift-staff no-lock
+      150                  where old-c-shift-staff.obj-type    = temp_obj.obj-type
+      151                    and old-c-shift-staff.obj-code    = temp_obj.obj-code
+      152                    and old-c-shift-staff.shift-date >= vardate-actual-docs
+      153                , first new-clients no-lock
+      154                  where new-clients.obj-type = old-c-shift-staff.obj-type
+      155                    and new-clients.obj-code = old-c-shift-staff.obj-code
+      156               :
+      157                   create new-c-shift-staff.
+      158                   buffer-copy old-c-shift-staff to new-c-shift-staff.
+      159               end.
+      160               for each old-shift-staff-attr no-lock
+      161                  where old-shift-staff-attr.obj-type    = temp_obj.obj-type
+      162                    and old-shift-staff-attr.obj-code    = temp_obj.obj-code
+      163                    and old-shift-staff-attr.shift-date >= vardate-actual-docs
+      164                , first new-clients no-lock
+      165                  where new-clients.obj-type = old-shift-staff-attr.obj-type
+      166                    and new-clients.obj-code = old-shift-staff-attr.obj-code
+      167               :
+      168                   create new-shift-staff-attr.
+      169                   buffer-copy old-shift-staff-attr to new-shift-staff-attr.
+      170               end.
+      171               for each old-shift-obj-attr no-lock
+      172                  where old-shift-obj-attr.obj-type    = temp_obj.obj-type
+      173                    and old-shift-obj-attr.obj-code    = temp_obj.obj-code
+      174                    and old-shift-obj-attr.shift-date >= vardate-actual-docs
+      175                , first new-clients no-lock
+      176                  where new-clients.obj-type = old-shift-obj-attr.obj-type
+      177                    and new-clients.obj-code = old-shift-obj-attr.obj-code
+      178               :
+      179                   create new-shift-obj-attr.
+      180                   buffer-copy old-shift-obj-attr to new-shift-obj-attr.
+      181               end.
+      182               for each buf_old_obj-date no-lock
+      183                  where buf_old_obj-date.obj-type      = temp_obj.obj-type
+      184                    and buf_old_obj-date.obj-code      = temp_obj.obj-code
+      185                    and buf_old_obj-date.fact-order    > v-shift-end-fact-order
+      186               on error undo, return error
+      187               :
+      188                   create buf_new_obj-date.
+      189                   buffer-copy buf_old_obj-date to buf_new_obj-date.
+      190               end.
+      191               for each old-c-sht-hist no-lock
+      192                  where old-c-sht-hist.obj-type    = temp_obj.obj-type
+      193                    and old-c-sht-hist.obj-code    = temp_obj.obj-code
+      194                    and old-c-sht-hist.shift-date >= vardate-actual-docs
+      195                , first new-clients no-lock
+      196                  where new-clients.obj-type = old-c-sht-hist.obj-type
+      197                    and new-clients.obj-code = old-c-sht-hist.obj-code
+      198               :
+      199                   create new-c-sht-hist.
+      200                   buffer-copy old-c-sht-hist to new-c-sht-hist.
+      201               end.
+      202           end.
+      203           else do:
+      204               for each old-shift-obj no-lock
+      205                  where old-shift-obj.obj-type     = temp_obj.obj-type
+      206                    and old-shift-obj.obj-code     = temp_obj.obj-code
+      207                , first new-clients no-lock
+      208                  where new-clients.obj-type = old-shift-obj.obj-type
+      209                    and new-clients.obj-code = old-shift-obj.obj-code
+      210               :
+      211                   create new-shift-obj.
+      212                   buffer-copy old-shift-obj to new-shift-obj.
+      213               end.
+      214               for each old-c-shift-obj no-lock
+      215                  where old-c-shift-obj.obj-type     = temp_obj.obj-type
+      216                    and old-c-shift-obj.obj-code     = temp_obj.obj-code
+      217                , first new-clients no-lock
+      218                  where new-clients.obj-type = old-c-shift-obj.obj-type
+      219                    and new-clients.obj-code = old-c-shift-obj.obj-code
+      220               :
+      221                   create new-c-shift-obj.
+      222                   buffer-copy old-c-shift-obj to new-c-shift-obj.
+      223               end.
+      224               for each old-shift-staff no-lock
+      225                  where old-shift-staff.obj-type = temp_obj.obj-type
+      226                    and old-shift-staff.obj-code = temp_obj.obj-code
+      227                , first new-clients no-lock
+      228                  where new-clients.obj-type = old-shift-staff.obj-type
+      229                    and new-clients.obj-code = old-shift-staff.obj-code
+      230               :
+      231                   create new-shift-staff.
+      232                   buffer-copy old-shift-staff to new-shift-staff.
+      233               end.
+      234               for each old-shift-staff-attr no-lock
+      235                  where old-shift-staff-attr.obj-type = temp_obj.obj-type
+      236                    and old-shift-staff-attr.obj-code = temp_obj.obj-code
+      237                , first new-clients no-lock
+      238                  where new-clients.obj-type = old-shift-staff-attr.obj-type
+      239                    and new-clients.obj-code = old-shift-staff-attr.obj-code
+      240               :
+      241                   create new-shift-staff-attr.
+      242                   buffer-copy old-shift-staff-attr to new-shift-staff-attr.
+      243               end.
+      244               for each old-c-shift-staff no-lock
+      245                  where old-c-shift-staff.obj-type = temp_obj.obj-type
+      246                    and old-c-shift-staff.obj-code = temp_obj.obj-code
+      247                , first new-clients no-lock
+      248                  where new-clients.obj-type = old-c-shift-staff.obj-type
+      249                    and new-clients.obj-code = old-c-shift-staff.obj-code
+      250               :
+      251                   create new-c-shift-staff.
+      252                   buffer-copy old-c-shift-staff to new-c-shift-staff.
+      253               end.
+      254               for each old-shift-obj-attr no-lock
+      255                  where old-shift-obj-attr.obj-type = temp_obj.obj-type
+      256                    and old-shift-obj-attr.obj-code = temp_obj.obj-code
+      257                , first new-clients no-lock
+      258                  where new-clients.obj-type = old-shift-obj-attr.obj-type
+      259                    and new-clients.obj-code = old-shift-obj-attr.obj-code
+      260               :
+      261                   create new-shift-obj-attr.
+      262                   buffer-copy old-shift-obj-attr to new-shift-obj-attr.
+      263               end.
+      264               for each old-c-sht-hist no-lock
+      265                  where old-c-sht-hist.obj-type = temp_obj.obj-type
+      266                    and old-c-sht-hist.obj-code = temp_obj.obj-code
+      267                , first new-clients no-lock
+      268                  where new-clients.obj-type = old-c-sht-hist.obj-type
+      269                    and new-clients.obj-code = old-c-sht-hist.obj-code
+      270               :
+      271                   create new-c-sht-hist.
+      272                   buffer-copy old-c-sht-hist to new-c-sht-hist.
+      273               end.
+      274               for each buf_old_obj-date no-lock
+      275                  where buf_old_obj-date.obj-type      = temp_obj.obj-type
+      276                    and buf_old_obj-date.obj-code      = temp_obj.obj-code
+      277               on error undo, return error
+      278               :
+      279                   create buf_new_obj-date.
+      280                   buffer-copy buf_old_obj-date to buf_new_obj-date.
+      281               end.
+      282           end.
+      283       end.
+      284   end.
+      285   for each temp_obj
+      286   on error undo, return error
+      287   :
+      288       find first buf_new_obj-date no-lock
+      289            where buf_new_obj-date.obj-type = temp_obj.obj-type
+      290              and buf_new_obj-date.obj-code = temp_obj.obj-code
+      291              and buf_new_obj-date.status_  = 'тек':U
+      292       no-error.
+      293       if not available buf_new_obj-date
+      294       then do:
+      295           find first buf_old_obj-date no-lock
+      296                where buf_old_obj-date.obj-type = temp_obj.obj-type
+      297                  and buf_old_obj-date.obj-code = temp_obj.obj-code
+      298                  and buf_old_obj-date.status_  = 'тек':U
+      299           no-error.
+      300           if available buf_old_obj-date
+      301           then do:
+      302               create buf_new_obj-date.
+      303               buffer-copy buf_old_obj-date to buf_new_obj-date.
+      304           end.
+      305       end.
+      306   end.
+      307   output stream str-gen close.
+      308   return "Произведен экспорт таблиц: shift-obj c-shift-obj shift-attr c-shift-attr shift-obj-attr shift-staff c-shift-staff shift-staff-attr obj-date c-sht-hist.".
+      309   end.
+      310   procedure factord :
+      311     define input  parameter p-fact-date            as date    no-undo .
+      312     define input  parameter p-fact-time            as integer no-undo .
+      313     define input  parameter p-fact-num             as integer no-undo .
+      314     define input  parameter p-shift-date           as date    no-undo .
+      315     define input  parameter p-shift-num            as integer no-undo .
+      316     define input  parameter p-shift-on             as logical no-undo .
+      317     define output parameter p-fact-order           as decimal no-undo .
+      318     define output parameter p-shift-end-fact-order as decimal no-undo .
+      319     define output parameter p-day-end-fact-order   as decimal no-undo .
+      320     define variable vss-description as character no-undo init "factord: Определение порядкового номера документа".
+      321     if p-fact-date = ? then do:
+      322       return error "Не указана фактическая дата" .
+      323     end.
+      324     define variable v-fact-date-num as integer no-undo .
+      325     assign
+      326       v-fact-date-num = integer(p-fact-date)
+      327     .
+      328     if p-fact-num = ?
+      329     or p-fact-num = 0 then do:
+      330       return error "Не задан p-fact-num " + string(p-fact-num) .
+      331     end.
+      332     if p-fact-num < 0 then do:
+      333       return error "Отрицательный fact-num " + string(p-fact-num) .
+      334     end.
+      335     if p-fact-num >= 100000000 then do:
+      336       return error "Недопустимо большой fact-num " + string(p-fact-num) .
+      337     end.
+      338     if p-shift-on = true then do:
+      339       if p-shift-date = ?
+      340       then do:
+      341         return error "Не задана дата смены" .
+      342       end.
+      343       if p-shift-num = ?
+      344       or p-shift-num = 0
+      345       then do:
+      346         return error "Не задан номер смены" .
+      347       end.
+      348     end.
+      349     else do:
+      350       assign
+      351         p-shift-date = p-fact-date
+      352         p-shift-num  = 24
+      353       .
+      354     end.
+      355     define variable v-shift-offset as integer no-undo .
+      356     if p-shift-date = p-fact-date then do:
+      357       assign
+      358         v-shift-offset = 1
+      359       .
+      360     end.
+      361     if p-shift-date < p-fact-date then do:
+      362       assign
+      363         v-shift-offset = 0
+      364       .
+      365     end.
+      366     if p-shift-date > p-fact-date then do:
+      367       message
+      368         vss-workfile vss-revision vss-description skip
+      369         "Неправильная дата закрытия смены" skip
+      370         "Дата закрытия не смены не может быть раньше чем дата открытия смены" skip
+      371         view-as alert-box error .
+      372       undo, return error
+      373         substitute("Дата закрытия не смены &1 не может быть раньше чем дата открытия смены &2"
+      374           ,string(p-fact-date, '99/99/9999':U)
+      375           ,string(p-shift-date, '99/99/9999':U)
+      376           )
+      377       .
+      378     end.
+      379     if p-shift-num < 1
+      380     or p-shift-num > 24 then do:
+      381       message
+      382         vss-workfile vss-revision vss-description skip
+      383         "Неправильный номер смены" skip
+      384         "p-shift-num" p-shift-num skip
+      385         view-as alert-box error .
+      386       undo, return error return-value .
+      387     end.
+      388     assign
+      389       p-fact-order           = v-fact-date-num
+      390                              + v-shift-offset * 0.5
+      391                              + p-shift-num    * 0.02 - 0.01
+      392                              + p-fact-num     * 0.0000000001
+      393       p-shift-end-fact-order = v-fact-date-num
+      394                              + v-shift-offset * 0.5
+      395                              + p-shift-num    * 0.02
+      396       p-day-end-fact-order   = v-fact-date-num
+      397                              + 0.99
+      398     .
+      399     if p-fact-order           <= v-fact-date-num
+      400     or p-shift-end-fact-order <= v-fact-date-num
+      401     or p-fact-order           >= p-shift-end-fact-order
+      402     or p-shift-end-fact-order >= p-day-end-fact-order
+      403     then do:
+      404       message
+      405         vss-workfile vss-revision vss-description skip
+      406         "Внутренняя ошибка при генерации фактического номера" skip
+      407         "p-fact-date"            p-fact-date            skip
+      408         "p-fact-time"            p-fact-time            skip
+      409         "p-fact-num"             p-fact-num             skip
+      410         "p-shift-date"           p-shift-date           skip
+      411         "p-shift-num"            p-shift-num            skip
+      412         "p-shift-on"             p-shift-on             skip
+      413         "p-shift-end-fact-order" p-shift-end-fact-order skip
+      414         "p-day-end-fact-order"   p-day-end-fact-order   skip
+      415         "v-fact-date-num"        v-fact-date-num        skip
+      416         view-as alert-box error .
+      417       undo, return error return-value .
+      418     end.
+      419   end procedure.
+      420   procedure init-temphost :
+      421     define buffer buf_store   for dst.store .
+      422     define buffer buf_shop    for dst.shop .
+      423     define buffer buf_clients for dst.clients .
+      424     define buffer buf_temp_obj  for temp_obj .
+      425   do
+      426   on error undo, return error
+      427   :
+      428           for each buf_store
+      429           on error undo, return error
+      430           :
+      431               find first buf_clients no-lock
+      432                    where buf_clients.obj-type = 'скл':U
+      433                      and buf_clients.obj-code = buf_store.obj-code
+      434                no-error .
+      435                if not available buf_clients
+      436                then do:
+      437                   message
+      438                       "Ошибка при поиске клиента" skip
+      439                       "Клиент" 'скл':U buf_store.obj-code skip
+      440                   view-as alert-box error .
+      441                   undo, return error .
+      442               end.
+      443               create buf_temp_obj.
+      444               assign
+      445                   buf_temp_obj.obj-type  = 'скл':U
+      446                   buf_temp_obj.obj-code  = buf_store.obj-code
+      447               .
+      448           end.
+      449           for each buf_shop
+      450           on error undo, return error
+      451           :
+      452               find first buf_clients no-lock
+      453                    where buf_clients.obj-type = 'маг':U
+      454                      and buf_clients.obj-code = buf_shop.obj-code
+      455               no-error .
+      456               if not available buf_clients
+      457               then do:
+      458                   message
+      459                       "Ошибка при поиске клиента" skip
+      460                       "Клиент" 'маг':U buf_shop.obj-code skip
+      461                   view-as alert-box error .
+      462                   undo, return error .
+      463               end.
+      464               create buf_temp_obj.
+      465               assign
+      466                   buf_temp_obj.obj-type  = 'маг':U
+      467                   buf_temp_obj.obj-code  = buf_shop.obj-code
+      468               .
+      469           end.
+      470   end.
+      471   end procedure.

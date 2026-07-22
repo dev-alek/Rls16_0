@@ -1,0 +1,113 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.bge.1crn.subjects.*.
+        3   USING ibs.th.str.specattr from propath.
+        4   USING ibs.th.ref.spegrpmt from propath.
+        5   block-level on error undo, throw.
+        6   class ibs.th.bge.1crn.import.impcontr-price-docs implements ibs.th.bge.1crn.import.iimpsubject:
+        7   //  { cmp/str-glbl.i }
+        8     define variable specattr as class specattr no-undo .
+        9     define variable spegrpmt as class spegrpmt no-undo .
+       10     define property Msg as character no-undo
+       11       get.
+       12       set.
+       13     method public logical Excute( subjectObj as class ibs.th.bge.1crn.subjects.isubject ):
+       14       define variable v-ContrPrice as class   contr-price-docs            no-undo.
+       15       define variable v-Gds-sale   as class   contr-price-docs_price-list no-undo.
+       16       define variable v_price-list as class   subjects                    no-undo.
+       17       define variable v-contr-code as integer no-undo .
+       18       define variable v-gds-code   as integer no-undo .
+       19       define variable v-unit-cli   as character no-undo .
+       20       define variable v-cli-base-rate as decimal no-undo .
+       21       define variable ii           as integer no-undo .
+       22       define variable is-create    as logical no-undo .
+       23       define buffer b_contract-specif for ub.contract-specif .
+       24       define buffer b_goods           for ub.goods .
+       25       define buffer buf_contract      for ub.contract .
+       26       v-ContrPrice = cast (subjectObj, contr-price-docs).
+       27       assign
+       28         v-contr-code = integer(v-ContrPrice:cont-code)
+       29         v_price-list = v-ContrPrice:price-list
+       30       .
+       31       find first buf_contract no-lock
+       32            where buf_contract.contract-code = v-contr-code
+       33           // and buf_contract.host-code     = v-host-code
+       34         no-error .
+       35       if not AVAILABLE buf_contract then do:
+       36         Msg = "Контракт не найден с кодом:" + v-ContrPrice:cont-code .
+       37         undo, throw new Progress.Lang.AppError(Msg) .
+       38         // return error Msg.
+       39       end.
+       40         if VALID-OBJECT (v_price-list) then
+       41         do:
+       42           do ii = 1 to v_price-list:Get(ii):
+       43             v-Gds-sale = cast (v_price-list:SubjectObjCurr, contr-price-docs_price-list).
+       44             assign
+       45               v-gds-code = INTEGER (v-Gds-sale:gds-code)
+       46               v-unit-cli =          v-Gds-sale:unit-spl-code
+       47               v-cli-base-rate =     v-Gds-sale:unit-k
+       48             .
+       49             find first b_goods no-lock where b_goods.gds-code = v-gds-code no-error .
+       50             if not AVAILABLE b_goods then do:
+       51               Msg = "Товар не найден с кодом:" + v-Gds-sale:gds-code .
+       52               undo, throw new Progress.Lang.AppError(Msg) .
+       53               // return error Msg.
+       54             end .
+       55               find first ub.contract-specif EXCLUSIVE-LOCK
+       56                 where ub.contract-specif.host-code    = buf_contract.host-code
+       57                 and ub.contract-specif.contract-num = buf_contract.contract-code
+       58                 and ub.contract-specif.gds-code     = b_goods.gds-code
+       59                 no-error no-wait .
+       60               if locked(ub.contract-specif) then do:
+       61                 Msg = substitute("Запись с товаром [&1] в спецификации договора [&2] занята другим пользователем",
+       62                                  b_goods.gds-code, buf_contract.contract-code ) .
+       63                 undo, throw new Progress.Lang.AppError(Msg) .
+       64               end .
+       65               if NOT available ub.contract-specif then
+       66               do:
+       67                 create ub.contract-specif .
+       68                 assign
+       69                   ub.contract-specif.host-code    = buf_contract.host-code
+       70                   ub.contract-specif.contract-num = buf_contract.contract-code
+       71                   ub.contract-specif.gds-code     = b_goods.gds-code
+       72                   .
+       73               end.
+       74               ASSIGN
+       75                 UB.contract-specif.gds-name          = b_goods.gds-name
+       76                 ub.contract-specif.artic             = b_goods.artic
+       77                 ub.contract-specif.prod-type         = b_goods.prod-type
+       78                 ub.contract-specif.prod-code         = b_goods.prod-code
+       79                 ub.contract-specif.cli-base-rate     = b_goods.cli-base-rate
+       80                 ub.contract-specif.price-cli         = v-Gds-sale:price-sale
+       81                 ub.contract-specif.unit-base         = b_goods.unit-base
+       82                 ub.contract-specif.unit-cli          = if (v-unit-cli > "") then v-unit-cli else b_goods.unit-base
+       83                 ub.contract-specif.unit-cli-ord      = b_goods.unit-base
+       84                 ub.contract-specif.unit-cli-rcv      = b_goods.unit-base
+       85                 ub.contract-specif.cli-base-rate     = if (v-cli-base-rate > 0) then v-cli-base-rate else 1
+       86                 ub.contract-specif.cli-base-rate-ord = 1
+       87                 ub.contract-specif.cli-base-rate-rcv = 1
+       88                 ub.contract-specif.VAT-type          = if v-Gds-sale:nds-code = -1 then 'без':U else 'в т. ч.':U
+       89                 ub.contract-specif.VAT-pc            = if v-Gds-sale:nds-code = -1 then 0 else v-Gds-sale:nds-code
+       90                 ub.contract-specif.prc               = v-Gds-sale:max-otkl
+       91                 ub.contract-specif.db-num            = buf_contract.db-num
+       92                 .
+       93               find first ub.contract-specif-attr exclusive-lock  where
+       94                 ub.contract-specif-attr.contract-num = buf_contract.contract-code  and
+       95                 ub.contract-specif-attr.host-code    = buf_contract.host-code     and
+       96                 ub.contract-specif-attr.gds-code     = b_goods.gds-code      and
+       97                 ub.contract-specif-attr.attr-code    = 'prc-min':U
+       98                 no-error .
+       99               if not AVAILABLE (ub.contract-specif-attr) then
+      100               do:
+      101                 create ub.contract-specif-attr .
+      102                 assign
+      103                   ub.contract-specif-attr.contract-num = buf_contract.contract-code
+      104                   ub.contract-specif-attr.host-code    = buf_contract.host-code
+      105                   ub.contract-specif-attr.gds-code     = b_goods.gds-code
+      106                   ub.contract-specif-attr.attr-code    = 'prc-min':U
+      107                   .
+      108               end.
+      109               ub.contract-specif-attr.attr-value = string(v-Gds-sale:min-otkl) .
+      110           end.
+      111         end.
+      112     end method.
+      113   end class.

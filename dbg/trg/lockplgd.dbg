@@ -1,0 +1,513 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-obj-type          like ub.pl-gds.obj-type no-undo .
+        3   define input parameter p-obj-code          like ub.pl-gds.obj-code no-undo .
+        4   define input parameter p-pl-code           like ub.pl-gds.pl-code  no-undo .
+        5   define input parameter p-gds-code          like ub.pl-gds.pl-code  no-undo .
+        6   define input parameter p-action            as   character          no-undo .
+        7   define input parameter p-no-check-rvs-code as   character          no-undo .
+        8   define input parameter p-is-berate         as   logical            no-undo .
+        9   define variable vss-revision    as character no-undo initial "$Revision$":U .
+       10   define variable vss-author      as character no-undo initial "$Author$":U .
+       11   define variable vss-date        as character no-undo initial "$Date$":U .
+       12   define variable vss-workfile    as character no-undo initial "$Workfile$":U .
+       13   define variable vss-archive     as character no-undo initial "$Archive$":U .
+       14   define variable vss-description as character no-undo initial "Блокировка и разблокировка товаров на складских местах":U .
+       15   procedure vss-get-info :
+       16     define output parameter p-vss-revision    like vss-revision    no-undo .
+       17     define output parameter p-vss-author      like vss-author      no-undo .
+       18     define output parameter p-vss-date        like vss-date        no-undo .
+       19     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       20     define output parameter p-vss-archive     like vss-archive     no-undo .
+       21     define output parameter p-vss-description like vss-description no-undo .
+       22     assign
+       23       p-vss-revision    = vss-revision
+       24       p-vss-author      = vss-author
+       25       p-vss-date        = vss-date
+       26       p-vss-workfile    = vss-workfile
+       27       p-vss-archive     = vss-archive
+       28       p-vss-description = vss-description
+       29     .
+       30   end procedure.
+       31   procedure vss-get-parameters :
+       32     define output parameter p-vss-parameters as character no-undo .
+       33   end procedure.
+       34   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       35   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       36   define variable v-vssrevis-logger                   as handle    no-undo .
+       37   procedure vss-logevent :
+       38     define input  parameter p-extra-paramters as character no-undo .
+       39     define variable v-vssrevis-parameters as character no-undo .
+       40     do
+       41     on error undo, return error return-value
+       42     :
+       43       if  valid-handle(v-vssrevis-logger)
+       44       and v-vssrevis-logger :get-signature("logevent") <> ""
+       45       then do:
+       46         run vss-get-parameters in this-procedure
+       47           (output v-vssrevis-parameters
+       48           ).
+       49         run logevent in v-vssrevis-logger
+       50           (input vss-workfile
+       51           ,input vss-revision
+       52           ,input v-vssrevis-parameters
+       53           ,input p-extra-paramters
+       54           ).
+       55       end.
+       56     end.
+       57   end procedure.
+       58   assign
+       59     v-vssrevis-logger = g#vssrevis-logger
+       60   .
+       61   if  valid-handle(v-vssrevis-logger)
+       62   and v-vssrevis-logger :get-signature("logevent") <> ""
+       63   then do:
+       64     assign
+       65       v-vssrevis-logevent = true
+       66     .
+       67     run vss-logevent in this-procedure (input vss-description) .
+       68   end.
+       69   define new global shared variable g#language as character no-undo .
+       70   if g#language <> '' and g#language <> 'rus':U then do:
+       71     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       72   end.
+       73   define new global shared variable g#library  as handle no-undo .
+       74   define new global shared variable g#library2 as handle no-undo .
+       75   define   shared variable g#auto as logical no-undo.
+       76   define   shared variable g#news as logical no-undo.
+       77   define   shared variable g#oxml as logical no-undo.
+       78   define   shared variable g#esys as logical no-undo.
+       79   define   shared variable g#news-source-db as integer no-undo.
+       80   define   shared variable g#esys-source-esys as integer no-undo.
+       81   define   shared variable g#db-num as integer   no-undo .
+       82   define   shared variable g#userid as character no-undo .
+       83   define   shared variable g#passwd as character no-undo .
+       84   define buffer buf_goods    for ub.goods .
+       85   define buffer buf_pl-gds   for ub.pl-gds .
+       86   define buffer buf_gds-obj  for ub.gds-obj .
+       87   define buffer buf_rvs-doc  for ub.rvs-doc .
+       88   define buffer buf_rvs-line for ub.rvs-line .
+       89   define variable v-check-rvs-code as character no-undo .
+       90   define variable ii as integer no-undo .
+       91   main-block :
+       92   do transaction
+       93   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+       94   on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+       95   on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+       96   :
+       97     if lookup( p-action
+       98       , "assign-rvs-on=true":U  + ",":U
+       99       + "assign-rvs-on=false":U + ",":U
+      100       + "check-rvs-on=true":U   + ",":U
+      101       + "check-rvs-on=false":U ) = 0
+      102     then do:
+      103       if p-is-berate = yes then do:
+      104         message
+      105           vss-workfile vss-revision vss-description skip
+      106           "Ошибка задания входных параметров" skip
+      107           "Неизвестное значение p-action" skip
+      108           "p-action" p-action skip
+      109         view-as alert-box error .
+      110       end.
+      111       undo main-block, return error substitute( '&1: ошибка задания входного параметра p-action (неизвестное значение) "&2"',
+      112                                                 vss-workfile,
+      113                                                 p-action ) .
+      114     end.
+      115     find first buf_goods no-lock
+      116       where buf_goods.gds-code = p-gds-code
+      117       no-error .
+      118     if not available buf_goods then do:
+      119       if p-is-berate = yes then do:
+      120         message
+      121           vss-workfile vss-revision vss-description skip
+      122           "Ошибка задания входных параметров" skip
+      123           "Код товара" p-gds-code skip
+      124         view-as alert-box error .
+      125       end.
+      126       undo main-block, return error substitute( '&1: ошибка задания входного параметра "Код товара": &2',
+      127                                                 vss-workfile,
+      128                                                 p-gds-code ) .
+      129     end.
+      130     find first buf_pl-gds no-lock
+      131       where buf_pl-gds.obj-type = p-obj-type
+      132         and buf_pl-gds.obj-code = p-obj-code
+      133         and buf_pl-gds.pl-code  = p-pl-code
+      134         and buf_pl-gds.gds-code = p-gds-code
+      135       no-error .
+      136     if not available buf_pl-gds then do:
+      137       if p-is-berate = yes then do:
+      138         message
+      139           vss-workfile vss-revision vss-description skip
+      140           "Ошибка задания входных параметров" skip
+      141           "Объект" p-obj-type p-obj-code skip
+      142           "Складское место" p-pl-code skip
+      143           "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      144           "Код товара" p-gds-code skip
+      145         view-as alert-box error .
+      146       end.
+      147       undo main-block, return error substitute( '&1: ошибка задания входных параметров.&2' +
+      148                                                 'Объект &3 &4&2Складское место&5&2Код товара&6',
+      149                                                 vss-workfile,
+      150                                                 chr(10),
+      151                                                 p-obj-type,
+      152                                                 p-obj-code,
+      153                                                 p-pl-code,
+      154                                                 p-gds-code ) .
+      155     end.
+      156   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      157   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsobjcr in g#library
+      158     (input  p-obj-type
+      159     ,input  p-obj-code
+      160     ,input  buf_goods.artic
+      161     ,input  buf_goods.prod-type
+      162     ,input  buf_goods.prod-code
+      163     ,buffer buf_gds-obj
+      164     ) no-error .
+      165     if error-status :error then do:
+      166       if p-is-berate = yes then do:
+      167         message
+      168           vss-workfile vss-revision vss-description skip
+      169           "Ошибка при поиске товара на объекте" skip
+      170           "obj-type"  p-obj-type skip
+      171           "obj-code"  p-obj-code skip
+      172           "artic"     buf_goods.artic skip
+      173           "prod-type" buf_goods.prod-type skip
+      174           "prod-code" buf_goods.prod-code skip
+      175           error-status :get-message(1) skip
+      176           return-value skip
+      177         view-as alert-box error .
+      178       end.
+      179       undo main-block, return error substitute( '&1: ошибка при поиске товара на объекте.&2' +
+      180                                                 'Объект &3 &4&2Код товара&5&2&6&2&7',
+      181                                                 vss-workfile,
+      182                                                 chr(10),
+      183                                                 p-obj-type,
+      184                                                 p-obj-code,
+      185                                                 p-gds-code,
+      186                                                 error-status :get-message( 1 ),
+      187                                                 return-value ) .
+      188     end.
+      189     find current buf_gds-obj exclusive-lock .
+      190     release buf_gds-obj .
+      191     find current buf_pl-gds exclusive-lock .
+      192     if buf_pl-gds.rvs-on = ? then do:
+      193       if p-is-berate = yes then do:
+      194         message
+      195           vss-workfile vss-revision vss-description skip
+      196           "Объект на месте хранения имеет неопределенный статус" skip
+      197           "Объект" p-obj-type p-obj-code skip
+      198           "Место хранения" p-pl-code skip
+      199           "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      200           "buf_pl-gds.rvs-on" buf_pl-gds.rvs-on skip
+      201         view-as alert-box error .
+      202       end.
+      203       undo main-block, return error substitute( '&1: бъект на месте хранения имеет неопределенный статус.&2' +
+      204                                                 'Объект &3 &4&2Место хранения &5&2Код товара&6',
+      205                                                 vss-workfile,
+      206                                                 chr(10),
+      207                                                 p-obj-type,
+      208                                                 p-obj-code,
+      209                                                 p-pl-code,
+      210                                                 p-gds-code ) .
+      211     end.
+      212     case p-action :
+      213       when "assign-rvs-on=true" then do:
+      214         if buf_pl-gds.rvs-on = false then do:
+      215           do
+      216           on error undo main-block, return error
+      217           :
+      218             assign
+      219               buf_pl-gds.rvs-on = true
+      220             .
+      221           end.
+      222         end.
+      223         else if not g#news then do:
+      224           for each buf_rvs-doc no-lock
+      225             where buf_rvs-doc.obj-type = buf_pl-gds.obj-type
+      226               and buf_rvs-doc.obj-code = buf_pl-gds.obj-code
+      227               and ( buf_rvs-doc.status_  = 'разрешен':U
+      228                     or buf_rvs-doc.status_ = 'нередакт':U
+      229                   )
+      230           on error undo main-block, return error
+      231           :
+      232             if lookup( buf_rvs-doc.rvs-code, p-no-check-rvs-code ) > 0
+      233             or buf_rvs-doc.rvs-type = 'проверка':U
+      234             then do:
+      235               next.
+      236             end.
+      237             for each buf_rvs-line no-lock
+      238               where buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code
+      239                 and buf_rvs-line.obj-type = buf_pl-gds.obj-type
+      240                 and buf_rvs-line.obj-code = buf_pl-gds.obj-code
+      241                 and buf_rvs-line.pl-code  = buf_pl-gds.pl-code
+      242                 and buf_rvs-line.gds-code = buf_pl-gds.gds-code
+      243             on error undo main-block, return error
+      244             :
+      245               if p-is-berate = yes then do:
+      246                 message
+      247                   "Невозможно заблокировать товар на месте хранения" skip
+      248                   "Товар уже является заблокированным" skip
+      249                   "Объект" p-obj-type p-obj-code skip
+      250                   "Место хранения" p-pl-code skip
+      251                   "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      252                   "Существует сверка" buf_rvs-doc.rvs-code skip
+      253                   "Статус сверки" buf_rvs-doc.status_ skip
+      254                 view-as alert-box information .
+      255               end.
+      256               undo main-block, return error substitute( 'Невозможно заблокировать товар на месте хранения.&1' +
+      257                                                         'Товар уже является заблокированным.&1' +
+      258                                                         'Объект &2 &3&1Место хранения &4&1Код товара&5&1' +
+      259                                                         'Существует сверка &6 (статус "&7")',
+      260                                                         chr(10),
+      261                                                         p-obj-type,
+      262                                                         p-obj-code,
+      263                                                         p-pl-code,
+      264                                                         p-gds-code,
+      265                                                         buf_rvs-doc.rvs-code,
+      266                                                         buf_rvs-doc.status_ ) .
+      267             end.
+      268           end.
+      269           if not g#auto or not g#news then do:
+      270               if p-is-berate = yes then do:
+      271                 message
+      272                   vss-workfile vss-revision vss-description skip
+      273                   "Невозможно заблокировать товар на месте хранения" skip
+      274                   "Товар уже является заблокированным" skip
+      275                   "Объект" p-obj-type p-obj-code skip
+      276                   "Место хранения" p-pl-code skip
+      277                   "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      278                 view-as alert-box error .
+      279               end.
+      280               undo main-block, return error substitute( 'Невозможно заблокировать товар на месте хранения.&1' +
+      281                                                         'Товар уже является заблокированным.&1' +
+      282                                                         'Объект &2 &3&1Место хранения &4&1Код товара&5&1',
+      283                                                         chr(10),
+      284                                                         p-obj-type,
+      285                                                         p-obj-code,
+      286                                                         p-pl-code,
+      287                                                         p-gds-code ) .
+      288           end.
+      289         end.
+      290       end.
+      291       when "assign-rvs-on=false" then do:
+      292         if buf_pl-gds.rvs-on = true then do:
+      293           if not g#news
+      294           then do :
+      295           rvs-docs_ :
+      296             for each buf_rvs-doc no-lock
+      297               where buf_rvs-doc.obj-type = buf_pl-gds.obj-type
+      298                 and buf_rvs-doc.obj-code = buf_pl-gds.obj-code
+      299                 and ( buf_rvs-doc.status_  = 'разрешен':U
+      300                       or buf_rvs-doc.status_ = 'нередакт':U
+      301                     )
+      302             on error undo main-block, return error
+      303             :
+      304               if lookup( buf_rvs-doc.rvs-code, p-no-check-rvs-code ) > 0
+      305               or buf_rvs-doc.rvs-type = 'проверка':U
+      306               then do:
+      307                 next rvs-docs_ .
+      308               end.
+      309               do ii = 1 to num-entries(p-no-check-rvs-code) :
+      310                 v-check-rvs-code = entry(ii, p-no-check-rvs-code) .
+      311                 if (num-entries(v-check-rvs-code, "-") = 3 and entry(1, v-check-rvs-code, "-") = entry(1, buf_rvs-doc.rvs-code, "-"))
+      312                 then do :
+      313                   next rvs-docs_ .
+      314                 end .
+      315               end .
+      316               for each buf_rvs-line no-lock
+      317                 where buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code
+      318                   and buf_rvs-line.obj-type = buf_pl-gds.obj-type
+      319                   and buf_rvs-line.obj-code = buf_pl-gds.obj-code
+      320                   and buf_rvs-line.pl-code  = buf_pl-gds.pl-code
+      321                   and buf_rvs-line.gds-code = buf_pl-gds.gds-code
+      322               on error undo main-block, return error
+      323               :
+      324                 if p-is-berate = yes then do:
+      325                   message
+      326                     vss-workfile vss-revision vss-description skip
+      327                     "Невозможно снять блокировку на товар на месте хранения" skip
+      328                     "Объект" p-obj-type p-obj-code skip
+      329                     "Место хранения" p-pl-code skip
+      330                     "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      331                     "Существует сверка" buf_rvs-doc.rvs-code skip
+      332                     "Статус сверки" buf_rvs-doc.status_ skip
+      333                   view-as alert-box information .
+      334                 end.
+      335                 undo main-block, return error substitute( 'Невозможно снять блокировку на товар на месте хранения.&1' +
+      336                                                           'Объект &2 &3&1Место хранения &4&1Код товара&5&1' +
+      337                                                           'Существует сверка &6 (статус "&7")',
+      338                                                           chr(10),
+      339                                                           p-obj-type,
+      340                                                           p-obj-code,
+      341                                                           p-pl-code,
+      342                                                           p-gds-code,
+      343                                                           buf_rvs-doc.rvs-code,
+      344                                                           buf_rvs-doc.status_ ) .
+      345               end.
+      346             end.
+      347           end .
+      348           do
+      349           on error undo main-block, return error
+      350           :
+      351             assign
+      352               buf_pl-gds.rvs-on = false
+      353             .
+      354           end.
+      355         end.
+      356         else do:
+      357           if not g#auto or not g#news then do:
+      358               if p-is-berate = yes then do:
+      359                 message
+      360                   vss-workfile vss-revision vss-description skip
+      361                   "Невозможно разблокировать товар на месте хранения" skip
+      362                   "Товар не является заблокированным" skip
+      363                   "Объект" p-obj-type p-obj-code skip
+      364                   "Место хранения" p-pl-code skip
+      365                   "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      366                 view-as alert-box error .
+      367               end.
+      368               undo main-block, return error substitute( 'Невозможно снять блокировку на товар на месте хранения.&1' +
+      369                                                         'Товар не является заблокированным.&1' +
+      370                                                         'Объект &2 &3&1Место хранения &4&1Код товара&5&1',
+      371                                                         chr(10),
+      372                                                         p-obj-type,
+      373                                                         p-obj-code,
+      374                                                         p-pl-code,
+      375                                                         p-gds-code ) .
+      376          end.
+      377         end.
+      378       end.
+      379       when "check-rvs-on=true" then do:
+      380         if buf_pl-gds.rvs-on = true then do:
+      381           if p-no-check-rvs-code <> "":U then do:
+      382             for each buf_rvs-doc no-lock
+      383               where buf_rvs-doc.obj-type = buf_pl-gds.obj-type
+      384                 and buf_rvs-doc.obj-code = buf_pl-gds.obj-code
+      385                 and ( buf_rvs-doc.status_  = 'разрешен':U
+      386                       or buf_rvs-doc.status_ = 'нередакт':U
+      387                     )
+      388             on error undo main-block, return error
+      389             :
+      390               if lookup( buf_rvs-doc.rvs-code, p-no-check-rvs-code ) > 0
+      391               or buf_rvs-doc.rvs-type = 'проверка':U
+      392               then do:
+      393                 next.
+      394               end.
+      395               for each buf_rvs-line no-lock
+      396                 where buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code
+      397                   and buf_rvs-line.obj-type = buf_pl-gds.obj-type
+      398                   and buf_rvs-line.obj-code = buf_pl-gds.obj-code
+      399                   and buf_rvs-line.pl-code  = buf_pl-gds.pl-code
+      400                   and buf_rvs-line.gds-code = buf_pl-gds.gds-code
+      401               on error undo main-block, return error
+      402               :
+      403                 if p-is-berate = yes then do:
+      404                   message
+      405                     vss-workfile vss-revision vss-description skip
+      406                     "Блокировка на товар на месте хранения установлена для другого документа сверки" skip
+      407                     "Объект" p-obj-type p-obj-code skip
+      408                     "Место хранения" p-pl-code skip
+      409                     "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      410                     "Сверка" buf_rvs-doc.rvs-code skip
+      411                     "Статус сверки" buf_rvs-doc.status_ skip
+      412                   view-as alert-box information .
+      413                 end.
+      414                 undo main-block, return error substitute( 'Блокировка на товар на месте хранения установлена для другого документа сверки.&1' +
+      415                                                           'Объект &2 &3&1Место хранения &4&1Код товара&5&1' +
+      416                                                           'Сверка &6 (статус "&7")',
+      417                                                           chr(10),
+      418                                                           p-obj-type,
+      419                                                           p-obj-code,
+      420                                                           p-pl-code,
+      421                                                           p-gds-code,
+      422                                                           buf_rvs-doc.rvs-code,
+      423                                                           buf_rvs-doc.status_ ) .
+      424               end.
+      425             end.
+      426           end.
+      427         end.
+      428         else do:
+      429           if p-is-berate = yes then do:
+      430             message
+      431               vss-workfile vss-revision vss-description skip
+      432               "Товар на месте хранения не является заблокированным" skip
+      433               "Объект" p-obj-type p-obj-code skip
+      434               "Место хранения" p-pl-code skip
+      435               "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      436             view-as alert-box information .
+      437           end.
+      438           undo main-block, return error substitute( 'Товар на месте хранения не является заблокированным.&1' +
+      439                                                     'Объект &2 &3&1Место хранения &4&1Код товара&5',
+      440                                                     chr(10),
+      441                                                     p-obj-type,
+      442                                                     p-obj-code,
+      443                                                     p-pl-code,
+      444                                                     p-gds-code ) .
+      445         end.
+      446       end.
+      447       when "check-rvs-on=false" then do:
+      448         if buf_pl-gds.rvs-on = true then do:
+      449           for each buf_rvs-doc no-lock
+      450             where buf_rvs-doc.obj-type = buf_pl-gds.obj-type
+      451               and buf_rvs-doc.obj-code = buf_pl-gds.obj-code
+      452               and ( buf_rvs-doc.status_  = 'разрешен':U
+      453                     or buf_rvs-doc.status_ = 'нередакт':U
+      454                   )
+      455           on error undo main-block, return error
+      456           :
+      457             if buf_rvs-doc.rvs-type = 'проверка':U then next .
+      458             for each buf_rvs-line no-lock
+      459               where buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code
+      460                 and buf_rvs-line.obj-type = buf_pl-gds.obj-type
+      461                 and buf_rvs-line.obj-code = buf_pl-gds.obj-code
+      462                 and buf_rvs-line.pl-code  = buf_pl-gds.pl-code
+      463                 and buf_rvs-line.gds-code = buf_pl-gds.gds-code
+      464             on error undo main-block, return error
+      465             :
+      466               if p-no-check-rvs-code <> "":U
+      467                 and lookup( buf_rvs-doc.rvs-code, p-no-check-rvs-code ) > 0
+      468               then do:
+      469                 next.
+      470               end.
+      471               if p-is-berate = yes then do:
+      472                 message
+      473                   vss-workfile vss-revision vss-description skip
+      474                   "Товар на месте хранения является заблокированным" skip
+      475                   "Объект" p-obj-type p-obj-code skip
+      476                   "Место хранения" p-pl-code skip
+      477                   "Артикул" buf_goods.artic buf_goods.prod-type buf_goods.prod-code skip
+      478                   "Сверка" buf_rvs-doc.rvs-code skip
+      479                   "Статус сверки" buf_rvs-doc.status_ skip
+      480                 view-as alert-box information .
+      481               end.
+      482               undo main-block, return error substitute( 'Товар на месте хранения является заблокированным.&1' +
+      483                                                         'Объект &2 &3&1Место хранения &4&1Код товара&5&1' +
+      484                                                         'Сверка &6 (статус "&7")',
+      485                                                         chr(10),
+      486                                                         p-obj-type,
+      487                                                         p-obj-code,
+      488                                                         p-pl-code,
+      489                                                         p-gds-code,
+      490                                                         buf_rvs-doc.rvs-code,
+      491                                                         buf_rvs-doc.status_ ) .
+      492             end.
+      493           end.
+      494         end.
+      495       end.
+      496       otherwise do:
+      497         if p-is-berate = yes then do:
+      498           message
+      499             vss-workfile vss-revision vss-description skip
+      500             "Внутрення ошибка" skip
+      501             "Неизвестное значение p-action" skip
+      502             "p-action" p-action skip
+      503           view-as alert-box error .
+      504         end.
+      505         undo main-block, return error substitute( '&1: Внутрення ошибка.&2' +
+      506                                                   'Неизвестное значение параметра p-action "&3"',
+      507                                                   vss-workfile,
+      508                                                   chr(10),
+      509                                                   p-action ) .
+      510       end.
+      511     end case .
+      512     release buf_pl-gds .
+      513   end.

@@ -1,0 +1,133 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00044000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cut/00044000.p $":U.
+        7   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 31.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define buffer old-price-doc   for src.price-doc.
+       13   define buffer new-price-doc   for dst.price-doc.
+       14   define buffer old-price-list  for src.price-list.
+       15   define buffer new-price-list  for dst.price-list.
+       16   define buffer old-parts       for src.parts.
+       17   define buffer buf_clients     for dst.clients.
+       18   define buffer new-parts       for dst.parts.
+       19   define buffer new-goods       for dst.goods .
+       20   define buffer new-bar-code    for dst.bar-code .
+       21   define buffer new-gds-prt     for dst.gds-prt  .
+       22   define buffer new-shop        for dst.shop.
+       23   define buffer new-store       for dst.store.
+       24   define variable p-bar-code     as integer   no-undo .
+       25   do
+       26   on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)) :
+       27   define input parameter vartype-cut            as integer   no-undo.
+       28   define input parameter varlist-db             as character no-undo.
+       29   define input parameter vardate-actual-goods   as date      no-undo.
+       30   define input parameter vardate-actual-docs    as date      no-undo.
+       31   define input parameter vardate-actual-findoc  as date      no-undo.
+       32   define input parameter vardate-output-zone    as date      no-undo.
+       33   define input parameter varstay-recipe-goods   as logical   no-undo.
+       34   define input parameter varstay-weight-goods   as logical   no-undo.
+       35   define input parameter varnot-copy-del-goods  as logical   no-undo.
+       36   define input parameter varstay-history        as logical   no-undo.
+       37   define input parameter vargen-file            as character no-undo.
+       38   define stream str-gen.
+       39   output stream str-gen to vargen-file append.
+       40   if not connected("src") then do:
+       41      return error "Нет коннекта с базой 'src'.".
+       42   end.
+       43   if not connected("dst") then do:
+       44      return error "Нет коннекта с базой 'dst'.".
+       45   end.
+       46   find src.sys-ctrl no-lock.
+       47   if not available src.sys-ctrl then do:
+       48      return error "В базе данных src не найдена уникальная запись sys-ctrl.".
+       49   end.
+       50   if src.sys-ctrl.db-num <> 0 then do:
+       51      return error "Пакет обрезания работает только в главной базе данных. В данной версии удаленные БД создаются выгрузкой из главных.".
+       52   end.
+       53   if vardate-actual-docs <> ? and
+       54      (vardate-actual-goods   > vardate-actual-docs or
+       55       vardate-actual-goods   = ? )   then do:
+       56         return error SUBSTITUTE("Ошибка при задании дат актуальности." +
+       57                                 "Дата актуальности товаров &1."        +
+       58                                 "Дата актуальности документов &2."     +
+       59                                 "Дата актуальности документов должна быть больше или равна дат актуальностей товаров.",
+       60                                 vardate-actual-goods,
+       61                                 vardate-actual-docs).
+       62   end.
+       63   define  shared temp-table tt-objs no-undo
+       64     field obj-type as character
+       65     field obj-code as integer
+       66     index pi is unique primary obj-type obj-code
+       67     .
+       68   on WRITE of dst.price-doc  override do: end.
+       69   on WRITE of dst.price-list override do: end.
+       70   on WRITE of dst.parts      override do: end.
+       71   if vardate-actual-docs <> ? then do:
+       72       for each buf_clients no-lock  where
+       73                buf_clients.db-num <> ?
+       74       on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+       75         :
+       76         if vartype-cut = 1 then do:
+       77             find first tt-objs where tt-objs.obj-type = buf_clients.obj-type and
+       78                                      tt-objs.obj-code = buf_clients.obj-code no-error.
+       79         end.
+       80         if vartype-cut = 0      or
+       81             (vartype-cut = 1 and available tt-objs) then do:
+       82           if buf_clients.obj-type  = 'маг':U OR buf_clients.obj-type  = 'скл':U then DO:
+       83             for each old-price-doc where old-price-doc.obj-type   = buf_clients.obj-type             and
+       84                       old-price-doc.obj-code   = buf_clients.obj-CODE and
+       85                       old-price-doc.status_    = 'акт':U         and
+       86                       old-price-doc.fact-date >= vardate-actual-docs no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+       87                RUN proc-copy no-error .
+       88                IF error-status :error THEN return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)).
+       89             END.
+       90           end.
+       91         end.
+       92         else do:
+       93           if buf_clients.obj-type  = 'маг':U OR buf_clients.obj-type  = 'скл':U then DO:
+       94               for each old-price-doc where old-price-doc.obj-type   = buf_clients.obj-type             and
+       95                      old-price-doc.obj-code   = buf_clients.obj-CODE  and
+       96                      old-price-doc.status_    = 'акт':U
+       97                      no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+       98                        RUN proc-copy no-error .
+       99                        IF error-status :error THEN return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)).
+      100               end.
+      101           END.
+      102         END.
+      103      end.
+      104      output stream str-gen close.
+      105   end.
+      106   return "Произведен экспорт таблиц: price-doc price-list parts ( только переоценки )".
+      107   end.
+      108   procedure proc-copy :
+      109     do
+      110     on error undo, return error return-value
+      111     :
+      112     for each old-price-list where old-price-list.doc-num = old-price-doc.doc-num no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      113       create new-price-list.
+      114       buffer-copy old-price-list to new-price-list.
+      115       if old-price-list.main-price = yes then do:
+      116         for each old-parts where  old-parts.out-code  = old-price-doc.doc-num      and
+      117                                   old-parts.obj-code  = old-price-doc.obj-code    and
+      118                                   old-parts.obj-type  = old-price-doc.obj-type    and
+      119                                   old-parts.artic     = old-price-list.artic      and
+      120                                   old-parts.prod-code = old-price-list.prod-code  and
+      121                                   old-parts.prod-type = old-price-list.prod-type
+      122                                   no-lock on error undo,
+      123                                   return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      124                                   :
+      125             create new-parts.
+      126             buffer-copy old-parts to new-parts.
+      127         end.
+      128       end.
+      129     end.
+      130     create new-price-doc.
+      131     buffer-copy old-price-doc to new-price-doc.
+      132     end.
+      133   end procedure.

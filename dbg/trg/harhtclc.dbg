@@ -1,0 +1,2178 @@
+        1   block-level on error undo, throw.
+        2   define input  parameter p-cat-code       like ub.hold-time.cat-code no-undo .
+        3   define input  parameter p-lock-code      as character no-undo .
+        4   define input  parameter p-btpr-type-code as character no-undo .
+        5   define input  parameter p-doc-code       like ub.trn-doc.doc-code no-undo .
+        6   define variable vss-revision    as character no-undo init "$Revision$":U .
+        7   define variable vss-author      as character no-undo init "$Author$":U .
+        8   define variable vss-date        as character no-undo init "$Date$":U .
+        9   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+       10   define variable vss-archive     as character no-undo init "$Archive$":U .
+       11   define variable vss-description as character no-undo init "Расчет межфирменного архива по одному документу".
+       12   procedure vss-get-info :
+       13     define output parameter p-vss-revision    like vss-revision    no-undo .
+       14     define output parameter p-vss-author      like vss-author      no-undo .
+       15     define output parameter p-vss-date        like vss-date        no-undo .
+       16     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       17     define output parameter p-vss-archive     like vss-archive     no-undo .
+       18     define output parameter p-vss-description like vss-description no-undo .
+       19     assign
+       20       p-vss-revision    = vss-revision
+       21       p-vss-author      = vss-author
+       22       p-vss-date        = vss-date
+       23       p-vss-workfile    = vss-workfile
+       24       p-vss-archive     = vss-archive
+       25       p-vss-description = vss-description
+       26     .
+       27   end procedure.
+       28   procedure vss-get-parameters :
+       29     define output parameter p-vss-parameters as character no-undo .
+       30       assign
+       31         p-vss-parameters = substitute('&1|&2|&3|&4':u,p-cat-code,p-lock-code,p-btpr-type-code,p-doc-code)
+       32       .
+       33   end procedure.
+       34   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       35   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       36   define variable v-vssrevis-logger                   as handle    no-undo .
+       37   procedure vss-logevent :
+       38     define input  parameter p-extra-paramters as character no-undo .
+       39     define variable v-vssrevis-parameters as character no-undo .
+       40     do
+       41     on error undo, return error return-value
+       42     :
+       43       if  valid-handle(v-vssrevis-logger)
+       44       and v-vssrevis-logger :get-signature("logevent") <> ""
+       45       then do:
+       46         run vss-get-parameters in this-procedure
+       47           (output v-vssrevis-parameters
+       48           ).
+       49         run logevent in v-vssrevis-logger
+       50           (input vss-workfile
+       51           ,input vss-revision
+       52           ,input v-vssrevis-parameters
+       53           ,input p-extra-paramters
+       54           ).
+       55       end.
+       56     end.
+       57   end procedure.
+       58   assign
+       59     v-vssrevis-logger = g#vssrevis-logger
+       60   .
+       61   if  valid-handle(v-vssrevis-logger)
+       62   and v-vssrevis-logger :get-signature("logevent") <> ""
+       63   then do:
+       64     assign
+       65       v-vssrevis-logevent = true
+       66     .
+       67     run vss-logevent in this-procedure (input vss-description) .
+       68   end.
+       69   define new global shared variable g#language as character no-undo .
+       70   if g#language <> '' and g#language <> 'rus':U then do:
+       71     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       72   end.
+       73   define new global shared variable g#library  as handle no-undo .
+       74   define new global shared variable g#library2 as handle no-undo .
+       75   define   shared variable g#auto as logical no-undo.
+       76   define   shared variable g#news as logical no-undo.
+       77   define   shared variable g#oxml as logical no-undo.
+       78   define   shared variable g#esys as logical no-undo.
+       79   define   shared variable g#news-source-db as integer no-undo.
+       80   define   shared variable g#esys-source-esys as integer no-undo.
+       81   define   shared variable g#db-num as integer   no-undo .
+       82   define   shared variable g#userid as character no-undo .
+       83   define   shared variable g#passwd as character no-undo .
+       84   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       85   PROCEDURE LastDate:
+       86       def input parameter in-date as date no-undo.
+       87       def output parameter LastDate as date no-undo.
+       88       LastDate = ((DATE(MONTH(in-date),28,YEAR(in-date)) + 4) - DAY(DATE(MONTH(in-date),28,YEAR(in-date)) + 4)).
+       89   END PROCEDURE.
+       90   define variable vss-include-info1 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       91   procedure create-hold-time :
+       92   define input parameter p-cat-code like ub.hold-time.cat-code no-undo .
+       93   define input parameter p-start-date like ub.hold-time.start-date no-undo .
+       94   DEFINE VARIABLE v-end-date like ub.hold-time.end-date no-undo .
+       95   define buffer buf_hold-time for ub.hold-time .
+       96   define buffer last_hold-time for ub.hold-time .
+       97     do
+       98     on error undo, return error
+       99     :
+      100       find last last_hold-time no-lock
+      101         where last_hold-time.cat-code = p-cat-code
+      102         use-index pi
+      103         no-error .
+      104       run gbl/lastdate.p
+      105         (input p-start-date
+      106         ,output v-end-date)
+      107         no-error .
+      108       if error-status :error then do:
+      109         message
+      110         vss-workfile vss-revision vss-description skip
+      111         "Ошибка поиска последней даты периода" skip
+      112         "Дата начала периода" p-start-date
+      113         error-status :get-message(1) skip
+      114         return-value skip
+      115         view-as alert-box error .
+      116         undo, return error.
+      117       end.
+      118       create buf_hold-time.
+      119       assign
+      120         buf_hold-time.cat-code       = p-cat-code
+      121         buf_hold-time.time-code      = (if available last_hold-time
+      122                                         then (last_hold-time.time-code + 1)
+      123                                         else 1)
+      124         buf_hold-time.time-type      = 'мес':U
+      125         buf_hold-time.start-date     = p-start-date
+      126         buf_hold-time.end-date       = v-end-date
+      127         buf_hold-time.create-date    = today
+      128         buf_hold-time.update-date    = today
+      129         buf_hold-time.grpupdate-date = today
+      130       .
+      131     end.
+      132   end procedure.
+      133   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      134   define new global shared variable g#trdcalib as handle no-undo.
+      135   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      136   procedure holdprts-create-parts-supp :
+      137     define input  parameter p-orig-in-code   like ub.parts-supp.orig-in-code   no-undo .
+      138     define input  parameter p-orig-part-code like ub.parts-supp.orig-part-code no-undo .
+      139     define input  parameter p-in-code        like ub.parts-supp.in-code        no-undo .
+      140     define input  parameter p-artic          like ub.parts-supp.artic          no-undo .
+      141     define input  parameter p-prod-type      like ub.parts-supp.prod-type      no-undo .
+      142     define input  parameter p-prod-code      like ub.parts-supp.prod-code      no-undo .
+      143     define input  parameter p-part-code      like ub.parts-supp.part-code      no-undo .
+      144     define variable vss-description as character no-undo init "holdprts-create-parts-supp-01: скопировать атрибут партии".
+      145     define buffer buf_parent_trn-doc  for ub.trn-doc .
+      146     define buffer buf_child_trn-doc   for ub.trn-doc .
+      147     define buffer buf_parts           for ub.parts .
+      148     define buffer buf_parts-supp      for ub.parts-supp .
+      149     define buffer buf_orig_parts-supp for ub.parts-supp .
+      150     define buffer buf_income_trn-doc  for ub.trn-doc .
+      151     define buffer buf_income_doc-line for ub.doc-line .
+      152     define buffer buf_goods           for ub.goods .
+      153       define buffer   in-vatp-trn-doc  for ub.trn-doc .
+      154       define buffer   in-vatp-parts    for ub.parts   .
+      155       define buffer   in-vatp-doc      for ub.trn-doc .
+      156       define buffer   in-vatp-goods    for ub.goods   .
+      157       define buffer   in-vatp-sysconf  for ub.sysconf .
+      158       define buffer   in-vatp_doc-attr for ub.doc-attr.
+      159       define variable in-vatp-have-vat-slt       as   logical initial yes    no-undo.
+      160       define variable vat-pc-loc                 like ub.doc-line.vat-pc     no-undo.
+      161       define variable varinvprb                  as   character              no-undo.
+      162       define variable slt-pc-loc                 like ub.doc-line.slt-pc     no-undo.
+      163       define variable cli-base-rate              as   decimal                no-undo.
+      164       define variable price-rubl-with-tax-loc    like ub.doc-line.price-rubl no-undo.
+      165       define variable price-base-with-tax-loc    like ub.doc-line.price-base no-undo.
+      166       define variable price-cli-with-tax-loc     like ub.doc-line.price-cli  no-undo.
+      167       define variable price-rubl-without-tax-loc like ub.doc-line.price-rubl no-undo.
+      168       define variable price-base-without-tax-loc like ub.doc-line.price-base no-undo.
+      169       define variable price-cli-without-tax-loc  like ub.doc-line.price-base no-undo.
+      170       define variable vat-base-loc               like ub.doc-line.price-base no-undo.
+      171       define variable vat-rubl-loc               like ub.doc-line.price-rubl no-undo.
+      172       define variable vat-cli-loc                like ub.doc-line.price-rubl no-undo.
+      173       define variable slt-base-loc               like ub.doc-line.price-base no-undo.
+      174       define variable slt-rubl-loc               like ub.doc-line.price-rubl no-undo.
+      175       define variable slt-cli-loc                like ub.doc-line.price-rubl no-undo.
+      176       define variable road-tax-base-loc          like ub.doc-line.road-tax   no-undo.
+      177       define variable road-tax-rubl-loc          like ub.doc-line.road-tax   no-undo.
+      178       define variable road-tax-cli-loc           like ub.doc-line.road-tax   no-undo.
+      179       define variable transport-base-loc         like ub.doc-line.price-base no-undo.
+      180       define variable transport-rubl-loc         like ub.doc-line.price-rubl no-undo.
+      181       define variable transport-cli-loc          like ub.doc-line.price-rubl no-undo.
+      182       define variable other-base-loc             like ub.doc-line.price-base no-undo.
+      183       define variable other-rubl-loc             like ub.doc-line.price-rubl no-undo.
+      184       define variable other-cli-loc              like ub.doc-line.price-rubl no-undo.
+      185       define variable exch-rate-cli-loc          like ub.trn-doc.exch-rate   no-undo.
+      186       define variable varinvatp-envd             as   character              no-undo.
+      187       define variable varinvatp-type             as   character              no-undo.
+      188     do
+      189     on error undo, return error return-value
+      190     :
+      191       find first buf_child_trn-doc no-lock
+      192         where buf_child_trn-doc.doc-code = p-in-code
+      193         no-error .
+      194       if not available buf_child_trn-doc
+      195       then do:
+      196         return substitute("Не найден исходный документ &1", p-in-code) .
+      197       end.
+      198       find first buf_parent_trn-doc no-lock
+      199         where buf_parent_trn-doc.doc-code = buf_child_trn-doc.hold-doc-code-parent
+      200         no-error .
+      201       if not available buf_parent_trn-doc
+      202       then do:
+      203         return substitute("Не найден приходный документ &1", buf_child_trn-doc.hold-doc-code-parent) .
+      204       end.
+      205       find first buf_parts-supp exclusive-lock
+      206         where buf_parts-supp.in-code   = p-in-code
+      207           and buf_parts-supp.artic     = p-artic
+      208           and buf_parts-supp.prod-type = p-prod-type
+      209           and buf_parts-supp.prod-code = p-prod-code
+      210           and buf_parts-supp.part-code = p-part-code
+      211         no-error .
+      212       if available buf_parts-supp
+      213       then do:
+      214         message
+      215           vss-workfile vss-revision vss-description skip
+      216           vss-include-info3 skip
+      217           "Попытка повторного создания партии атрибутов" skip
+      218           "Документ прихода" p-in-code skip
+      219           "Артикул" p-artic p-prod-type p-prod-code skip
+      220           "Код партии" p-part-code skip
+      221           "Исходный код партии" p-orig-in-code skip
+      222           "Исходный код документа" p-orig-part-code skip
+      223           view-as alert-box error .
+      224         undo, return error .
+      225       end.
+      226       create buf_parts-supp .
+      227       assign
+      228         buf_parts-supp.in-code   = p-in-code
+      229         buf_parts-supp.artic     = p-artic
+      230         buf_parts-supp.prod-type = p-prod-type
+      231         buf_parts-supp.prod-code = p-prod-code
+      232         buf_parts-supp.part-code = p-part-code
+      233       .
+      234       assign
+      235         buf_parts-supp.orig-in-code   = p-orig-in-code
+      236         buf_parts-supp.orig-part-code = p-orig-part-code
+      237       .
+      238       find first buf_orig_parts-supp share-lock
+      239         where buf_orig_parts-supp.in-code   = p-orig-in-code
+      240           and buf_orig_parts-supp.artic     = p-artic
+      241           and buf_orig_parts-supp.prod-type = p-prod-type
+      242           and buf_orig_parts-supp.prod-code = p-prod-code
+      243           and buf_orig_parts-supp.part-code = p-orig-part-code
+      244         no-error .
+      245       if available buf_orig_parts-supp
+      246       then do:
+      247         buffer-copy buf_orig_parts-supp
+      248         except
+      249           buf_orig_parts-supp.in-code
+      250           buf_orig_parts-supp.artic
+      251           buf_orig_parts-supp.prod-type
+      252           buf_orig_parts-supp.prod-code
+      253           buf_orig_parts-supp.part-code
+      254           buf_orig_parts-supp.orig-in-code
+      255           buf_orig_parts-supp.orig-part-code
+      256         to buf_parts-supp.
+      257       end.
+      258       else do:
+      259         find first buf_parts share-lock
+      260           where buf_parts.obj-type  = buf_parent_trn-doc.obj-type
+      261             and buf_parts.obj-code  = buf_parent_trn-doc.obj-code
+      262             and buf_parts.artic     = p-artic
+      263             and buf_parts.prod-type = p-prod-type
+      264             and buf_parts.prod-code = p-prod-code
+      265             and buf_parts.in-code   = p-orig-in-code
+      266             and buf_parts.out-code  = buf_parent_trn-doc.doc-code
+      267             and buf_parts.part-code = p-orig-part-code
+      268           no-error .
+      269         if not available buf_parts
+      270         then do:
+      271           message
+      272             vss-workfile vss-revision vss-description skip
+      273             vss-include-info3 skip
+      274             "Ошибка задания входных параметров" skip
+      275             "Не найдена исходная партия" skip
+      276             "Исходный документ" p-orig-in-code skip
+      277             "Артикул" p-artic p-prod-type p-prod-code skip
+      278             "Код партии" p-orig-part-code skip
+      279             view-as alert-box error .
+      280           undo, return error .
+      281         end.
+      282         define variable v-base-rate         as decimal   no-undo .
+      283         define variable v-base-scale        as integer   no-undo .
+      284         define variable v-exch-rate         as decimal   no-undo .
+      285         define variable v-exch-scale        as integer   no-undo .
+      286         define variable v-extended-doc-type as character no-undo .
+      287         define variable v-unit-cli          as character no-undo .
+      288         find first buf_income_trn-doc no-lock
+      289           where buf_income_trn-doc.doc-code = p-orig-in-code
+      290           no-error .
+      291         if available buf_income_trn-doc
+      292         then do:
+      293           find first buf_income_doc-line no-lock
+      294             where buf_income_doc-line.doc-code  = p-orig-in-code
+      295               and buf_income_doc-line.artic     = p-artic
+      296               and buf_income_doc-line.prod-type = p-prod-type
+      297               and buf_income_doc-line.prod-code = p-prod-code
+      298             no-error .
+      299           if not available buf_income_doc-line
+      300           then do:
+      301             message
+      302               vss-workfile vss-revision vss-description skip
+      303               vss-include-info3 skip
+      304               "Не найдена исходная строка документа прихода" skip
+      305               "Исходный документ" p-orig-in-code skip
+      306               "Артикул" p-artic p-prod-type p-prod-code skip
+      307               "Код партии" p-orig-part-code skip
+      308               view-as alert-box error .
+      309             undo, return error .
+      310           end.
+      311           assign
+      312             v-base-rate         = buf_income_trn-doc.base-rate
+      313             v-base-scale        = buf_income_trn-doc.base-scale
+      314             v-exch-rate         = buf_income_trn-doc.exch-rate
+      315             v-exch-scale        = buf_income_trn-doc.exch-scale
+      316             v-extended-doc-type = buf_income_trn-doc.ext-doc-type
+      317             v-unit-cli          = buf_income_doc-line.unit-cli
+      318           .
+      319         end.
+      320         else do:
+      321           find first buf_goods no-lock
+      322             where buf_goods.artic     = buf_parts.artic
+      323               and buf_goods.prod-type = buf_parts.prod-type
+      324               and buf_goods.prod-code = buf_parts.prod-code
+      325             .
+      326           assign
+      327             v-base-rate         = buf_parts.price-rubl / buf_parts.price-base
+      328             v-base-scale        = 1
+      329             v-exch-rate         = buf_parts.price-rubl / (buf_parts.price-cli * buf_parts.cli-base-rate)
+      330             v-exch-scale        = 1
+      331             v-extended-doc-type = 'ie':U
+      332             v-unit-cli          = buf_goods.unit-cli
+      333           .
+      334         end.
+      335          if v-base-rate = ? then v-base-rate = 1.
+      336          if v-exch-rate = ? then v-exch-rate = 1.
+      337   assign
+      338     price-rubl-with-tax-loc = buf_parts.price-rubl
+      339     price-base-with-tax-loc = buf_parts.price-base
+      340   .
+      341   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+      342   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+      343     (output varinvprb
+      344     )  .
+      345     if buf_parts.out-code = 'free-zone':U     or
+      346        buf_parts.out-code = 'out-zone':U   or
+      347        buf_parts.doc-type = 'акт':U then do:
+      348       assign
+      349         in-vatp-have-vat-slt = yes.
+      350     end.
+      351     else do:
+      352       find first in-vatp_doc-attr no-lock
+      353         where in-vatp_doc-attr.doc-code  = buf_parts.out-code
+      354           and in-vatp_doc-attr.attr-code = 'envd':U
+      355         no-error .
+      356       if not available in-vatp_doc-attr then do:
+      357         assign
+      358           in-vatp-have-vat-slt = yes.
+      359       end.
+      360       else do:
+      361            in-vatp-have-vat-slt = no.
+      362       end.
+      363     end.
+      364     assign
+      365      price-cli-with-tax-loc = buf_parts.price-cli
+      366      cli-base-rate          = buf_parts.cli-base-rate.
+      367     ASSIGN   road-tax-base-loc  = (if buf_parts.road-tax-base  = ? then 0 else buf_parts.road-tax-base)
+      368              road-tax-rubl-loc  = (if buf_parts.road-tax-rubl  = ? then 0 else buf_parts.road-tax-rubl).
+      369     ASSIGN  transport-base-loc = (if buf_parts.transport-base = ? then 0 else buf_parts.transport-base)
+      370             transport-rubl-loc = (if buf_parts.transport-rubl = ? then 0 else buf_parts.transport-rubl)
+      371             other-base-loc     = (if buf_parts.other-base     = ? then 0 else buf_parts.other-base)
+      372             other-rubl-loc     = (if buf_parts.other-rubl     = ? then 0 else buf_parts.other-rubl)
+      373             vat-pc-loc         = (if buf_parts.vat-pc         = ? then 0 else buf_parts.vat-pc)
+      374             slt-pc-loc         = (if buf_parts.slt-pc         = ? then 0 else buf_parts.slt-pc).
+      375             ASSIGN   slt-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      376       ASSIGN   slt-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      377     assign
+      378       exch-rate-cli-loc = (buf_parts.price-rubl - transport-rubl-loc - other-rubl-loc - road-tax-rubl-loc - (if buf_parts.vat-type <> 'в т. ч.':U then vat-rubl-loc else 0) - (if buf_parts.slt-type <> 'в т. ч.':U then slt-rubl-loc else 0)) / buf_parts.price-cli .
+      379     assign
+      380       slt-cli-loc        = slt-rubl-loc       / exch-rate-cli-loc
+      381       vat-cli-loc        = vat-rubl-loc       / exch-rate-cli-loc
+      382       road-tax-cli-loc   = road-tax-rubl-loc  / exch-rate-cli-loc
+      383       transport-cli-loc  = 0
+      384       other-cli-loc      = 0
+      385     .
+      386   ASSIGN
+      387             price-base-without-tax-loc = price-base-with-tax-loc - vat-base-loc - slt-base-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))
+      388       price-rubl-without-tax-loc = price-rubl-with-tax-loc - vat-rubl-loc - slt-rubl-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))
+      389   .
+      390         assign
+      391           buf_parts-supp.PS                = buf_parts.PS
+      392           buf_parts-supp.SLT-type          = buf_parts.SLT-type
+      393           buf_parts-supp.VAT-type          = buf_parts.VAT-type
+      394           buf_parts-supp.base-rate         = v-base-rate
+      395           buf_parts-supp.base-scale        = v-base-scale
+      396           buf_parts-supp.cli-qnty          = buf_parts.cli-qnty
+      397           buf_parts-supp.cst-code          = buf_parts.cst-code
+      398           buf_parts-supp.doc-qnty          = buf_parts.qnty
+      399           buf_parts-supp.exch-code         = buf_parts.exch-code
+      400           buf_parts-supp.exch-rate         = v-exch-rate
+      401           buf_parts-supp.exch-scale        = v-exch-scale
+      402           buf_parts-supp.extended-doc-type = v-extended-doc-type
+      403           buf_parts-supp.fact-date         = buf_parts.fact-date
+      404           buf_parts-supp.fact-qnty         = buf_parts.fact-qnty
+      405           buf_parts-supp.last-date         = buf_parts.last-date
+      406           buf_parts-supp.pay-code          = buf_parts.pay-code
+      407           buf_parts-supp.price-cli         = buf_parts.price-cli
+      408           buf_parts-supp.purch-code        = buf_parts.purch-code
+      409           buf_parts-supp.supp-code         = buf_parts.supp-code
+      410           buf_parts-supp.supp-type         = buf_parts.supp-type
+      411           buf_parts-supp.unit-cli          = v-unit-cli
+      412         .
+      413         assign
+      414           buf_parts-supp.vat-pc         = vat-pc-loc
+      415           buf_parts-supp.slt-pc         = slt-pc-loc
+      416           buf_parts-supp.price-base     = price-base-with-tax-loc
+      417           buf_parts-supp.price-rubl     = price-rubl-with-tax-loc
+      418           buf_parts-supp.vat-base       = vat-base-loc
+      419           buf_parts-supp.vat-rubl       = vat-rubl-loc
+      420           buf_parts-supp.slt-base       = slt-base-loc
+      421           buf_parts-supp.slt-rubl       = slt-rubl-loc
+      422           buf_parts-supp.road-tax-base  = road-tax-base-loc
+      423           buf_parts-supp.road-tax-rubl  = road-tax-rubl-loc
+      424           buf_parts-supp.transport-base = transport-base-loc
+      425           buf_parts-supp.transport-rubl = transport-rubl-loc
+      426           buf_parts-supp.other-base     = other-base-loc
+      427           buf_parts-supp.other-rubl     = other-rubl-loc
+      428         .
+      429       end.
+      430     end.
+      431   end procedure.
+      432   procedure holdprts-get-part-code :
+      433     define input  parameter p-doc-code       as character no-undo .
+      434     define output parameter p-hold-part-code as integer   no-undo .
+      435     define variable vss-description as character no-undo init "holdprts-get-part-code-01: создать уникальный код партии внутри документа".
+      436     define variable v-attr-value as character no-undo .
+      437     define variable v-attr-type  as character no-undo .
+      438     define buffer buf_trn-doc for ub.trn-doc .
+      439     do
+      440     on error undo, return error return-value
+      441     :
+      442       find first buf_trn-doc exclusive-lock
+      443         where buf_trn-doc.doc-code = p-doc-code
+      444         no-error .
+      445       if not available buf_trn-doc
+      446       then do:
+      447         message
+      448           vss-workfile vss-revision vss-description skip
+      449           vss-include-info3 skip
+      450           "Ошибка задания входных параметров" skip
+      451           "Не найден документ" p-doc-code skip
+      452           view-as alert-box error .
+      453         undo, return error .
+      454       end.
+      455   if valid-handle( g#trdcalib ) <> yes then do:       run str/trdcalib.p persistent no-error.       if error-status :error or valid-handle( g#trdcalib ) <> yes then do:         message "Error starting trdcalib.p"    skip( 0 )                 g#trdcalib                     skip( 0 )                 g#trdcalib   :type             skip( 0 )                 g#trdcalib   :file-name        skip( 0 )                 error-status :get-message( 1 ) skip( 0 )                 return-value                   skip( 0 )         view-as alert-box error.         stop.       end.      end.     run trdcalib_tdat-val in g#trdcalib (  input p-doc-code ,
+      456                           input 'hold-part-code':U ,
+      457                          output v-attr-value ,
+      458                          output v-attr-type )  .
+      459       assign
+      460         p-hold-part-code = integer(v-attr-value) + 1
+      461       .
+      462   if valid-handle( g#trdcalib ) <> yes then do:       run str/trdcalib.p persistent no-error.       if error-status :error or valid-handle( g#trdcalib ) <> yes then do:         message "Error starting trdcalib.p"    skip( 0 )                 g#trdcalib                     skip( 0 )                 g#trdcalib   :type             skip( 0 )                 g#trdcalib   :file-name        skip( 0 )                 error-status :get-message( 1 ) skip( 0 )                 return-value                   skip( 0 )         view-as alert-box error.         stop.       end.      end.     run trdcalib_tdat-wrt in g#trdcalib ( input p-doc-code ,
+      463                          input 'hold-part-code':U ,
+      464                          input string(p-hold-part-code) )  .
+      465     end.
+      466   end procedure.
+      467   procedure holdprts-validate-document :
+      468     define input  parameter p-doc-code as character no-undo .
+      469     define variable vss-description as character no-undo init "holdprts-validate-document-01: проверить правильность документа".
+      470     define buffer buf_trn-doc    for ub.trn-doc .
+      471     define buffer parent_trn-doc for ub.trn-doc .
+      472     define buffer buf_parts      for ub.parts .
+      473     define buffer buf_parts-supp for ub.parts-supp .
+      474     do
+      475     on error undo, return error return-value
+      476     :
+      477       find first buf_trn-doc exclusive-lock
+      478         where buf_trn-doc.doc-code = p-doc-code
+      479         no-error .
+      480       if not available buf_trn-doc
+      481       then do:
+      482         message
+      483           vss-workfile vss-revision vss-description skip
+      484           vss-include-info3 skip
+      485           "Ошибка задания входных параметров" skip
+      486           "Не найден документ" p-doc-code skip
+      487           view-as alert-box error .
+      488         undo, return error .
+      489       end.
+      490       find first parent_trn-doc exclusive-lock
+      491         where parent_trn-doc.doc-code = buf_trn-doc.hold-doc-code-parent
+      492         no-error .
+      493       if not available parent_trn-doc
+      494       then do:
+      495         message
+      496           vss-workfile vss-revision vss-description skip
+      497           vss-include-info3 skip
+      498           "Не найден родительский документ" skip
+      499           "Документ" buf_trn-doc.doc-code skip
+      500           "Родительский документ" buf_trn-doc.hold-doc-code-parent skip
+      501           view-as alert-box error .
+      502         undo, return error .
+      503       end.
+      504       if buf_trn-doc.ext-doc-type <> 'ie':U
+      505       then do:
+      506         return .
+      507       end.
+      508       for each buf_parts share-lock
+      509         where buf_parts.out-code = buf_trn-doc.doc-code
+      510       on error undo, return error
+      511       :
+      512         find first buf_parts-supp share-lock
+      513           where buf_parts-supp.in-code   = buf_parts.in-code
+      514             and buf_parts-supp.artic     = buf_parts.artic
+      515             and buf_parts-supp.prod-type = buf_parts.prod-type
+      516             and buf_parts-supp.prod-code = buf_parts.prod-code
+      517             and buf_parts-supp.part-code = buf_parts.part-code
+      518           no-error .
+      519         if not available buf_parts-supp
+      520         then do:
+      521           message
+      522             vss-workfile vss-revision vss-description skip
+      523             vss-include-info3 skip
+      524             "Не найдена информация о поставщике" skip
+      525             "Документ" buf_trn-doc.doc-code skip
+      526             "Родительский документ" buf_trn-doc.hold-doc-code-parent skip
+      527             "Артикул" buf_parts.artic buf_parts.prod-type buf_parts.prod-code skip
+      528             "Номер партии" buf_parts.part-code skip
+      529             view-as alert-box error .
+      530           undo, return error .
+      531         end.
+      532       end.
+      533       for each buf_parts-supp share-lock
+      534         where buf_parts-supp.in-code = buf_trn-doc.doc-code
+      535       on error undo, return error
+      536       :
+      537         find first buf_parts share-lock
+      538           where buf_parts.out-code  = buf_parts-supp.in-code
+      539             and buf_parts.obj-type  = buf_trn-doc.obj-type
+      540             and buf_parts.obj-code  = buf_trn-doc.obj-code
+      541             and buf_parts.artic     = buf_parts-supp.artic
+      542             and buf_parts.prod-type = buf_parts-supp.prod-type
+      543             and buf_parts.prod-code = buf_parts-supp.prod-code
+      544             and buf_parts.part-code = buf_parts-supp.part-code
+      545           no-error .
+      546         if not available buf_parts
+      547         then do:
+      548           message
+      549             vss-workfile vss-revision vss-description skip
+      550             vss-include-info3 skip
+      551             "Задана информация о поставщике для неизвестной партии" skip
+      552             "Документ" buf_trn-doc.doc-code skip
+      553             "Родительский документ" buf_trn-doc.hold-doc-code-parent skip
+      554             "Артикул" buf_parts.artic buf_parts.prod-type buf_parts.prod-code skip
+      555             "Номер партии" buf_parts.part-code skip
+      556             view-as alert-box error .
+      557           undo, return error .
+      558         end.
+      559       end.
+      560       for each buf_parts share-lock
+      561         where buf_parts.out-code = buf_trn-doc.hold-doc-code-parent
+      562       on error undo, return error
+      563       :
+      564         if  buf_trn-doc.doc-type = 'при':U
+      565         and buf_parts.qnty = buf_parts.fact-qnty
+      566         then do:
+      567           next.
+      568         end.
+      569         find first buf_parts-supp share-lock
+      570           where buf_parts-supp.orig-in-code   = buf_parts.in-code
+      571             and buf_parts-supp.artic          = buf_parts.artic
+      572             and buf_parts-supp.prod-type      = buf_parts.prod-type
+      573             and buf_parts-supp.prod-code      = buf_parts.prod-code
+      574             and buf_parts-supp.orig-part-code = buf_parts.part-code
+      575           no-error .
+      576         if not available buf_parts-supp
+      577         then do:
+      578           message
+      579             vss-workfile vss-revision vss-description skip
+      580             vss-include-info3 skip
+      581             "Не найдена информация о поставщике для исходной накладной" skip
+      582             "Документ" buf_trn-doc.doc-code skip
+      583             "Родительский документ" buf_trn-doc.hold-doc-code-parent skip
+      584             "Артикул" buf_parts.artic buf_parts.prod-type buf_parts.prod-code skip
+      585             "Номер партии" buf_parts.part-code skip
+      586             view-as alert-box error .
+      587           undo, return error .
+      588         end.
+      589       end.
+      590     end.
+      591   end procedure.
+      592   procedure holdprts-doc-type :
+      593     define input  parameter p-cat-code as integer   no-undo .
+      594     define input  parameter p-doc-code as character no-undo .
+      595     define output parameter p-is-sale  as logical   no-undo .
+      596     define output parameter p-is-purch as logical   no-undo .
+      597     define variable vss-description as character no-undo init "holdprts-doc-type-01: определение типа документа для межфирменного архива".
+      598     define buffer buf_trn-doc for ub.trn-doc .
+      599     do
+      600     on error undo, return error return-value
+      601     :
+      602       find first buf_trn-doc no-lock
+      603         where buf_trn-doc.doc-code = p-doc-code
+      604         no-error .
+      605       if not available buf_trn-doc
+      606       then do:
+      607         message
+      608           vss-workfile vss-revision vss-description skip
+      609           vss-include-info3 skip
+      610           "Ошибка задания входных параметров" skip
+      611           "Не найден документ" skip
+      612           "Документ" p-doc-code skip
+      613           "Тип архива" p-cat-code skip
+      614           view-as alert-box error .
+      615         undo, return error .
+      616       end.
+      617       case p-cat-code :
+      618         when 1
+      619         then do:
+      620           define variable v-is-hold as logical   no-undo .
+      621   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      622   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hold-doc in g#library
+      623     (input  buf_trn-doc.doc-code
+      624     ,output v-is-hold
+      625     )  .
+      626           if v-is-hold = true
+      627           then do:
+      628             assign
+      629               p-is-sale  = false
+      630               p-is-purch = false
+      631             .
+      632           end.
+      633           else do:
+      634             case buf_trn-doc.ext-doc-type :
+      635               when 'ie':U or
+      636               when 'ep':U
+      637               then do:
+      638                 assign
+      639                   p-is-sale  = false
+      640                   p-is-purch = true
+      641                 .
+      642               end.
+      643               when 'ee':U or
+      644               when 'es':U or
+      645               when 're':U or
+      646               when 'rs':U
+      647               then do:
+      648                 assign
+      649                   p-is-sale  = true
+      650                   p-is-purch = false
+      651                 .
+      652               end.
+      653               when 'we':U or
+      654               when 'vt':U or
+      655               when 'vp':U or
+      656               when 'ap':U or
+      657               when 'mp':U or
+      658               when 'pc':U or
+      659               when 'iv':U or
+      660               when 'ev':U or
+      661               when 'io':U or
+      662               when 'eo':U or
+      663               when 'rv':U or
+      664               when 'em':U or
+      665               when 'wm':U or
+      666               when 'im':U
+      667               then do:
+      668                 assign
+      669                   p-is-sale  = false
+      670                   p-is-purch = false
+      671                 .
+      672               end.
+      673               otherwise do:
+      674                 message
+      675                   vss-workfile vss-revision vss-description skip
+      676                   vss-include-info3 skip
+      677                   "Неизвестный тип документа" skip
+      678                   "Документ" buf_trn-doc.doc-code skip
+      679                   "Тип документа" buf_trn-doc.ext-doc-type skip
+      680                   "Тип архива" p-cat-code skip
+      681                   view-as alert-box error .
+      682                 undo, return error .
+      683               end.
+      684             end.
+      685           end.
+      686         end.
+      687         when 2
+      688         then do:
+      689           case buf_trn-doc.ext-doc-type :
+      690             when 'vt':U or
+      691             when 'vp':U
+      692             then do:
+      693               assign
+      694                 p-is-sale  = false
+      695                 p-is-purch = true
+      696               .
+      697             end.
+      698             otherwise do:
+      699               assign
+      700                 p-is-sale  = false
+      701                 p-is-purch = false
+      702               .
+      703             end.
+      704           end.
+      705         end.
+      706         when 3
+      707         then do:
+      708           case buf_trn-doc.ext-doc-type :
+      709             when 'we':U
+      710             then do:
+      711               assign
+      712                 p-is-sale  = false
+      713                 p-is-purch = true
+      714               .
+      715             end.
+      716             otherwise do:
+      717               assign
+      718                 p-is-sale  = false
+      719                 p-is-purch = false
+      720               .
+      721             end.
+      722           end.
+      723         end.
+      724         otherwise do:
+      725           message
+      726             vss-workfile vss-revision vss-description skip
+      727             "Неизвестный тип архивов" skip
+      728             "Документ" buf_trn-doc.doc-code skip
+      729             "Тип документа" buf_trn-doc.ext-doc-type skip
+      730             "Тип архива" p-cat-code skip
+      731             view-as alert-box error .
+      732           undo, return error return-value .
+      733         end.
+      734       end.
+      735     end.
+      736   end procedure.
+      737   procedure holdprts-purch-values :
+      738     define input  parameter p-doc-code             like ub.doc-line.doc-code  no-undo .
+      739     define input  parameter p-artic                like ub.doc-line.artic     no-undo .
+      740     define input  parameter p-prod-type            like ub.doc-line.prod-type no-undo .
+      741     define input  parameter p-prod-code            like ub.doc-line.prod-code no-undo .
+      742     define output parameter p-fact-qnty            as decimal   no-undo .
+      743     define output parameter p-purch-sum-base       as decimal   no-undo .
+      744     define output parameter p-purch-sum-rubl       as decimal   no-undo .
+      745     define output parameter p-purch-VAT-base       as decimal   no-undo .
+      746     define output parameter p-purch-VAT-rubl       as decimal   no-undo .
+      747     define output parameter p-purch-SLT-base       as decimal   no-undo .
+      748     define output parameter p-purch-SLT-rubl       as decimal   no-undo .
+      749     define output parameter p-purch-road-tax-base  as decimal   no-undo .
+      750     define output parameter p-purch-road-tax-rubl  as decimal   no-undo .
+      751     define output parameter p-purch-excise-base    as decimal   no-undo .
+      752     define output parameter p-purch-excise-rubl    as decimal   no-undo .
+      753     define output parameter p-purch-transport-base as decimal   no-undo .
+      754     define output parameter p-purch-transport-rubl as decimal   no-undo .
+      755     define output parameter p-purch-other-base     as decimal   no-undo .
+      756     define output parameter p-purch-other-rubl     as decimal   no-undo .
+      757     define output parameter p-purch-discnt-base    as decimal   no-undo .
+      758     define output parameter p-purch-discnt-rubl    as decimal   no-undo .
+      759     define variable vss-description as character no-undo init "holdprts-purch-values-01: параметры закупки товара".
+      760     define variable v-price-base     as decimal   no-undo .
+      761     define variable v-price-rubl     as decimal   no-undo .
+      762     define variable v-VAT-base       as decimal   no-undo .
+      763     define variable v-VAT-rubl       as decimal   no-undo .
+      764     define variable v-SLT-base       as decimal   no-undo .
+      765     define variable v-SLT-rubl       as decimal   no-undo .
+      766     define variable v-road-tax-base  as decimal   no-undo .
+      767     define variable v-road-tax-rubl  as decimal   no-undo .
+      768     define variable v-transport-base as decimal   no-undo .
+      769     define variable v-transport-rubl as decimal   no-undo .
+      770     define variable v-other-base     as decimal   no-undo .
+      771     define variable v-other-rubl     as decimal   no-undo .
+      772     define buffer buf_trn-doc        for ub.trn-doc .
+      773     define buffer buf_parts          for ub.parts .
+      774     define buffer buf_parts-supp     for ub.parts-supp .
+      775     define buffer buf_doc-line       for ub.doc-line .
+      776     define buffer buf_income_trn-doc for ub.trn-doc .
+      777     do
+      778     on error undo, return error return-value
+      779     :
+      780       find first buf_trn-doc no-lock
+      781         where buf_trn-doc.doc-code = p-doc-code
+      782         no-error .
+      783       if not available buf_trn-doc
+      784       then do:
+      785         message
+      786           vss-workfile vss-revision vss-description skip
+      787           vss-include-info3 skip
+      788           "Ошибка задания входных параметров" skip
+      789           "Не найден документ" skip
+      790           "Документ" p-doc-code skip
+      791           view-as alert-box error .
+      792         undo, return error .
+      793       end.
+      794       find first buf_doc-line no-lock
+      795         where buf_doc-line.doc-code  = p-doc-code
+      796           and buf_doc-line.artic     = p-artic
+      797           and buf_doc-line.prod-type = p-prod-type
+      798           and buf_doc-line.prod-code = p-prod-code
+      799         no-error .
+      800       if not available buf_doc-line
+      801       then do:
+      802         message
+      803           vss-workfile vss-revision vss-description skip
+      804           vss-include-info3 skip
+      805           "Ошибка задания входных параметров" skip
+      806           "Не найдена строка документа" skip
+      807           "Документ" p-doc-code skip
+      808           "Артикул" p-artic p-prod-type p-prod-code skip
+      809           view-as alert-box error .
+      810         undo, return error .
+      811       end.
+      812       assign
+      813         p-fact-qnty            = 0
+      814         p-purch-sum-base       = 0
+      815         p-purch-sum-rubl       = 0
+      816         p-purch-VAT-base       = 0
+      817         p-purch-VAT-rubl       = 0
+      818         p-purch-SLT-base       = 0
+      819         p-purch-SLT-rubl       = 0
+      820         p-purch-road-tax-base  = 0
+      821         p-purch-road-tax-rubl  = 0
+      822         p-purch-excise-base    = 0
+      823         p-purch-excise-rubl    = 0
+      824         p-purch-transport-base = 0
+      825         p-purch-transport-rubl = 0
+      826         p-purch-other-base     = 0
+      827         p-purch-other-rubl     = 0
+      828         p-purch-discnt-base    = 0
+      829         p-purch-discnt-rubl    = 0
+      830       .
+      831       for each buf_parts no-lock
+      832         where buf_parts.out-code  = buf_doc-line.doc-code
+      833           and buf_parts.obj-type  = buf_doc-line.obj-type
+      834           and buf_parts.obj-code  = buf_doc-line.obj-code
+      835           and buf_parts.artic     = buf_doc-line.artic
+      836           and buf_parts.prod-type = buf_doc-line.prod-type
+      837           and buf_parts.prod-code = buf_doc-line.prod-code
+      838       on error undo, return error
+      839       :
+      840         define variable v-parts-qnty as decimal   no-undo .
+      841         assign
+      842           v-parts-qnty = buf_parts.fact-qnty
+      843                        * ( if lookup(buf_trn-doc.doc-type, 'рас,спи':U ) > 0
+      844                            then -1
+      845                            else 1
+      846                          )
+      847         .
+      848         find first buf_parts-supp no-lock
+      849           where buf_parts-supp.in-code   = buf_parts.in-code
+      850             and buf_parts-supp.artic     = buf_parts.artic
+      851             and buf_parts-supp.prod-type = buf_parts.prod-type
+      852             and buf_parts-supp.prod-code = buf_parts.prod-code
+      853             and buf_parts-supp.part-code = buf_parts.part-code
+      854           no-error .
+      855         if available buf_parts-supp
+      856         then do:
+      857           assign
+      858             v-price-base     = buf_parts-supp.price-base
+      859             v-price-rubl     = buf_parts-supp.price-rubl
+      860             v-VAT-base       = buf_parts-supp.VAT-base
+      861             v-VAT-rubl       = buf_parts-supp.VAT-rubl
+      862             v-SLT-base       = buf_parts-supp.SLT-base
+      863             v-SLT-rubl       = buf_parts-supp.SLT-rubl
+      864             v-road-tax-base  = buf_parts-supp.road-tax-base
+      865             v-road-tax-rubl  = buf_parts-supp.road-tax-rubl
+      866             v-transport-base = buf_parts-supp.transport-base
+      867             v-transport-rubl = buf_parts-supp.transport-rubl
+      868             v-other-base     = buf_parts-supp.other-base
+      869             v-other-rubl     = buf_parts-supp.other-rubl
+      870           .
+      871         end.
+      872         else do:
+      873       define buffer   in-vatp-trn-doc  for ub.trn-doc .
+      874       define buffer   in-vatp-parts    for ub.parts   .
+      875       define buffer   in-vatp-doc      for ub.trn-doc .
+      876       define buffer   in-vatp-goods    for ub.goods   .
+      877       define buffer   in-vatp-sysconf  for ub.sysconf .
+      878       define buffer   in-vatp_doc-attr for ub.doc-attr.
+      879       define variable in-vatp-have-vat-slt       as   logical initial yes    no-undo.
+      880       define variable vat-pc-loc                 like ub.doc-line.vat-pc     no-undo.
+      881       define variable varinvprb                  as   character              no-undo.
+      882       define variable slt-pc-loc                 like ub.doc-line.slt-pc     no-undo.
+      883       define variable cli-base-rate              as   decimal                no-undo.
+      884       define variable price-rubl-with-tax-loc    like ub.doc-line.price-rubl no-undo.
+      885       define variable price-base-with-tax-loc    like ub.doc-line.price-base no-undo.
+      886       define variable price-cli-with-tax-loc     like ub.doc-line.price-cli  no-undo.
+      887       define variable price-rubl-without-tax-loc like ub.doc-line.price-rubl no-undo.
+      888       define variable price-base-without-tax-loc like ub.doc-line.price-base no-undo.
+      889       define variable price-cli-without-tax-loc  like ub.doc-line.price-base no-undo.
+      890       define variable vat-base-loc               like ub.doc-line.price-base no-undo.
+      891       define variable vat-rubl-loc               like ub.doc-line.price-rubl no-undo.
+      892       define variable vat-cli-loc                like ub.doc-line.price-rubl no-undo.
+      893       define variable slt-base-loc               like ub.doc-line.price-base no-undo.
+      894       define variable slt-rubl-loc               like ub.doc-line.price-rubl no-undo.
+      895       define variable slt-cli-loc                like ub.doc-line.price-rubl no-undo.
+      896       define variable road-tax-base-loc          like ub.doc-line.road-tax   no-undo.
+      897       define variable road-tax-rubl-loc          like ub.doc-line.road-tax   no-undo.
+      898       define variable road-tax-cli-loc           like ub.doc-line.road-tax   no-undo.
+      899       define variable transport-base-loc         like ub.doc-line.price-base no-undo.
+      900       define variable transport-rubl-loc         like ub.doc-line.price-rubl no-undo.
+      901       define variable transport-cli-loc          like ub.doc-line.price-rubl no-undo.
+      902       define variable other-base-loc             like ub.doc-line.price-base no-undo.
+      903       define variable other-rubl-loc             like ub.doc-line.price-rubl no-undo.
+      904       define variable other-cli-loc              like ub.doc-line.price-rubl no-undo.
+      905       define variable exch-rate-cli-loc          like ub.trn-doc.exch-rate   no-undo.
+      906       define variable varinvatp-envd             as   character              no-undo.
+      907       define variable varinvatp-type             as   character              no-undo.
+      908   assign
+      909     price-rubl-with-tax-loc = buf_parts.price-rubl
+      910     price-base-with-tax-loc = buf_parts.price-base
+      911   .
+      912   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+      913   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+      914     (output varinvprb
+      915     )  .
+      916     if buf_parts.out-code = 'free-zone':U     or
+      917        buf_parts.out-code = 'out-zone':U   or
+      918        buf_parts.doc-type = 'акт':U then do:
+      919       assign
+      920         in-vatp-have-vat-slt = yes.
+      921     end.
+      922     else do:
+      923       find first in-vatp_doc-attr no-lock
+      924         where in-vatp_doc-attr.doc-code  = buf_parts.out-code
+      925           and in-vatp_doc-attr.attr-code = 'envd':U
+      926         no-error .
+      927       if not available in-vatp_doc-attr then do:
+      928         assign
+      929           in-vatp-have-vat-slt = yes.
+      930       end.
+      931       else do:
+      932            in-vatp-have-vat-slt = no.
+      933       end.
+      934     end.
+      935     assign
+      936      price-cli-with-tax-loc = buf_parts.price-cli
+      937      cli-base-rate          = buf_parts.cli-base-rate.
+      938     ASSIGN   road-tax-base-loc  = (if buf_parts.road-tax-base  = ? then 0 else buf_parts.road-tax-base)
+      939              road-tax-rubl-loc  = (if buf_parts.road-tax-rubl  = ? then 0 else buf_parts.road-tax-rubl).
+      940     ASSIGN  transport-base-loc = (if buf_parts.transport-base = ? then 0 else buf_parts.transport-base)
+      941             transport-rubl-loc = (if buf_parts.transport-rubl = ? then 0 else buf_parts.transport-rubl)
+      942             other-base-loc     = (if buf_parts.other-base     = ? then 0 else buf_parts.other-base)
+      943             other-rubl-loc     = (if buf_parts.other-rubl     = ? then 0 else buf_parts.other-rubl)
+      944             vat-pc-loc         = (if buf_parts.vat-pc         = ? then 0 else buf_parts.vat-pc)
+      945             slt-pc-loc         = (if buf_parts.slt-pc         = ? then 0 else buf_parts.slt-pc).
+      946             ASSIGN   slt-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      947       ASSIGN   slt-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      948     assign
+      949       exch-rate-cli-loc = (buf_parts.price-rubl - transport-rubl-loc - other-rubl-loc - road-tax-rubl-loc - (if buf_parts.vat-type <> 'в т. ч.':U then vat-rubl-loc else 0) - (if buf_parts.slt-type <> 'в т. ч.':U then slt-rubl-loc else 0)) / buf_parts.price-cli .
+      950     assign
+      951       slt-cli-loc        = slt-rubl-loc       / exch-rate-cli-loc
+      952       vat-cli-loc        = vat-rubl-loc       / exch-rate-cli-loc
+      953       road-tax-cli-loc   = road-tax-rubl-loc  / exch-rate-cli-loc
+      954       transport-cli-loc  = 0
+      955       other-cli-loc      = 0
+      956     .
+      957   ASSIGN
+      958             price-base-without-tax-loc = price-base-with-tax-loc - vat-base-loc - slt-base-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))
+      959       price-rubl-without-tax-loc = price-rubl-with-tax-loc - vat-rubl-loc - slt-rubl-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))
+      960   .
+      961           assign
+      962             v-price-base     = price-base-with-tax-loc
+      963             v-price-rubl     = price-rubl-with-tax-loc
+      964             v-VAT-base       = vat-base-loc
+      965             v-VAT-rubl       = vat-rubl-loc
+      966             v-SLT-base       = slt-base-loc
+      967             v-SLT-rubl       = slt-rubl-loc
+      968             v-road-tax-base  = road-tax-base-loc
+      969             v-road-tax-rubl  = road-tax-rubl-loc
+      970             v-transport-base = transport-base-loc
+      971             v-transport-rubl = transport-rubl-loc
+      972             v-other-base     = other-base-loc
+      973             v-other-rubl     = other-rubl-loc
+      974           .
+      975         end.
+      976         assign
+      977           p-fact-qnty            = p-fact-qnty            + v-parts-qnty
+      978           p-purch-sum-base       = p-purch-sum-base       + v-price-base     * v-parts-qnty
+      979           p-purch-sum-rubl       = p-purch-sum-rubl       + v-price-rubl     * v-parts-qnty
+      980           p-purch-VAT-base       = p-purch-VAT-base       + v-VAT-base       * v-parts-qnty
+      981           p-purch-VAT-rubl       = p-purch-VAT-rubl       + v-VAT-rubl       * v-parts-qnty
+      982           p-purch-SLT-base       = p-purch-SLT-base       + v-SLT-base       * v-parts-qnty
+      983           p-purch-SLT-rubl       = p-purch-SLT-rubl       + v-SLT-rubl       * v-parts-qnty
+      984           p-purch-road-tax-base  = p-purch-road-tax-base  + v-road-tax-base  * v-parts-qnty
+      985           p-purch-road-tax-rubl  = p-purch-road-tax-rubl  + v-road-tax-rubl  * v-parts-qnty
+      986           p-purch-excise-base    = p-purch-excise-base    + 0
+      987           p-purch-excise-rubl    = p-purch-excise-rubl    + 0
+      988           p-purch-transport-base = p-purch-transport-base + v-transport-base * v-parts-qnty
+      989           p-purch-transport-rubl = p-purch-transport-rubl + v-transport-rubl * v-parts-qnty
+      990           p-purch-other-base     = p-purch-other-base     + v-other-base     * v-parts-qnty
+      991           p-purch-other-rubl     = p-purch-other-rubl     + v-other-rubl     * v-parts-qnty
+      992           p-purch-discnt-base    = p-purch-discnt-base    + 0
+      993           p-purch-discnt-rubl    = p-purch-discnt-rubl    + 0
+      994         .
+      995       end.
+      996     end.
+      997   end procedure.
+      998   procedure holdprts-sale-values :
+      999     define input  parameter p-doc-code            like ub.doc-line.doc-code  no-undo .
+     1000     define input  parameter p-artic               like ub.doc-line.artic     no-undo .
+     1001     define input  parameter p-prod-type           like ub.doc-line.prod-type no-undo .
+     1002     define input  parameter p-prod-code           like ub.doc-line.prod-code no-undo .
+     1003     define output parameter p-fact-qnty           as decimal   no-undo .
+     1004     define output parameter p-sale-sum-base       as decimal   no-undo .
+     1005     define output parameter p-sale-sum-rubl       as decimal   no-undo .
+     1006     define output parameter p-sale-VAT-base       as decimal   no-undo .
+     1007     define output parameter p-sale-VAT-rubl       as decimal   no-undo .
+     1008     define output parameter p-sale-SLT-base       as decimal   no-undo .
+     1009     define output parameter p-sale-SLT-rubl       as decimal   no-undo .
+     1010     define output parameter p-sale-road-tax-base  as decimal   no-undo .
+     1011     define output parameter p-sale-road-tax-rubl  as decimal   no-undo .
+     1012     define output parameter p-sale-excise-base    as decimal   no-undo .
+     1013     define output parameter p-sale-excise-rubl    as decimal   no-undo .
+     1014     define output parameter p-sale-transport-base as decimal   no-undo .
+     1015     define output parameter p-sale-transport-rubl as decimal   no-undo .
+     1016     define output parameter p-sale-other-base     as decimal   no-undo .
+     1017     define output parameter p-sale-other-rubl     as decimal   no-undo .
+     1018     define output parameter p-sale-discnt-base    as decimal   no-undo .
+     1019     define output parameter p-sale-discnt-rubl    as decimal   no-undo .
+     1020     define variable vss-description as character no-undo init "holdprts-sale-values-01: параметры продажи товара".
+     1021     define variable v-gds-dtl-fact-qnty as decimal   no-undo .
+     1022     define buffer buf_doc-line for ub.doc-line .
+     1023     define buffer buf_gds-dtl  for ub.gds-dtl.
+     1024     define buffer buf_goods    for ub.goods.
+     1025     define buffer buf_trn-doc  for ub.trn-doc.
+     1026       define  variable price-rubl-with-tax-sale    like ub.doc-line.price-rubl no-undo.
+     1027       define  variable price-base-with-tax-sale    like ub.doc-line.price-base no-undo.
+     1028       define  variable price-rubl-without-tax-sale like ub.doc-line.price-rubl no-undo.
+     1029       define  variable price-base-without-tax-sale like ub.doc-line.price-base no-undo.
+     1030       define  variable vat-base-sale               like ub.doc-line.price-base no-undo.
+     1031       define  variable vat-rubl-sale               like ub.doc-line.price-rubl no-undo.
+     1032       define  variable vat-base-buyer              like ub.doc-line.price-base no-undo.
+     1033       define  variable vat-rubl-buyer              like ub.doc-line.price-rubl no-undo.
+     1034       define  variable slt-base-sale               like ub.doc-line.price-base no-undo.
+     1035       define  variable slt-rubl-sale               like ub.doc-line.price-rubl no-undo.
+     1036       define  variable road-tax-base-sale          like ub.doc-line.road-tax   no-undo.
+     1037       define  variable road-tax-rubl-sale          like ub.doc-line.road-tax   no-undo.
+     1038       define  variable excise-base-sale            like ub.doc-line.price-base no-undo.
+     1039       define  variable excise-rubl-sale            like ub.doc-line.price-rubl no-undo.
+     1040       define  variable discnt-base-sale            like ub.gds-dtl.discnt-base no-undo.
+     1041       define  variable discnt-rubl-sale            like ub.gds-dtl.discnt-rubl no-undo.
+     1042       define buffer out-vatp_gds-dtl     for ub.gds-dtl.
+     1043       define buffer buf_out-vatp_gds-dtl for ub.gds-dtl.
+     1044       define buffer out-vatp_parts       for ub.parts.
+     1045       define buffer out-vatp_sysconf     for ub.sysconf.
+     1046       define buffer out-vatp_doc-line    for ub.doc-line.
+     1047       define buffer out-vatp_goods       for ub.goods.
+     1048       define buffer out-vatp_trn-doc     for ub.trn-doc.
+     1049       define buffer out-vatp_doc-attr    for ub.doc-attr.
+     1050       define variable varprice-base-cons      like ub.doc-line.price-base initial 0.00 no-undo.
+     1051       define variable varprice-rubl-cons      like ub.doc-line.price-rubl initial 0.00 no-undo.
+     1052       define variable varfrm-cnsv-type         as   character                           no-undo.
+     1053       define variable varfrm-cnsv              as   character                           no-undo.
+     1054       define variable varroot-node             as   integer                             no-undo.
+     1055       define variable varempty-scale           as   logical                             no-undo.
+     1056       define variable varis-cons-parts-have    as   logical                             no-undo.
+     1057       define variable varsum-base-factovp      like ub.gds-dtl.price-base               no-undo.
+     1058       define variable varslt-base-factovp      like ub.gds-dtl.price-base               no-undo.
+     1059       define variable varvat-base-factovp      like ub.gds-dtl.price-base               no-undo.
+     1060       define variable varvatcons-base-factovp  like ub.gds-dtl.price-base               no-undo.
+     1061       define variable vardsc-base-factovp      like ub.gds-dtl.price-base               no-undo.
+     1062       define variable varsum-base-docovp       like ub.gds-dtl.price-base               no-undo.
+     1063       define variable varslt-base-docovp       like ub.gds-dtl.price-base               no-undo.
+     1064       define variable varvat-base-docovp       like ub.gds-dtl.price-base               no-undo.
+     1065       define variable varvatcons-base-docovp   like ub.gds-dtl.price-base               no-undo.
+     1066       define variable vardsc-base-docovp       like ub.gds-dtl.price-base               no-undo.
+     1067       define variable varsum-rubl-factovp      like ub.gds-dtl.price-base               no-undo.
+     1068       define variable varslt-rubl-factovp      like ub.gds-dtl.price-base               no-undo.
+     1069       define variable varvat-rubl-factovp      like ub.gds-dtl.price-base               no-undo.
+     1070       define variable varvatcons-rubl-factovp  like ub.gds-dtl.price-base               no-undo.
+     1071       define variable vardsc-rubl-factovp      like ub.gds-dtl.price-base               no-undo.
+     1072       define variable varsum-rubl-docovp       like ub.gds-dtl.price-base               no-undo.
+     1073       define variable varslt-rubl-docovp       like ub.gds-dtl.price-base               no-undo.
+     1074       define variable varvat-rubl-docovp       like ub.gds-dtl.price-base               no-undo.
+     1075       define variable varvatcons-rubl-docovp   like ub.gds-dtl.price-base               no-undo.
+     1076       define variable vardsc-rubl-docovp       like ub.gds-dtl.price-base               no-undo.
+     1077       define variable varfact-qnty             like ub.parts.fact-qnty                  no-undo.
+     1078       define variable varcons-qnty             like ub.parts.fact-qnty                  no-undo.
+     1079       define variable varis-one-gds-dtl        as   logical                             no-undo.
+     1080       define variable varcurprice-base         like ub.gds-dtl.cur-base                 no-undo.
+     1081       define variable varcurprice-rubl         like ub.gds-dtl.price-base               no-undo.
+     1082       define variable varcurdiscnt-base        like ub.gds-dtl.cur-base                 no-undo.
+     1083       define variable varcurdiscnt-rubl        like ub.gds-dtl.price-base               no-undo.
+     1084       define variable varoutvprb               as   character                           no-undo.
+     1085       define variable out-vatp-have-vat-slt    as   logical initial yes                 no-undo.
+     1086       define buffer   in-vatp-trn-doco  for ub.trn-doc .
+     1087       define buffer   in-vatp-partso    for ub.parts   .
+     1088       define buffer   in-vatp-doco      for ub.trn-doc .
+     1089       define buffer   in-vatp-goodso    for ub.goods   .
+     1090       define buffer   in-vatp-sysconfo  for ub.sysconf .
+     1091       define buffer   in-vatp_doc-attro for ub.doc-attr.
+     1092       define variable in-vatp-have-vat-slto       as   logical initial yes    no-undo.
+     1093       define variable vat-pc-loco                 like ub.doc-line.vat-pc     no-undo.
+     1094       define variable varinvprbo                  as   character              no-undo.
+     1095       define variable slt-pc-loco                 like ub.doc-line.slt-pc     no-undo.
+     1096       define variable cli-base-rateo              as   decimal                no-undo.
+     1097       define variable price-rubl-with-tax-loco    like ub.doc-line.price-rubl no-undo.
+     1098       define variable price-base-with-tax-loco    like ub.doc-line.price-base no-undo.
+     1099       define variable price-cli-with-tax-loco     like ub.doc-line.price-cli  no-undo.
+     1100       define variable price-rubl-without-tax-loco like ub.doc-line.price-rubl no-undo.
+     1101       define variable price-base-without-tax-loco like ub.doc-line.price-base no-undo.
+     1102       define variable price-cli-without-tax-loco  like ub.doc-line.price-base no-undo.
+     1103       define variable vat-base-loco               like ub.doc-line.price-base no-undo.
+     1104       define variable vat-rubl-loco               like ub.doc-line.price-rubl no-undo.
+     1105       define variable vat-cli-loco                like ub.doc-line.price-rubl no-undo.
+     1106       define variable slt-base-loco               like ub.doc-line.price-base no-undo.
+     1107       define variable slt-rubl-loco               like ub.doc-line.price-rubl no-undo.
+     1108       define variable slt-cli-loco                like ub.doc-line.price-rubl no-undo.
+     1109       define variable road-tax-base-loco          like ub.doc-line.road-tax   no-undo.
+     1110       define variable road-tax-rubl-loco          like ub.doc-line.road-tax   no-undo.
+     1111       define variable road-tax-cli-loco           like ub.doc-line.road-tax   no-undo.
+     1112       define variable transport-base-loco         like ub.doc-line.price-base no-undo.
+     1113       define variable transport-rubl-loco         like ub.doc-line.price-rubl no-undo.
+     1114       define variable transport-cli-loco          like ub.doc-line.price-rubl no-undo.
+     1115       define variable other-base-loco             like ub.doc-line.price-base no-undo.
+     1116       define variable other-rubl-loco             like ub.doc-line.price-rubl no-undo.
+     1117       define variable other-cli-loco              like ub.doc-line.price-rubl no-undo.
+     1118       define variable exch-rate-cli-loco          like ub.trn-doc.exch-rate   no-undo.
+     1119       define variable varinvatp-envdo             as   character              no-undo.
+     1120       define variable varinvatp-typeo             as   character              no-undo.
+     1121     do
+     1122     on error undo, return error return-value
+     1123     :
+     1124       find first buf_trn-doc no-lock
+     1125         where buf_trn-doc.doc-code = p-doc-code
+     1126       no-error .
+     1127       if not available buf_trn-doc
+     1128       then do:
+     1129         message
+     1130           vss-workfile vss-revision vss-description skip
+     1131           vss-include-info3 skip
+     1132           "Ошибка задания входных параметров" skip
+     1133           "Не найден документ" skip
+     1134           "Документ" p-doc-code skip
+     1135           "Артикул" p-artic p-prod-type p-prod-code skip
+     1136           view-as alert-box error .
+     1137         undo, return error .
+     1138       end.
+     1139       find first buf_doc-line no-lock
+     1140         where buf_doc-line.doc-code  = p-doc-code
+     1141           and buf_doc-line.artic     = p-artic
+     1142           and buf_doc-line.prod-type = p-prod-type
+     1143           and buf_doc-line.prod-code = p-prod-code
+     1144         no-error .
+     1145       if not available buf_doc-line
+     1146       then do:
+     1147         message
+     1148           vss-workfile vss-revision vss-description skip
+     1149           vss-include-info3 skip
+     1150           "Ошибка задания входных параметров" skip
+     1151           "Не найдена строка документа" skip
+     1152           "Документ" p-doc-code skip
+     1153           "Артикул" p-artic p-prod-type p-prod-code skip
+     1154           view-as alert-box error .
+     1155         undo, return error .
+     1156       end.
+     1157       for each buf_gds-dtl no-lock
+     1158         where buf_gds-dtl.doc-code  = buf_doc-line.doc-code
+     1159           and buf_gds-dtl.artic     = buf_doc-line.artic
+     1160           and buf_gds-dtl.prod-type = buf_doc-line.prod-type
+     1161           and buf_gds-dtl.prod-code = buf_doc-line.prod-code
+     1162       on error undo, return error
+     1163       :
+     1164         if buf_trn-doc.doc-type <> 'инв':U
+     1165         then do:
+     1166           if buf_trn-doc.doc-type = 'при':U
+     1167           or buf_trn-doc.doc-type = 'возврат':U
+     1168           then do:
+     1169             assign
+     1170               v-gds-dtl-fact-qnty = buf_gds-dtl.fact-qnty
+     1171             .
+     1172           end.
+     1173           else do:
+     1174             assign
+     1175               v-gds-dtl-fact-qnty = - buf_gds-dtl.fact-qnty
+     1176             .
+     1177           end.
+     1178         end.
+     1179         else do:
+     1180           assign
+     1181             v-gds-dtl-fact-qnty = buf_gds-dtl.doc-qnty
+     1182           .
+     1183         end.
+     1184         if v-gds-dtl-fact-qnty <> 0
+     1185         then do:
+     1186   if buf_trn-doc.ext-doc-type = 'ot':U or
+     1187      buf_trn-doc.ext-doc-type = ?                 then do:
+     1188     assign
+     1189      out-vatp-have-vat-slt = yes.
+     1190   end.
+     1191   else do:
+     1192     find first out-vatp_doc-attr no-lock
+     1193       where out-vatp_doc-attr.doc-code  = buf_trn-doc.doc-code
+     1194         and out-vatp_doc-attr.attr-code = 'envd':U
+     1195         no-error .
+     1196     if not available out-vatp_doc-attr then do:
+     1197       assign
+     1198         out-vatp-have-vat-slt = yes.
+     1199     end.
+     1200     else do:
+     1201        out-vatp-have-vat-slt = no.
+     1202     end.
+     1203   end.
+     1204   find first out-vatp_goods where out-vatp_goods.artic     = buf_doc-line.artic     and
+     1205                                      out-vatp_goods.prod-type = buf_doc-line.prod-type and
+     1206                                      out-vatp_goods.prod-code = buf_doc-line.prod-code no-lock.
+     1207   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1208   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run rootnode in g#library
+     1209     (input  buf_doc-line.artic
+     1210     ,input  buf_doc-line.prod-type
+     1211     ,input  buf_doc-line.prod-code
+     1212     ,output varroot-node
+     1213     ) no-error .
+     1214   if error-status :error then do:
+     1215     message
+     1216       vss-workfile vss-revision vss-description skip
+     1217       "Ошибка при определении корневого признака товара" skip
+     1218       "Артикул" buf_doc-line.artic buf_doc-line.prod-type buf_doc-line.prod-code skip
+     1219       error-status :get-message(1) skip
+     1220       return-value skip
+     1221       view-as alert-box error .
+     1222     undo, return error .
+     1223   end.
+     1224   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run prtat in g#library
+     1225     (input  varroot-node
+     1226     ,input  'empty-scale=request'
+     1227     ,output varempty-scale
+     1228     ) no-error .
+     1229   if error-status :error then do:
+     1230     message
+     1231       vss-workfile vss-revision vss-description skip
+     1232       "Ошибка при определении атрибута признака" skip
+     1233       "Артикул" buf_doc-line.artic buf_doc-line.prod-type buf_doc-line.prod-code skip
+     1234       "Признак" varroot-node skip
+     1235       "Запрашивался атрибут" "empty-scale=request" skip
+     1236       error-status :get-message(1) skip
+     1237       return-value skip
+     1238       view-as alert-box error .
+     1239     undo, return error .
+     1240   end.
+     1241   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+     1242   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+     1243     (output varoutvprb
+     1244     )  .
+     1245   if varoutvprb = "base":u then do:
+     1246     assign
+     1247           road-tax-base-sale    =  (if buf_doc-line.road-tax = ? then 0 else buf_doc-line.road-tax * 1)
+     1248       excise-base-sale      =  (if buf_doc-line.excise   = ? then 0 else buf_doc-line.excise   * 1)
+     1249     .
+     1250   end.
+     1251   else do:
+     1252     assign
+     1253           road-tax-base-sale    =  (if buf_doc-line.road-tax = ? then 0 else buf_doc-line.road-tax / buf_trn-doc.base-rate * buf_trn-doc.base-scale)
+     1254       excise-base-sale      =  (if buf_doc-line.excise   = ? then 0 else buf_doc-line.excise   / buf_trn-doc.base-rate * buf_trn-doc.base-scale)
+     1255     .
+     1256   end.
+     1257   if varoutvprb = "rubl":u then do:
+     1258     assign
+     1259           road-tax-rubl-sale    = (if buf_doc-line.road-tax = ? then 0 else buf_doc-line.road-tax * 1)
+     1260       excise-rubl-sale      = (if buf_doc-line.excise   = ? then 0 else buf_doc-line.excise   * 1) .
+     1261   end.
+     1262   else do:
+     1263     assign
+     1264           road-tax-rubl-sale    = (if buf_doc-line.road-tax = ? then 0 else buf_doc-line.road-tax * buf_trn-doc.base-rate / buf_trn-doc.base-scale)
+     1265       excise-rubl-sale      = (if buf_doc-line.excise   = ? then 0 else buf_doc-line.excise   * buf_trn-doc.base-rate / buf_trn-doc.base-scale) .
+     1266   end.
+     1267   assign
+     1268     varis-cons-parts-have =  no.
+     1269   assign
+     1270     varfact-qnty       = 0
+     1271     varcons-qnty       = 0
+     1272     varprice-base-cons = 0
+     1273     varprice-rubl-cons = 0.
+     1274   find first out-vatp_doc-line where
+     1275              out-vatp_doc-line.doc-code   = buf_trn-doc.doc-code
+     1276          and out-vatp_doc-line.artic      = buf_doc-line.artic
+     1277          and out-vatp_doc-line.prod-type  = buf_doc-line.prod-type
+     1278          and out-vatp_doc-line.prod-code  = buf_doc-line.prod-code no-lock no-error.
+     1279   if available out-vatp_doc-line           and
+     1280     (out-vatp_doc-line.status_ = 'запрос':U or out-vatp_goods.gds-type = 'у':U) then do:
+     1281     assign
+     1282       varfact-qnty = out-vatp_doc-line.fact-qnty.
+     1283   end.
+     1284   else do:
+     1285     for each out-vatp_parts where out-vatp_parts.out-code   = buf_trn-doc.doc-code
+     1286                                  and out-vatp_parts.obj-type   = buf_trn-doc.obj-type
+     1287                                  and out-vatp_parts.obj-code   = buf_trn-doc.obj-code
+     1288                                  and out-vatp_parts.artic      = buf_doc-line.artic
+     1289                                  and out-vatp_parts.prod-type  = buf_doc-line.prod-type
+     1290                                  and out-vatp_parts.prod-code  = buf_doc-line.prod-code no-lock :
+     1291       if out-vatp_parts.purch-code = 2 then do:
+     1292   assign
+     1293     price-rubl-with-tax-loco = out-vatp_parts.price-rubl
+     1294     price-base-with-tax-loco = out-vatp_parts.price-base
+     1295   .
+     1296   define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+     1297   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+     1298     (output varinvprbo
+     1299     )  .
+     1300     if out-vatp_parts.out-code = 'free-zone':U     or
+     1301        out-vatp_parts.out-code = 'out-zone':U   or
+     1302        out-vatp_parts.doc-type = 'акт':U then do:
+     1303       assign
+     1304         in-vatp-have-vat-slto = yes.
+     1305     end.
+     1306     else do:
+     1307       find first in-vatp_doc-attro no-lock
+     1308         where in-vatp_doc-attro.doc-code  = out-vatp_parts.out-code
+     1309           and in-vatp_doc-attro.attr-code = 'envd':U
+     1310         no-error .
+     1311       if not available in-vatp_doc-attro then do:
+     1312         assign
+     1313           in-vatp-have-vat-slto = yes.
+     1314       end.
+     1315       else do:
+     1316            in-vatp-have-vat-slto = no.
+     1317       end.
+     1318     end.
+     1319     assign
+     1320      price-cli-with-tax-loco = out-vatp_parts.price-cli
+     1321      cli-base-rateo          = out-vatp_parts.cli-base-rate.
+     1322     ASSIGN   road-tax-base-loco  = (if out-vatp_parts.road-tax-base  = ? then 0 else out-vatp_parts.road-tax-base)
+     1323              road-tax-rubl-loco  = (if out-vatp_parts.road-tax-rubl  = ? then 0 else out-vatp_parts.road-tax-rubl).
+     1324     ASSIGN  transport-base-loco = (if out-vatp_parts.transport-base = ? then 0 else out-vatp_parts.transport-base)
+     1325             transport-rubl-loco = (if out-vatp_parts.transport-rubl = ? then 0 else out-vatp_parts.transport-rubl)
+     1326             other-base-loco     = (if out-vatp_parts.other-base     = ? then 0 else out-vatp_parts.other-base)
+     1327             other-rubl-loco     = (if out-vatp_parts.other-rubl     = ? then 0 else out-vatp_parts.other-rubl)
+     1328             vat-pc-loco         = (if out-vatp_parts.vat-pc         = ? then 0 else out-vatp_parts.vat-pc)
+     1329             slt-pc-loco         = (if out-vatp_parts.slt-pc         = ? then 0 else out-vatp_parts.slt-pc).
+     1330             ASSIGN   slt-base-loco    = (if in-vatp-have-vat-slto = no then 0 else (price-base-with-tax-loco - ((if road-tax-base-loco  = ? then 0 else road-tax-base-loco) + (if transport-base-loco = ? then 0 else transport-base-loco) + (if other-base-loco = ? then 0 else other-base-loco)))                           * slt-pc-loco / (100 + slt-pc-loco))                        vat-base-loco    = (if in-vatp-have-vat-slto = no then 0 else (price-base-with-tax-loco - ((if road-tax-base-loco  = ? then 0 else road-tax-base-loco) + (if transport-base-loco = ? then 0 else transport-base-loco) + (if other-base-loco = ? then 0 else other-base-loco))) * (1 - slt-pc-loco / (100 + slt-pc-loco)) * vat-pc-loco / (100 + vat-pc-loco)).
+     1331       ASSIGN   slt-rubl-loco    = (if in-vatp-have-vat-slto = no then 0 else (price-rubl-with-tax-loco - ((if road-tax-rubl-loco  = ? then 0 else road-tax-rubl-loco) + (if transport-rubl-loco = ? then 0 else transport-rubl-loco) + (if other-rubl-loco = ? then 0 else other-rubl-loco)))                           * slt-pc-loco / (100 + slt-pc-loco))                        vat-rubl-loco    = (if in-vatp-have-vat-slto = no then 0 else (price-rubl-with-tax-loco - ((if road-tax-rubl-loco  = ? then 0 else road-tax-rubl-loco) + (if transport-rubl-loco = ? then 0 else transport-rubl-loco) + (if other-rubl-loco = ? then 0 else other-rubl-loco))) * (1 - slt-pc-loco / (100 + slt-pc-loco)) * vat-pc-loco / (100 + vat-pc-loco)).
+     1332     assign
+     1333       exch-rate-cli-loco = (out-vatp_parts.price-rubl - transport-rubl-loco - other-rubl-loco - road-tax-rubl-loco - (if out-vatp_parts.vat-type <> 'в т. ч.':U then vat-rubl-loco else 0) - (if out-vatp_parts.slt-type <> 'в т. ч.':U then slt-rubl-loco else 0)) / out-vatp_parts.price-cli .
+     1334     assign
+     1335       slt-cli-loco        = slt-rubl-loco       / exch-rate-cli-loco
+     1336       vat-cli-loco        = vat-rubl-loco       / exch-rate-cli-loco
+     1337       road-tax-cli-loco   = road-tax-rubl-loco  / exch-rate-cli-loco
+     1338       transport-cli-loco  = 0
+     1339       other-cli-loco      = 0
+     1340     .
+     1341   ASSIGN
+     1342             price-base-without-tax-loco = price-base-with-tax-loco - vat-base-loco - slt-base-loco - ((if road-tax-base-loco  = ? then 0 else road-tax-base-loco) + (if transport-base-loco = ? then 0 else transport-base-loco) + (if other-base-loco = ? then 0 else other-base-loco))
+     1343       price-rubl-without-tax-loco = price-rubl-with-tax-loco - vat-rubl-loco - slt-rubl-loco - ((if road-tax-rubl-loco  = ? then 0 else road-tax-rubl-loco) + (if transport-rubl-loco = ? then 0 else transport-rubl-loco) + (if other-rubl-loco = ? then 0 else other-rubl-loco))
+     1344   .
+     1345         assign
+     1346           varprice-base-cons = varprice-base-cons + (price-base-with-tax-loco - (if road-tax-base-loco = ? then 0 else road-tax-base-loco))* out-vatp_parts.fact-qnty
+     1347           varprice-rubl-cons = varprice-rubl-cons + (price-rubl-with-tax-loco - (if road-tax-rubl-loco = ? then 0 else road-tax-rubl-loco))* out-vatp_parts.fact-qnty.
+     1348         assign
+     1349           varis-cons-parts-have = yes
+     1350           varcons-qnty          = varcons-qnty + out-vatp_parts.fact-qnty.
+     1351       end.
+     1352       assign
+     1353         varfact-qnty = varfact-qnty + out-vatp_parts.fact-qnty.
+     1354     end.
+     1355   end.
+     1356   assign
+     1357     varprice-base-cons = varprice-base-cons / varcons-qnty
+     1358     varprice-rubl-cons = varprice-rubl-cons / varcons-qnty.
+     1359   if varprice-base-cons = ? then do:
+     1360     assign
+     1361       varprice-base-cons = 0.
+     1362   end.
+     1363   if varprice-rubl-cons = ? then do:
+     1364     assign
+     1365       varprice-rubl-cons = 0.
+     1366   end.
+     1367   assign
+     1368       slt-base-sale               = (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base                - road-tax-base-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc)
+     1369     vat-base-buyer              = (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base                - road-tax-base-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-base-sale) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc)
+     1370     discnt-base-sale            = buf_gds-dtl.discnt-base
+     1371     price-base-with-tax-sale    = (buf_gds-dtl.price-base - buf_gds-dtl.discnt-base)
+     1372       slt-rubl-sale               = (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl                - road-tax-rubl-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc)
+     1373     vat-rubl-buyer              = (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl                - road-tax-rubl-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-rubl-sale) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc)
+     1374     discnt-rubl-sale            = buf_gds-dtl.discnt-rubl
+     1375     price-rubl-with-tax-sale    = (buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl)
+     1376     .
+     1377   if buf_trn-doc.doc-type = 'инв':U then do:
+     1378     assign
+     1379       varfact-qnty = buf_gds-dtl.doc-qnty.
+     1380   end.
+     1381   else do:
+     1382     assign
+     1383       varfact-qnty = buf_gds-dtl.fact-qnty.
+     1384   end.
+     1385   if varis-cons-parts-have = no then do:
+     1386     assign
+     1387           vat-base-sale               = (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base                - road-tax-base-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-base-sale) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc)
+     1388           vat-rubl-sale               = (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl                - road-tax-rubl-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-rubl-sale) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc).
+     1389   end.
+     1390   else do:
+     1391     if buf_trn-doc.doc-type = 'инв':U then do:
+     1392       assign
+     1393               vat-base-sale               = (if out-vatp-have-vat-slt = no then 0 else (((buf_gds-dtl.price-base - buf_gds-dtl.discnt-base) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base                - road-tax-base-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-base-sale - varprice-base-cons) * buf_doc-line.cons-vat-pc / (100 + buf_doc-line.cons-vat-pc) * buf_gds-dtl.doc-qnty * varcons-qnty / varfact-qnty + ((buf_gds-dtl.price-base - buf_gds-dtl.discnt-base) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base                - road-tax-base-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-base-sale) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc) * buf_gds-dtl.doc-qnty * (varfact-qnty - varcons-qnty) / varfact-qnty) / varfact-qnty)
+     1394               vat-rubl-sale               = (if out-vatp-have-vat-slt = no then 0 else (((buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl                - road-tax-rubl-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-rubl-sale - varprice-rubl-cons) * buf_doc-line.cons-vat-pc / (100 + buf_doc-line.cons-vat-pc) * buf_gds-dtl.doc-qnty * varcons-qnty / varfact-qnty + ((buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl                - road-tax-rubl-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-rubl-sale) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc) * buf_gds-dtl.doc-qnty * (varfact-qnty - varcons-qnty) / varfact-qnty) / varfact-qnty)
+     1395        .
+     1396     end.
+     1397     else do:
+     1398       assign
+     1399               vat-base-sale               = (if out-vatp-have-vat-slt = no then 0 else (((buf_gds-dtl.price-base - buf_gds-dtl.discnt-base) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base                - road-tax-base-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-base-sale - varprice-base-cons) * buf_doc-line.cons-vat-pc / (100 + buf_doc-line.cons-vat-pc) * buf_gds-dtl.fact-qnty * varcons-qnty / varfact-qnty + ((buf_gds-dtl.price-base - buf_gds-dtl.discnt-base) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-base - buf_gds-dtl.discnt-base                - road-tax-base-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - varprice-base-cons) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc) * buf_gds-dtl.fact-qnty * (varfact-qnty - varcons-qnty) / varfact-qnty) / varfact-qnty)
+     1400               vat-rubl-sale               = (if out-vatp-have-vat-slt = no then 0 else (((buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl                - road-tax-rubl-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - road-tax-rubl-sale - varprice-rubl-cons) * buf_doc-line.cons-vat-pc / (100 + buf_doc-line.cons-vat-pc) * buf_gds-dtl.fact-qnty * varcons-qnty / varfact-qnty + ((buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl) - (if out-vatp-have-vat-slt = no then 0 else buf_gds-dtl.price-rubl - buf_gds-dtl.discnt-rubl                - road-tax-rubl-sale) * buf_doc-line.SLT-pc / (100 + buf_doc-line.SLT-pc) - varprice-rubl-cons) * buf_doc-line.vat-pc / (100 + buf_doc-line.vat-pc) * buf_gds-dtl.fact-qnty * (varfact-qnty - varcons-qnty) / varfact-qnty) / varfact-qnty)
+     1401        .
+     1402     end.
+     1403   end.
+     1404   assign
+     1405   price-base-without-tax-sale = price-base-with-tax-sale - vat-base-sale - slt-base-sale - road-tax-base-sale
+     1406   price-rubl-without-tax-sale = price-rubl-with-tax-sale - vat-rubl-sale - slt-rubl-sale - road-tax-rubl-sale.
+     1407           assign
+     1408             p-fact-qnty           = p-fact-qnty          + v-gds-dtl-fact-qnty
+     1409             p-sale-sum-base       = p-sale-sum-base      + price-base-with-tax-sale  * v-gds-dtl-fact-qnty
+     1410             p-sale-sum-rubl       = p-sale-sum-rubl      + price-rubl-with-tax-sale  * v-gds-dtl-fact-qnty
+     1411             p-sale-vat-base       = p-sale-vat-base      + vat-base-sale             * v-gds-dtl-fact-qnty
+     1412             p-sale-vat-rubl       = p-sale-vat-rubl      + vat-rubl-sale             * v-gds-dtl-fact-qnty
+     1413             p-sale-slt-base       = p-sale-slt-base      + slt-base-sale             * v-gds-dtl-fact-qnty
+     1414             p-sale-slt-rubl       = p-sale-slt-rubl      + slt-rubl-sale             * v-gds-dtl-fact-qnty
+     1415             p-sale-road-tax-base  = p-sale-road-tax-base + road-tax-base-sale        * v-gds-dtl-fact-qnty
+     1416             p-sale-road-tax-rubl  = p-sale-road-tax-rubl + road-tax-rubl-sale        * v-gds-dtl-fact-qnty
+     1417             p-sale-excise-base    = p-sale-excise-base   + excise-base-sale          * v-gds-dtl-fact-qnty
+     1418             p-sale-excise-rubl    = p-sale-excise-rubl   + excise-rubl-sale          * v-gds-dtl-fact-qnty
+     1419             p-sale-discnt-base    = p-sale-discnt-base   + discnt-base-sale          * v-gds-dtl-fact-qnty
+     1420             p-sale-discnt-rubl    = p-sale-discnt-rubl   + discnt-rubl-sale          * v-gds-dtl-fact-qnty
+     1421           .
+     1422         end.
+     1423       end.
+     1424       assign
+     1425         p-sale-transport-base = 0
+     1426         p-sale-transport-rubl = 0
+     1427         p-sale-other-base     = 0
+     1428         p-sale-other-rubl     = 0
+     1429       .
+     1430     end.
+     1431   end procedure.
+     1432   define variable v-start-date as date      no-undo .
+     1433   define variable v-end-date   as date      no-undo .
+     1434   define variable v-is-purch   as logical   no-undo .
+     1435   define variable v-is-sale    as logical   no-undo .
+     1436   define buffer buf_trn-doc      for ub.trn-doc .
+     1437   define buffer locked_hold-time for ub.hold-time .
+     1438   define buffer last_hold-time   for ub.hold-time .
+     1439   define buffer locked_hold-trn  for ub.hold-trn .
+     1440   do
+     1441   on error undo, return error
+     1442   :
+     1443     find first buf_trn-doc share-lock
+     1444       where buf_trn-doc.doc-code = p-doc-code
+     1445       no-error .
+     1446     if not available buf_trn-doc
+     1447     then do:
+     1448       message
+     1449         vss-workfile vss-revision vss-description skip
+     1450         "Ошибка задания входных параметров" skip
+     1451         "Не найден документ" skip
+     1452         "Документ" p-doc-code
+     1453         view-as alert-box error .
+     1454       return error .
+     1455     end.
+     1456     if buf_trn-doc.status_ <> 'факт':U
+     1457     then do:
+     1458       message
+     1459         vss-workfile vss-revision vss-description skip
+     1460         "Ошибка расчета межфирменного архива" skip
+     1461         "Документ не в статусе" 'факт':U
+     1462         "Документ" p-doc-code
+     1463         view-as alert-box error .
+     1464       return error .
+     1465     end.
+     1466     run lastdate in this-procedure
+     1467       (input buf_trn-doc.fact-date
+     1468       ,output v-end-date)
+     1469       no-error .
+     1470     if error-status :error
+     1471     then do:
+     1472       message
+     1473       vss-workfile vss-revision vss-description skip
+     1474       "Ошибка поиска последней даты месяца закрытия документа на факт"
+     1475       "Документ" p-doc-code skip
+     1476       "Факт дата" buf_trn-doc.fact-date
+     1477       view-as alert-box error .
+     1478       return error.
+     1479     end.
+     1480     assign
+     1481       v-start-date = date(month(buf_trn-doc.fact-date), 1, year(buf_trn-doc.fact-date))
+     1482     .
+     1483     find first locked_hold-time exclusive-lock
+     1484       where locked_hold-time.cat-code = p-cat-code
+     1485         and locked_hold-time.time-type = 'мес':U
+     1486         and locked_hold-time.start-date = v-start-date
+     1487       no-error .
+     1488     if not available locked_hold-time
+     1489     then do:
+     1490       run create-hold-time in this-procedure
+     1491         (input p-cat-code
+     1492         ,input v-start-date
+     1493         ) no-error .
+     1494       if error-status :error
+     1495       then do:
+     1496         message
+     1497           vss-workfile vss-revision vss-description skip
+     1498           "Ошибка при создании записи межфирменного архива" skip
+     1499           "Документ" buf_trn-doc.doc-code skip
+     1500           "cat-code" p-cat-code
+     1501           "time-type" 'мес':U
+     1502           "start-date" v-start-date
+     1503           view-as alert-box error .
+     1504         undo, return error .
+     1505       end.
+     1506       find first locked_hold-time exclusive-lock where
+     1507                 locked_hold-time.cat-code = p-cat-code AND
+     1508                 locked_hold-time.time-type = 'мес':U AND
+     1509                 locked_hold-time.start-date = v-start-date .
+     1510     end.
+     1511     find first locked_hold-trn exclusive-lock
+     1512       where locked_hold-trn.cat-code = p-cat-code
+     1513         and locked_hold-trn.doc-code = p-doc-code
+     1514         and locked_hold-trn.time-code = locked_hold-time.time-code
+     1515       no-error .
+     1516     if not available locked_hold-trn
+     1517     then do:
+     1518       create locked_hold-trn .
+     1519       assign
+     1520         locked_hold-trn.cat-code = p-cat-code
+     1521         locked_hold-trn.doc-code = p-doc-code
+     1522         locked_hold-trn.time-code = locked_hold-time.time-code
+     1523         locked_hold-trn.is-purch = ?
+     1524         locked_hold-trn.is-sale = ?
+     1525       .
+     1526     end.
+     1527     else do:
+     1528       undo, return error vss-workfile + vss-revision + chr(10)
+     1529         + "Попытка повторного расчета документа" + chr(10)
+     1530         + substitute("Категория &1", p-cat-code) + chr(10)
+     1531         + substitute("Документ &1", p-doc-code) + chr(10)
+     1532         .
+     1533     end.
+     1534     run holdprts-doc-type in this-procedure
+     1535       (input  p-cat-code
+     1536       ,input  buf_trn-doc.doc-code
+     1537       ,output v-is-sale
+     1538       ,output v-is-purch
+     1539       ) .
+     1540     if v-is-purch
+     1541     then do:
+     1542       run harh-calc-trn-purch in this-procedure
+     1543         (input p-cat-code
+     1544         ,input locked_hold-time.time-code
+     1545         ,input buf_trn-doc.doc-code
+     1546         ,input buf_trn-doc.cli-type
+     1547         ,input buf_trn-doc.cli-code
+     1548         ) no-error .
+     1549       if error-status :error
+     1550       then do:
+     1551         message
+     1552         vss-workfile vss-revision vss-description skip
+     1553         "Ошибка расчета межфирменного архива"
+     1554         "Документ закупки" buf_trn-doc.doc-code
+     1555         view-as alert-box error .
+     1556         undo, return error .
+     1557       end.
+     1558     end.
+     1559     if v-is-sale
+     1560     then do:
+     1561       run harh-calc-trn-sale in this-procedure
+     1562         (input p-cat-code
+     1563         ,input locked_hold-time.time-code
+     1564         ,input buf_trn-doc.doc-code
+     1565         ) no-error .
+     1566       if error-status :error
+     1567       then do:
+     1568         message
+     1569         vss-workfile vss-revision vss-description skip
+     1570         "Ошибка расчета межфирменного архива"
+     1571         "Документ продажи" buf_trn-doc.doc-code
+     1572         view-as alert-box error .
+     1573         undo, return error .
+     1574       end.
+     1575     end.
+     1576     assign
+     1577       locked_hold-trn.is-purch = v-is-purch
+     1578       locked_hold-trn.is-sale = v-is-sale
+     1579     .
+     1580   end.
+     1581   procedure harh-calc-trn-purch :
+     1582   define input parameter p-cat-code like ub.hold-time.cat-code no-undo .
+     1583   define input parameter p-time-code like ub.hold-time.time-code no-undo .
+     1584   define input parameter p-doc-code like ub.trn-doc.doc-code no-undo .
+     1585   define input parameter p-cli-type like ub.trn-doc.cli-type no-undo .
+     1586   define input parameter p-cli-code like ub.trn-doc.cli-code no-undo .
+     1587   DEFINE VARIABLE   v-fact-qnty             like ub.hold-purch.fact-qnty            no-undo .
+     1588   DEFINE VARIABLE   v-purch-sum-base        like ub.hold-purch.purch-sum-base       no-undo .
+     1589   DEFINE VARIABLE   v-purch-sum-rubl        like ub.hold-purch.purch-sum-rubl       no-undo .
+     1590   DEFINE VARIABLE   v-purch-VAT-base        like ub.hold-purch.purch-VAT-base       no-undo .
+     1591   DEFINE VARIABLE   v-purch-VAT-rubl        like ub.hold-purch.purch-VAT-rubl       no-undo .
+     1592   DEFINE VARIABLE   v-purch-SLT-base        like ub.hold-purch.purch-SLT-base       no-undo .
+     1593   DEFINE VARIABLE   v-purch-SLT-rubl        like ub.hold-purch.purch-SLT-rubl       no-undo .
+     1594   DEFINE VARIABLE   v-purch-road-tax-base   like ub.hold-purch.purch-road-tax-base  no-undo .
+     1595   DEFINE VARIABLE   v-purch-road-tax-rubl   like ub.hold-purch.purch-road-tax-rubl  no-undo .
+     1596   DEFINE VARIABLE   v-purch-excise-base     like ub.hold-purch.purch-excise-base    no-undo .
+     1597   DEFINE VARIABLE   v-purch-excise-rubl     like ub.hold-purch.purch-excise-rubl    no-undo .
+     1598   DEFINE VARIABLE   v-purch-transport-base  like ub.hold-purch.purch-transport-base no-undo .
+     1599   DEFINE VARIABLE   v-purch-transport-rubl  like ub.hold-purch.purch-transport-rubl no-undo .
+     1600   DEFINE VARIABLE   v-purch-other-base      like ub.hold-purch.purch-other-base     no-undo .
+     1601   DEFINE VARIABLE   v-purch-other-rubl      like ub.hold-purch.purch-other-rubl     no-undo .
+     1602   DEFINE VARIABLE   v-purch-discnt-base     like ub.hold-purch.purch-discnt-base    no-undo .
+     1603   DEFINE VARIABLE   v-purch-discnt-rubl     like ub.hold-purch.purch-discnt-rubl    no-undo .
+     1604   DEFINE VARIABLE   v-node-code like ub.hold-purch-grp.node-code no-undo .
+     1605   define buffer buf_doc-line for ub.doc-line .
+     1606   define buffer buf_goods for ub.goods .
+     1607   define buffer buf_hold-purch for ub.hold-purch.
+     1608   define buffer buf_hold-purch-grp for ub.hold-purch-grp.
+     1609   define buffer buf_hold-purch-supp for ub.hold-purch-supp.
+     1610   define buffer buf_hold-purch-supp-gds for ub.hold-purch-supp-gds.
+     1611     do
+     1612     on error undo, return error
+     1613     :
+     1614       for each buf_doc-line no-lock
+     1615         where buf_doc-line.doc-code = p-doc-code
+     1616       on error undo, return error
+     1617       :
+     1618         run holdprts-purch-values in this-procedure
+     1619           (input  p-doc-code
+     1620           ,input  buf_doc-line.artic
+     1621           ,input  buf_doc-line.prod-type
+     1622           ,input  buf_doc-line.prod-code
+     1623           ,output v-fact-qnty
+     1624           ,output v-purch-sum-base
+     1625           ,output v-purch-sum-rubl
+     1626           ,output v-purch-VAT-base
+     1627           ,output v-purch-VAT-rubl
+     1628           ,output v-purch-SLT-base
+     1629           ,output v-purch-SLT-rubl
+     1630           ,output v-purch-road-tax-base
+     1631           ,output v-purch-road-tax-rubl
+     1632           ,output v-purch-excise-base
+     1633           ,output v-purch-excise-rubl
+     1634           ,output v-purch-transport-base
+     1635           ,output v-purch-transport-rubl
+     1636           ,output v-purch-other-base
+     1637           ,output v-purch-other-rubl
+     1638           ,output v-purch-discnt-base
+     1639           ,output v-purch-discnt-rubl
+     1640           ) .
+     1641         find first buf_goods no-lock
+     1642           where buf_goods.artic = buf_doc-line.artic
+     1643             and buf_goods.prod-type = buf_doc-line.prod-type
+     1644             and buf_goods.prod-code = buf_doc-line.prod-code
+     1645           no-error .
+     1646         if not available buf_goods
+     1647         then do:
+     1648           message
+     1649             vss-workfile vss-revision vss-description skip
+     1650             "Ошибка при заполнении межфирменного архива по строке документа закупки" skip
+     1651             "Документ" p-doc-code skip
+     1652             "cat-code" p-cat-code skip
+     1653             "time-code" p-time-code skip
+     1654             "Товар" buf_doc-line.artic buf_doc-line.prod-type buf_doc-line.prod-code
+     1655             view-as alert-box error .
+     1656           return error .
+     1657         end.
+     1658         run harh-set-good in this-procedure
+     1659           (input p-cat-code
+     1660           ,input p-time-code
+     1661           ,input buf_goods.gds-code
+     1662           ,input buf_goods.grp-name
+     1663           ,output v-node-code
+     1664           ) no-error .
+     1665         if error-status :error
+     1666         then do:
+     1667           message
+     1668           vss-workfile vss-revision vss-description skip
+     1669           "Ошибка при регистрации товара в межфирменном архиве" skip
+     1670           "Товар" buf_doc-line.artic buf_doc-line.prod-type buf_doc-line.prod-code SKIP
+     1671           "cat-code" p-cat-code SKIP
+     1672           "time-code" p-time-code
+     1673           view-as alert-box error .
+     1674           return error .
+     1675         end.
+     1676         find first buf_hold-purch exclusive-lock where
+     1677                    buf_hold-purch.cat-code = p-cat-code AND
+     1678                    buf_hold-purch.time-code = p-time-code AND
+     1679                    buf_hold-purch.gds-code = buf_goods.gds-code no-error.
+     1680         if not available buf_hold-purch
+     1681         then do:
+     1682           create buf_hold-purch .
+     1683           assign
+     1684             buf_hold-purch.cat-code = p-cat-code
+     1685             buf_hold-purch.time-code = p-time-code
+     1686             buf_hold-purch.gds-code = buf_goods.gds-code
+     1687           .
+     1688         end.
+     1689         assign
+     1690           buf_hold-purch.fact-qnty             =  buf_hold-purch.fact-qnty            +  v-fact-qnty
+     1691           buf_hold-purch.purch-sum-base        =  buf_hold-purch.purch-sum-base       +  v-purch-sum-base
+     1692           buf_hold-purch.purch-sum-rubl        =  buf_hold-purch.purch-sum-rubl       +  v-purch-sum-rubl
+     1693           buf_hold-purch.purch-VAT-base        =  buf_hold-purch.purch-VAT-base       +  v-purch-VAT-base
+     1694           buf_hold-purch.purch-VAT-rubl        =  buf_hold-purch.purch-VAT-rubl       +  v-purch-VAT-rubl
+     1695           buf_hold-purch.purch-SLT-base        =  buf_hold-purch.purch-SLT-base       +  v-purch-SLT-base
+     1696           buf_hold-purch.purch-SLT-rubl        =  buf_hold-purch.purch-SLT-rubl       +  v-purch-SLT-rubl
+     1697           buf_hold-purch.purch-road-tax-base   =  buf_hold-purch.purch-road-tax-base  +  v-purch-road-tax-base
+     1698           buf_hold-purch.purch-road-tax-rubl   =  buf_hold-purch.purch-road-tax-rubl  +  v-purch-road-tax-rubl
+     1699           buf_hold-purch.purch-excise-base     =  buf_hold-purch.purch-excise-base    +  v-purch-excise-base
+     1700           buf_hold-purch.purch-excise-rubl     =  buf_hold-purch.purch-excise-rubl    +  v-purch-excise-rubl
+     1701           buf_hold-purch.purch-transport-base  =  buf_hold-purch.purch-transport-base +  v-purch-transport-base
+     1702           buf_hold-purch.purch-transport-rubl  =  buf_hold-purch.purch-transport-rubl +  v-purch-transport-rubl
+     1703           buf_hold-purch.purch-other-base      =  buf_hold-purch.purch-other-base     +  v-purch-other-base
+     1704           buf_hold-purch.purch-other-rubl      =  buf_hold-purch.purch-other-rubl     +  v-purch-other-rubl
+     1705           buf_hold-purch.purch-discnt-base     =  buf_hold-purch.purch-discnt-base    +  v-purch-discnt-base
+     1706           buf_hold-purch.purch-discnt-rubl     =  buf_hold-purch.purch-discnt-rubl    +  v-purch-discnt-rubl
+     1707         .
+     1708         find first buf_hold-purch-grp exclusive-lock where
+     1709                    buf_hold-purch-grp.cat-code = p-cat-code AND
+     1710                    buf_hold-purch-grp.time-code = p-time-code AND
+     1711                    buf_hold-purch-grp.node-code = v-node-code no-error.
+     1712         if not available buf_hold-purch-grp
+     1713         then do:
+     1714           create buf_hold-purch-grp .
+     1715           assign
+     1716             buf_hold-purch-grp.cat-code = p-cat-code
+     1717             buf_hold-purch-grp.time-code = p-time-code
+     1718             buf_hold-purch-grp.node-code = v-node-code
+     1719           .
+     1720         end.
+     1721         assign
+     1722           buf_hold-purch-grp.fact-qnty             =  buf_hold-purch-grp.fact-qnty            +  v-fact-qnty
+     1723           buf_hold-purch-grp.purch-sum-base        =  buf_hold-purch-grp.purch-sum-base       +  v-purch-sum-base
+     1724           buf_hold-purch-grp.purch-sum-rubl        =  buf_hold-purch-grp.purch-sum-rubl       +  v-purch-sum-rubl
+     1725           buf_hold-purch-grp.purch-VAT-base        =  buf_hold-purch-grp.purch-VAT-base       +  v-purch-VAT-base
+     1726           buf_hold-purch-grp.purch-VAT-rubl        =  buf_hold-purch-grp.purch-VAT-rubl       +  v-purch-VAT-rubl
+     1727           buf_hold-purch-grp.purch-SLT-base        =  buf_hold-purch-grp.purch-SLT-base       +  v-purch-SLT-base
+     1728           buf_hold-purch-grp.purch-SLT-rubl        =  buf_hold-purch-grp.purch-SLT-rubl       +  v-purch-SLT-rubl
+     1729           buf_hold-purch-grp.purch-road-tax-base   =  buf_hold-purch-grp.purch-road-tax-base  +  v-purch-road-tax-base
+     1730           buf_hold-purch-grp.purch-road-tax-rubl   =  buf_hold-purch-grp.purch-road-tax-rubl  +  v-purch-road-tax-rubl
+     1731           buf_hold-purch-grp.purch-excise-base     =  buf_hold-purch-grp.purch-excise-base    +  v-purch-excise-base
+     1732           buf_hold-purch-grp.purch-excise-rubl     =  buf_hold-purch-grp.purch-excise-rubl    +  v-purch-excise-rubl
+     1733           buf_hold-purch-grp.purch-transport-base  =  buf_hold-purch-grp.purch-transport-base +  v-purch-transport-base
+     1734           buf_hold-purch-grp.purch-transport-rubl  =  buf_hold-purch-grp.purch-transport-rubl +  v-purch-transport-rubl
+     1735           buf_hold-purch-grp.purch-other-base      =  buf_hold-purch-grp.purch-other-base     +  v-purch-other-base
+     1736           buf_hold-purch-grp.purch-other-rubl      =  buf_hold-purch-grp.purch-other-rubl     +  v-purch-other-rubl
+     1737           buf_hold-purch-grp.purch-discnt-base     =  buf_hold-purch-grp.purch-discnt-base    +  v-purch-discnt-base
+     1738           buf_hold-purch-grp.purch-discnt-rubl     =  buf_hold-purch-grp.purch-discnt-rubl    +  v-purch-discnt-rubl
+     1739         .
+     1740         find first buf_hold-purch-supp exclusive-lock where
+     1741                    buf_hold-purch-supp.cat-code = p-cat-code AND
+     1742                    buf_hold-purch-supp.time-code = p-time-code AND
+     1743                    buf_hold-purch-supp.cli-type = p-cli-type AND
+     1744                    buf_hold-purch-supp.cli-code = p-cli-code
+     1745                    no-error.
+     1746         if not available buf_hold-purch-supp
+     1747         then do:
+     1748           create buf_hold-purch-supp .
+     1749           assign
+     1750             buf_hold-purch-supp.cat-code = p-cat-code
+     1751             buf_hold-purch-supp.time-code = p-time-code
+     1752             buf_hold-purch-supp.cli-type = p-cli-type
+     1753             buf_hold-purch-supp.cli-code = p-cli-code
+     1754           .
+     1755         end.
+     1756         assign
+     1757           buf_hold-purch-supp.fact-qnty             =  buf_hold-purch-supp.fact-qnty            +  v-fact-qnty
+     1758           buf_hold-purch-supp.purch-sum-base        =  buf_hold-purch-supp.purch-sum-base       +  v-purch-sum-base
+     1759           buf_hold-purch-supp.purch-sum-rubl        =  buf_hold-purch-supp.purch-sum-rubl       +  v-purch-sum-rubl
+     1760           buf_hold-purch-supp.purch-VAT-base        =  buf_hold-purch-supp.purch-VAT-base       +  v-purch-VAT-base
+     1761           buf_hold-purch-supp.purch-VAT-rubl        =  buf_hold-purch-supp.purch-VAT-rubl       +  v-purch-VAT-rubl
+     1762           buf_hold-purch-supp.purch-SLT-base        =  buf_hold-purch-supp.purch-SLT-base       +  v-purch-SLT-base
+     1763           buf_hold-purch-supp.purch-SLT-rubl        =  buf_hold-purch-supp.purch-SLT-rubl       +  v-purch-SLT-rubl
+     1764           buf_hold-purch-supp.purch-road-tax-base   =  buf_hold-purch-supp.purch-road-tax-base  +  v-purch-road-tax-base
+     1765           buf_hold-purch-supp.purch-road-tax-rubl   =  buf_hold-purch-supp.purch-road-tax-rubl  +  v-purch-road-tax-rubl
+     1766           buf_hold-purch-supp.purch-excise-base     =  buf_hold-purch-supp.purch-excise-base    +  v-purch-excise-base
+     1767           buf_hold-purch-supp.purch-excise-rubl     =  buf_hold-purch-supp.purch-excise-rubl    +  v-purch-excise-rubl
+     1768           buf_hold-purch-supp.purch-transport-base  =  buf_hold-purch-supp.purch-transport-base +  v-purch-transport-base
+     1769           buf_hold-purch-supp.purch-transport-rubl  =  buf_hold-purch-supp.purch-transport-rubl +  v-purch-transport-rubl
+     1770           buf_hold-purch-supp.purch-other-base      =  buf_hold-purch-supp.purch-other-base     +  v-purch-other-base
+     1771           buf_hold-purch-supp.purch-other-rubl      =  buf_hold-purch-supp.purch-other-rubl     +  v-purch-other-rubl
+     1772           buf_hold-purch-supp.purch-discnt-base     =  buf_hold-purch-supp.purch-discnt-base    +  v-purch-discnt-base
+     1773           buf_hold-purch-supp.purch-discnt-rubl     =  buf_hold-purch-supp.purch-discnt-rubl    +  v-purch-discnt-rubl
+     1774         .
+     1775         find first buf_hold-purch-supp-gds exclusive-lock where
+     1776                    buf_hold-purch-supp-gds.cat-code = p-cat-code AND
+     1777                    buf_hold-purch-supp-gds.time-code = p-time-code AND
+     1778                    buf_hold-purch-supp-gds.gds-code = buf_goods.gds-code AND
+     1779                    buf_hold-purch-supp-gds.cli-type = p-cli-type AND
+     1780                    buf_hold-purch-supp-gds.cli-code = p-cli-code
+     1781                    no-error.
+     1782         if not available buf_hold-purch-supp-gds
+     1783         then do:
+     1784           create buf_hold-purch-supp-gds .
+     1785           assign
+     1786             buf_hold-purch-supp-gds.cat-code = p-cat-code
+     1787             buf_hold-purch-supp-gds.time-code = p-time-code
+     1788             buf_hold-purch-supp-gds.cli-type = p-cli-type
+     1789             buf_hold-purch-supp-gds.cli-code = p-cli-code
+     1790             buf_hold-purch-supp-gds.gds-code = buf_goods.gds-code
+     1791           .
+     1792         end.
+     1793         assign
+     1794           buf_hold-purch-supp-gds.fact-qnty             =  buf_hold-purch-supp-gds.fact-qnty            +  v-fact-qnty
+     1795           buf_hold-purch-supp-gds.purch-sum-base        =  buf_hold-purch-supp-gds.purch-sum-base       +  v-purch-sum-base
+     1796           buf_hold-purch-supp-gds.purch-sum-rubl        =  buf_hold-purch-supp-gds.purch-sum-rubl       +  v-purch-sum-rubl
+     1797           buf_hold-purch-supp-gds.purch-VAT-base        =  buf_hold-purch-supp-gds.purch-VAT-base       +  v-purch-VAT-base
+     1798           buf_hold-purch-supp-gds.purch-VAT-rubl        =  buf_hold-purch-supp-gds.purch-VAT-rubl       +  v-purch-VAT-rubl
+     1799           buf_hold-purch-supp-gds.purch-SLT-base        =  buf_hold-purch-supp-gds.purch-SLT-base       +  v-purch-SLT-base
+     1800           buf_hold-purch-supp-gds.purch-SLT-rubl        =  buf_hold-purch-supp-gds.purch-SLT-rubl       +  v-purch-SLT-rubl
+     1801           buf_hold-purch-supp-gds.purch-road-tax-base   =  buf_hold-purch-supp-gds.purch-road-tax-base  +  v-purch-road-tax-base
+     1802           buf_hold-purch-supp-gds.purch-road-tax-rubl   =  buf_hold-purch-supp-gds.purch-road-tax-rubl  +  v-purch-road-tax-rubl
+     1803           buf_hold-purch-supp-gds.purch-excise-base     =  buf_hold-purch-supp-gds.purch-excise-base    +  v-purch-excise-base
+     1804           buf_hold-purch-supp-gds.purch-excise-rubl     =  buf_hold-purch-supp-gds.purch-excise-rubl    +  v-purch-excise-rubl
+     1805           buf_hold-purch-supp-gds.purch-transport-base  =  buf_hold-purch-supp-gds.purch-transport-base +  v-purch-transport-base
+     1806           buf_hold-purch-supp-gds.purch-transport-rubl  =  buf_hold-purch-supp-gds.purch-transport-rubl +  v-purch-transport-rubl
+     1807           buf_hold-purch-supp-gds.purch-other-base      =  buf_hold-purch-supp-gds.purch-other-base     +  v-purch-other-base
+     1808           buf_hold-purch-supp-gds.purch-other-rubl      =  buf_hold-purch-supp-gds.purch-other-rubl     +  v-purch-other-rubl
+     1809           buf_hold-purch-supp-gds.purch-discnt-base     =  buf_hold-purch-supp-gds.purch-discnt-base    +  v-purch-discnt-base
+     1810           buf_hold-purch-supp-gds.purch-discnt-rubl     =  buf_hold-purch-supp-gds.purch-discnt-rubl    +  v-purch-discnt-rubl
+     1811         .
+     1812       end.
+     1813     end.
+     1814   end procedure.
+     1815   procedure harh-calc-trn-sale :
+     1816     define input parameter p-cat-code like ub.hold-time.cat-code no-undo .
+     1817     define input parameter p-time-code like ub.hold-time.time-code no-undo .
+     1818     define input parameter p-doc-code like ub.trn-doc.doc-code no-undo .
+     1819     define variable   v-fact-qnty             like ub.hold-sale.fact-qnty            no-undo .
+     1820     define variable   v-sale-sum-base         like ub.hold-sale.purch-sum-base       no-undo .
+     1821     define variable   v-sale-sum-rubl         like ub.hold-sale.sale-sum-rubl        no-undo .
+     1822     define variable   v-sale-vat-base         like ub.hold-sale.sale-vat-base        no-undo .
+     1823     define variable   v-sale-vat-rubl         like ub.hold-sale.sale-vat-rubl        no-undo .
+     1824     define variable   v-sale-slt-base         like ub.hold-sale.sale-slt-base        no-undo .
+     1825     define variable   v-sale-slt-rubl         like ub.hold-sale.sale-slt-rubl        no-undo .
+     1826     define variable   v-sale-road-tax-base    like ub.hold-sale.sale-road-tax-base   no-undo .
+     1827     define variable   v-sale-road-tax-rubl    like ub.hold-sale.sale-road-tax-rubl   no-undo .
+     1828     define variable   v-sale-excise-base      like ub.hold-sale.sale-excise-base     no-undo .
+     1829     define variable   v-sale-excise-rubl      like ub.hold-sale.sale-excise-rubl     no-undo .
+     1830     define variable   v-sale-transport-base   like ub.hold-sale.sale-transport-base  no-undo .
+     1831     define variable   v-sale-transport-rubl   like ub.hold-sale.sale-transport-rubl  no-undo .
+     1832     define variable   v-sale-other-base       like ub.hold-sale.sale-other-base      no-undo .
+     1833     define variable   v-sale-other-rubl       like ub.hold-sale.sale-other-rubl      no-undo .
+     1834     define variable   v-sale-discnt-base      like ub.hold-sale.sale-discnt-base     no-undo .
+     1835     define variable   v-sale-discnt-rubl      like ub.hold-sale.sale-discnt-rubl     no-undo .
+     1836     define variable   v-purch-sum-base        like ub.hold-sale.purch-sum-base       no-undo .
+     1837     define variable   v-purch-sum-rubl        like ub.hold-sale.purch-sum-rubl       no-undo .
+     1838     define variable   v-purch-vat-base        like ub.hold-sale.purch-vat-base       no-undo .
+     1839     define variable   v-purch-vat-rubl        like ub.hold-sale.purch-vat-rubl       no-undo .
+     1840     define variable   v-purch-slt-base        like ub.hold-sale.purch-slt-base       no-undo .
+     1841     define variable   v-purch-slt-rubl        like ub.hold-sale.purch-slt-rubl       no-undo .
+     1842     define variable   v-purch-road-tax-base   like ub.hold-sale.purch-road-tax-base  no-undo .
+     1843     define variable   v-purch-road-tax-rubl   like ub.hold-sale.purch-road-tax-rubl  no-undo .
+     1844     define variable   v-purch-excise-base     like ub.hold-sale.purch-excise-base    no-undo .
+     1845     define variable   v-purch-excise-rubl     like ub.hold-sale.purch-excise-rubl    no-undo .
+     1846     define variable   v-purch-transport-base  like ub.hold-sale.purch-transport-base no-undo .
+     1847     define variable   v-purch-transport-rubl  like ub.hold-sale.purch-transport-rubl no-undo .
+     1848     define variable   v-purch-other-base      like ub.hold-sale.purch-other-base     no-undo .
+     1849     define variable   v-purch-other-rubl      like ub.hold-sale.purch-other-rubl     no-undo .
+     1850     define variable   v-purch-discnt-base     like ub.hold-sale.purch-discnt-base    no-undo .
+     1851     define variable   v-purch-discnt-rubl     like ub.hold-sale.purch-discnt-rubl    no-undo .
+     1852     define variable   v-profit-base           like ub.hold-sale.profit-base          no-undo .
+     1853     define variable   v-profit-rubl           like ub.hold-sale.profit-rubl          no-undo .
+     1854     define variable   v-node-code like ub.hold-purch-grp.node-code no-undo .
+     1855     define buffer buf_goods for ub.goods .
+     1856     define buffer buf_doc-line for ub.doc-line .
+     1857     define buffer buf_hold-sale for ub.hold-sale .
+     1858     define buffer buf_hold-sale-grp for ub.hold-sale-grp .
+     1859     do
+     1860     on error undo, return error
+     1861     :
+     1862       for each buf_doc-line no-lock
+     1863         where buf_doc-line.doc-code = p-doc-code
+     1864       on error undo, return error
+     1865       :
+     1866         run holdprts-purch-values in this-procedure
+     1867           (input  p-doc-code
+     1868           ,input  buf_doc-line.artic
+     1869           ,input  buf_doc-line.prod-type
+     1870           ,input  buf_doc-line.prod-code
+     1871           ,output v-fact-qnty
+     1872           ,output v-purch-sum-base
+     1873           ,output v-purch-sum-rubl
+     1874           ,output v-purch-VAT-base
+     1875           ,output v-purch-VAT-rubl
+     1876           ,output v-purch-SLT-base
+     1877           ,output v-purch-SLT-rubl
+     1878           ,output v-purch-road-tax-base
+     1879           ,output v-purch-road-tax-rubl
+     1880           ,output v-purch-excise-base
+     1881           ,output v-purch-excise-rubl
+     1882           ,output v-purch-transport-base
+     1883           ,output v-purch-transport-rubl
+     1884           ,output v-purch-other-base
+     1885           ,output v-purch-other-rubl
+     1886           ,output v-purch-discnt-base
+     1887           ,output v-purch-discnt-rubl
+     1888           ) .
+     1889         run holdprts-sale-values in this-procedure
+     1890           (input  p-doc-code
+     1891           ,input  buf_doc-line.artic
+     1892           ,input  buf_doc-line.prod-type
+     1893           ,input  buf_doc-line.prod-code
+     1894           ,output v-fact-qnty
+     1895           ,output v-sale-sum-base
+     1896           ,output v-sale-sum-rubl
+     1897           ,output v-sale-VAT-base
+     1898           ,output v-sale-VAT-rubl
+     1899           ,output v-sale-SLT-base
+     1900           ,output v-sale-SLT-rubl
+     1901           ,output v-sale-road-tax-base
+     1902           ,output v-sale-road-tax-rubl
+     1903           ,output v-sale-excise-base
+     1904           ,output v-sale-excise-rubl
+     1905           ,output v-sale-transport-base
+     1906           ,output v-sale-transport-rubl
+     1907           ,output v-sale-other-base
+     1908           ,output v-sale-other-rubl
+     1909           ,output v-sale-discnt-base
+     1910           ,output v-sale-discnt-rubl
+     1911           ) .
+     1912         find first buf_goods no-lock
+     1913           where buf_goods.artic = buf_doc-line.artic
+     1914             and buf_goods.prod-type = buf_doc-line.prod-type
+     1915             and buf_goods.prod-code = buf_doc-line.prod-code
+     1916           no-error .
+     1917         if not available buf_goods
+     1918         then do:
+     1919           message
+     1920             vss-workfile vss-revision vss-description skip
+     1921             "Ошибка при заполнении межфирменного архива по строке документа продажи" skip
+     1922             "Документ" p-doc-code skip
+     1923             "cat-code" p-cat-code skip
+     1924             "time-code" p-time-code skip
+     1925             "Товар" buf_doc-line.artic buf_doc-line.prod-type buf_doc-line.prod-code
+     1926             view-as alert-box error .
+     1927           return error .
+     1928         end.
+     1929         run harh-set-good in this-procedure
+     1930           (input p-cat-code
+     1931           ,input p-time-code
+     1932           ,input buf_goods.gds-code
+     1933           ,input buf_goods.grp-name
+     1934           ,output v-node-code
+     1935           ) no-error .
+     1936         if error-status :error
+     1937         then do:
+     1938           message
+     1939             vss-workfile vss-revision vss-description skip
+     1940             "Ошибка при регистрации товара в межфирменном архиве" skip
+     1941             "Товар" buf_doc-line.artic buf_doc-line.prod-type buf_doc-line.prod-code SKIP
+     1942             "cat-code" p-cat-code SKIP
+     1943             "time-code" p-time-code
+     1944             view-as alert-box error .
+     1945           return error .
+     1946         end.
+     1947         find first buf_hold-sale exclusive-lock
+     1948           where buf_hold-sale.cat-code  = p-cat-code
+     1949             and buf_hold-sale.time-code = p-time-code
+     1950             and buf_hold-sale.gds-code  = buf_goods.gds-code
+     1951           no-error .
+     1952         if not available buf_hold-sale
+     1953         then do:
+     1954           create buf_hold-sale .
+     1955           assign
+     1956             buf_hold-sale.cat-code  = p-cat-code
+     1957             buf_hold-sale.time-code = p-time-code
+     1958             buf_hold-sale.gds-code  = buf_goods.gds-code
+     1959           .
+     1960         end.
+     1961         assign
+     1962           buf_hold-sale.fact-qnty            = buf_hold-sale.fact-qnty            + v-fact-qnty
+     1963           buf_hold-sale.purch-sum-base       = buf_hold-sale.purch-sum-base       + v-purch-sum-base
+     1964           buf_hold-sale.purch-sum-rubl       = buf_hold-sale.purch-sum-rubl       + v-purch-sum-rubl
+     1965           buf_hold-sale.purch-VAT-base       = buf_hold-sale.purch-VAT-base       + v-purch-VAT-base
+     1966           buf_hold-sale.purch-VAT-rubl       = buf_hold-sale.purch-VAT-rubl       + v-purch-VAT-rubl
+     1967           buf_hold-sale.purch-SLT-base       = buf_hold-sale.purch-SLT-base       + v-purch-SLT-base
+     1968           buf_hold-sale.purch-SLT-rubl       = buf_hold-sale.purch-SLT-rubl       + v-purch-SLT-rubl
+     1969           buf_hold-sale.purch-road-tax-base  = buf_hold-sale.purch-road-tax-base  + v-purch-road-tax-base
+     1970           buf_hold-sale.purch-road-tax-rubl  = buf_hold-sale.purch-road-tax-rubl  + v-purch-road-tax-rubl
+     1971           buf_hold-sale.purch-excise-base    = buf_hold-sale.purch-excise-base    + v-purch-excise-base
+     1972           buf_hold-sale.purch-excise-rubl    = buf_hold-sale.purch-excise-rubl    + v-purch-excise-rubl
+     1973           buf_hold-sale.purch-transport-base = buf_hold-sale.purch-transport-base + v-purch-transport-base
+     1974           buf_hold-sale.purch-transport-rubl = buf_hold-sale.purch-transport-rubl + v-purch-transport-rubl
+     1975           buf_hold-sale.purch-other-base     = buf_hold-sale.purch-other-base     + v-purch-other-base
+     1976           buf_hold-sale.purch-other-rubl     = buf_hold-sale.purch-other-rubl     + v-purch-other-rubl
+     1977           buf_hold-sale.purch-discnt-base    = buf_hold-sale.purch-discnt-base    + v-purch-discnt-base
+     1978           buf_hold-sale.purch-discnt-rubl    = buf_hold-sale.purch-discnt-rubl    + v-purch-discnt-rubl
+     1979           buf_hold-sale.sale-sum-base        = buf_hold-sale.sale-sum-base        + v-sale-sum-base
+     1980           buf_hold-sale.sale-sum-rubl        = buf_hold-sale.sale-sum-rubl        + v-sale-sum-rubl
+     1981           buf_hold-sale.sale-VAT-base        = buf_hold-sale.sale-VAT-base        + v-sale-VAT-base
+     1982           buf_hold-sale.sale-VAT-rubl        = buf_hold-sale.sale-VAT-rubl        + v-sale-VAT-rubl
+     1983           buf_hold-sale.sale-SLT-base        = buf_hold-sale.sale-SLT-base        + v-sale-SLT-base
+     1984           buf_hold-sale.sale-SLT-rubl        = buf_hold-sale.sale-SLT-rubl        + v-sale-SLT-rubl
+     1985           buf_hold-sale.sale-road-tax-base   = buf_hold-sale.sale-road-tax-base   + v-sale-road-tax-base
+     1986           buf_hold-sale.sale-road-tax-rubl   = buf_hold-sale.sale-road-tax-rubl   + v-sale-road-tax-rubl
+     1987           buf_hold-sale.sale-excise-base     = buf_hold-sale.sale-excise-base     + v-sale-excise-base
+     1988           buf_hold-sale.sale-excise-rubl     = buf_hold-sale.sale-excise-rubl     + v-sale-excise-rubl
+     1989           buf_hold-sale.sale-transport-base  = buf_hold-sale.sale-transport-base  + v-sale-transport-base
+     1990           buf_hold-sale.sale-transport-rubl  = buf_hold-sale.sale-transport-rubl  + v-sale-transport-rubl
+     1991           buf_hold-sale.sale-other-base      = buf_hold-sale.sale-other-base      + v-sale-other-base
+     1992           buf_hold-sale.sale-other-rubl      = buf_hold-sale.sale-other-rubl      + v-sale-other-rubl
+     1993           buf_hold-sale.sale-discnt-base     = buf_hold-sale.sale-discnt-base     + v-sale-discnt-base
+     1994           buf_hold-sale.sale-discnt-rubl     = buf_hold-sale.sale-discnt-rubl     + v-sale-discnt-rubl
+     1995           buf_hold-sale.profit-base          = buf_hold-sale.profit-base          + v-profit-base
+     1996           buf_hold-sale.profit-rubl          = buf_hold-sale.profit-rubl          + v-profit-rubl
+     1997         .
+     1998         find first buf_hold-sale-grp exclusive-lock where
+     1999                    buf_hold-sale-grp.cat-code = p-cat-code AND
+     2000                    buf_hold-sale-grp.time-code = p-time-code AND
+     2001                    buf_hold-sale-grp.node-code = v-node-code no-error.
+     2002         if not available buf_hold-sale-grp
+     2003         then do:
+     2004           create buf_hold-sale-grp .
+     2005           assign
+     2006             buf_hold-sale-grp.cat-code = p-cat-code
+     2007             buf_hold-sale-grp.time-code = p-time-code
+     2008             buf_hold-sale-grp.node-code = v-node-code
+     2009           .
+     2010         end.
+     2011         assign
+     2012           buf_hold-sale-grp.fact-qnty             =  buf_hold-sale-grp.fact-qnty            +  v-fact-qnty
+     2013           buf_hold-sale-grp.purch-sum-base        =  buf_hold-sale-grp.purch-sum-base       +  v-purch-sum-base
+     2014           buf_hold-sale-grp.purch-sum-rubl        =  buf_hold-sale-grp.purch-sum-rubl       +  v-purch-sum-rubl
+     2015           buf_hold-sale-grp.purch-VAT-base        =  buf_hold-sale-grp.purch-VAT-base       +  v-purch-VAT-base
+     2016           buf_hold-sale-grp.purch-VAT-rubl        =  buf_hold-sale-grp.purch-VAT-rubl       +  v-purch-VAT-rubl
+     2017           buf_hold-sale-grp.purch-SLT-base        =  buf_hold-sale-grp.purch-SLT-base       +  v-purch-SLT-base
+     2018           buf_hold-sale-grp.purch-SLT-rubl        =  buf_hold-sale-grp.purch-SLT-rubl       +  v-purch-SLT-rubl
+     2019           buf_hold-sale-grp.purch-road-tax-base   =  buf_hold-sale-grp.purch-road-tax-base  +  v-purch-road-tax-base
+     2020           buf_hold-sale-grp.purch-road-tax-rubl   =  buf_hold-sale-grp.purch-road-tax-rubl  +  v-purch-road-tax-rubl
+     2021           buf_hold-sale-grp.purch-excise-base     =  buf_hold-sale-grp.purch-excise-base    +  v-purch-excise-base
+     2022           buf_hold-sale-grp.purch-excise-rubl     =  buf_hold-sale-grp.purch-excise-rubl    +  v-purch-excise-rubl
+     2023           buf_hold-sale-grp.purch-transport-base  =  buf_hold-sale-grp.purch-transport-base +  v-purch-transport-base
+     2024           buf_hold-sale-grp.purch-transport-rubl  =  buf_hold-sale-grp.purch-transport-rubl +  v-purch-transport-rubl
+     2025           buf_hold-sale-grp.purch-other-base      =  buf_hold-sale-grp.purch-other-base     +  v-purch-other-base
+     2026           buf_hold-sale-grp.purch-other-rubl      =  buf_hold-sale-grp.purch-other-rubl     +  v-purch-other-rubl
+     2027           buf_hold-sale-grp.purch-discnt-base     =  buf_hold-sale-grp.purch-discnt-base    +  v-purch-discnt-base
+     2028           buf_hold-sale-grp.purch-discnt-rubl     =  buf_hold-sale-grp.purch-discnt-rubl    +  v-purch-discnt-rubl
+     2029           buf_hold-sale-grp.sale-sum-base         =  buf_hold-sale-grp.sale-sum-base        +  v-sale-sum-base
+     2030           buf_hold-sale-grp.sale-sum-rubl         =  buf_hold-sale-grp.sale-sum-rubl        +  v-sale-sum-rubl
+     2031           buf_hold-sale-grp.sale-VAT-base         =  buf_hold-sale-grp.sale-VAT-base        +  v-sale-VAT-base
+     2032           buf_hold-sale-grp.sale-VAT-rubl         =  buf_hold-sale-grp.sale-VAT-rubl        +  v-sale-VAT-rubl
+     2033           buf_hold-sale-grp.sale-SLT-base         =  buf_hold-sale-grp.sale-SLT-base        +  v-sale-SLT-base
+     2034           buf_hold-sale-grp.sale-SLT-rubl         =  buf_hold-sale-grp.sale-SLT-rubl        +  v-sale-SLT-rubl
+     2035           buf_hold-sale-grp.sale-road-tax-base    =  buf_hold-sale-grp.sale-road-tax-base   +  v-sale-road-tax-base
+     2036           buf_hold-sale-grp.sale-road-tax-rubl    =  buf_hold-sale-grp.sale-road-tax-rubl   +  v-sale-road-tax-rubl
+     2037           buf_hold-sale-grp.sale-excise-base      =  buf_hold-sale-grp.sale-excise-base     +  v-sale-excise-base
+     2038           buf_hold-sale-grp.sale-excise-rubl      =  buf_hold-sale-grp.sale-excise-rubl     +  v-sale-excise-rubl
+     2039           buf_hold-sale-grp.sale-transport-base   =  buf_hold-sale-grp.sale-transport-base  +  v-sale-transport-base
+     2040           buf_hold-sale-grp.sale-transport-rubl   =  buf_hold-sale-grp.sale-transport-rubl  +  v-sale-transport-rubl
+     2041           buf_hold-sale-grp.sale-other-base       =  buf_hold-sale-grp.sale-other-base      +  v-sale-other-base
+     2042           buf_hold-sale-grp.sale-other-rubl       =  buf_hold-sale-grp.sale-other-rubl      +  v-sale-other-rubl
+     2043           buf_hold-sale-grp.sale-discnt-base      =  buf_hold-sale-grp.sale-discnt-base     +  v-sale-discnt-base
+     2044           buf_hold-sale-grp.sale-discnt-rubl      =  buf_hold-sale-grp.sale-discnt-rubl     +  v-sale-discnt-rubl
+     2045           buf_hold-sale-grp.profit-base           =  buf_hold-sale-grp.profit-base          +  v-profit-base
+     2046           buf_hold-sale-grp.profit-rubl           =  buf_hold-sale-grp.profit-rubl          +  v-profit-rubl
+     2047         .
+     2048       end.
+     2049     end.
+     2050   end procedure.
+     2051   procedure harh-set-good :
+     2052     define input  parameter p-cat-code  like ub.hold-time.cat-code no-undo .
+     2053     define input  parameter p-time-code like ub.hold-time.time-code no-undo .
+     2054     define input  parameter p-gds-code  like ub.goods.gds-code no-undo .
+     2055     define input  parameter p-grp-name  like ub.goods.grp-name no-undo .
+     2056     define output parameter p-node-code like ub.hold-gds-grp.node-code no-undo .
+     2057     define variable v-grp-name like ub.hold-gds-grp.grp-name no-undo .
+     2058     define variable v-node-name like ub.hold-gds-grp.node-name no-undo .
+     2059     define variable v-upper-code like ub.hold-gds-grp.upper-code no-undo .
+     2060     define variable v-node-code like ub.hold-gds-grp.node-code no-undo .
+     2061     define variable v-ii as integer no-undo .
+     2062     define variable v-is-term like ub.hold-gds-grp.is-term no-undo .
+     2063     define variable v-num-entries as integer no-undo .
+     2064     define buffer locked_hold-goods for ub.hold-goods .
+     2065     define buffer locked_hold-gds-grp for ub.hold-gds-grp .
+     2066     do
+     2067     on error undo, return error
+     2068     :
+     2069       find first locked_hold-goods exclusive-lock
+     2070         where locked_hold-goods.cat-code = p-cat-code
+     2071           and locked_hold-goods.time-code = p-time-code
+     2072           and locked_hold-goods.gds-code = p-gds-code
+     2073         no-error .
+     2074       if available locked_hold-goods
+     2075       then do:
+     2076       end.
+     2077       else do:
+     2078         create locked_hold-goods .
+     2079         assign
+     2080           locked_hold-goods.cat-code = p-cat-code
+     2081           locked_hold-goods.time-code = p-time-code
+     2082           locked_hold-goods.gds-code = p-gds-code
+     2083           locked_hold-goods.grp-name = p-grp-name
+     2084         .
+     2085       end.
+     2086       assign
+     2087         v-num-entries = num-entries(right-trim(p-grp-name, chr(47)), chr(47))
+     2088       .
+     2089       do v-ii = 1 to v-num-entries
+     2090       on error undo, return error
+     2091       :
+     2092         assign
+     2093           v-node-name = entry(v-ii, p-grp-name, chr(47))
+     2094           v-grp-name = v-grp-name + (if v-grp-name = "":U
+     2095                                     then "":U
+     2096                                     else chr(47)) +
+     2097                       entry(v-ii, p-grp-name, chr(47))
+     2098           v-is-term = (if v-ii = v-num-entries
+     2099                       then yes
+     2100                       else no)
+     2101         .
+     2102         run harh-create-grp-node in this-procedure
+     2103           (input p-cat-code
+     2104           ,input p-time-code
+     2105           ,input v-node-name
+     2106           ,input v-grp-name
+     2107           ,input v-upper-code
+     2108           ,input-output v-node-code
+     2109           ,input v-is-term
+     2110           ) no-error.
+     2111         if error-status :error
+     2112         then do:
+     2113           message
+     2114           vss-workfile vss-revision vss-description skip
+     2115           "Ошибка при заполнении межфирменных архивов" SKIP
+     2116           "Группа товаров" p-grp-name
+     2117           view-as alert-box error .
+     2118           return error .
+     2119         end.
+     2120         assign
+     2121           v-upper-code = v-node-code
+     2122         .
+     2123       end.
+     2124       assign
+     2125         locked_hold-goods.node-code = v-node-code
+     2126         p-node-code                 = v-node-code
+     2127       .
+     2128     end.
+     2129   end procedure.
+     2130   procedure harh-create-grp-node :
+     2131     define input parameter p-cat-code like ub.hold-time.cat-code no-undo .
+     2132     define input parameter p-time-code like ub.hold-time.time-code no-undo .
+     2133     define input parameter p-node-name like ub.hold-gds-grp.node-name no-undo .
+     2134     define input parameter p-grp-name like ub.hold-gds-grp.grp-name no-undo .
+     2135     define input parameter p-upper-code like ub.hold-gds-grp.upper-code no-undo .
+     2136     define input-output parameter p-node-code like ub.hold-gds-grp.node-code no-undo .
+     2137     define input parameter p-is-term like ub.hold-gds-grp.is-term no-undo .
+     2138     define buffer locked_hold-gds-grp for ub.hold-gds-grp .
+     2139     define buffer last_hold-gds-grp for ub.hold-gds-grp.
+     2140     do
+     2141     on error undo, return error
+     2142     :
+     2143       find first locked_hold-gds-grp exclusive-lock
+     2144         where locked_hold-gds-grp.cat-code = p-cat-code
+     2145           and locked_hold-gds-grp.time-code = p-time-code
+     2146           and locked_hold-gds-grp.node-name = p-node-name
+     2147           and locked_hold-gds-grp.upper-code = p-upper-code
+     2148         no-error .
+     2149       if available locked_hold-gds-grp
+     2150       then do:
+     2151         assign
+     2152           p-node-code = locked_hold-gds-grp.node-code
+     2153         .
+     2154         return.
+     2155       end.
+     2156       else do:
+     2157         find last last_hold-gds-grp no-lock
+     2158           where last_hold-gds-grp.cat-code = p-cat-code
+     2159             and last_hold-gds-grp.time-code = p-time-code
+     2160           use-index pi
+     2161           no-error .
+     2162         create locked_hold-gds-grp .
+     2163         assign
+     2164           locked_hold-gds-grp.cat-code = p-cat-code
+     2165           locked_hold-gds-grp.time-code = p-time-code
+     2166           locked_hold-gds-grp.node-name = p-node-name
+     2167           locked_hold-gds-grp.grp-name = right-trim(p-grp-name, chr(47)) + chr(47)
+     2168           locked_hold-gds-grp.upper-code = p-upper-code
+     2169           locked_hold-gds-grp.node-code = (if available last_hold-gds-grp
+     2170                                             then (last_hold-gds-grp.node-code + 1)
+     2171                                             else 1
+     2172                                             )
+     2173           locked_hold-gds-grp.is-term = p-is-term
+     2174           p-node-code = locked_hold-gds-grp.node-code
+     2175         .
+     2176       end.
+     2177     end.
+     2178   end procedure.

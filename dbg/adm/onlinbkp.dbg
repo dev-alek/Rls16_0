@@ -1,0 +1,313 @@
+        1   block-level on error undo, throw.
+        2   define output parameter p-message as character no-undo .
+        3   def var vss-revision    as character no-undo init "$Revision: 1eba0946c2d7, 3078, rls $":U .
+        4   def var vss-author      as character no-undo init "$Author: DRuban $":U .
+        5   def var vss-date        as character no-undo init "$Date: Пт авг 05 19:16:25 2022 +0300 $":U .
+        6   def var vss-workfile    as character no-undo init "$Workfile: onlinbkp.p $":U .
+        7   def var vss-archive     as character no-undo init "$Archive: adm/onlinbkp.p $":U .
+        8   def var vss-description as character no-undo init "Online backup".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27   end procedure.
+       28   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       29   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       30   define variable v-vssrevis-logger                   as handle    no-undo .
+       31   procedure vss-logevent :
+       32     define input  parameter p-extra-paramters as character no-undo .
+       33     define variable v-vssrevis-parameters as character no-undo .
+       34     do
+       35     on error undo, return error return-value
+       36     :
+       37       if  valid-handle(v-vssrevis-logger)
+       38       and v-vssrevis-logger :get-signature("logevent") <> ""
+       39       then do:
+       40         run vss-get-parameters in this-procedure
+       41           (output v-vssrevis-parameters
+       42           ).
+       43         run logevent in v-vssrevis-logger
+       44           (input vss-workfile
+       45           ,input vss-revision
+       46           ,input v-vssrevis-parameters
+       47           ,input p-extra-paramters
+       48           ).
+       49       end.
+       50     end.
+       51   end procedure.
+       52   assign
+       53     v-vssrevis-logger = g#vssrevis-logger
+       54   .
+       55   if  valid-handle(v-vssrevis-logger)
+       56   and v-vssrevis-logger :get-signature("logevent") <> ""
+       57   then do:
+       58     assign
+       59       v-vssrevis-logevent = true
+       60     .
+       61     run vss-logevent in this-procedure (input vss-description) .
+       62   end.
+       63   define new global shared variable g#language as character no-undo .
+       64   if g#language <> '' and g#language <> 'rus':U then do:
+       65     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       66   end.
+       67   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       68   procedure check-need-onlinebkp :
+       69     define output parameter p-need-bkp as logical   no-undo .
+       70     do
+       71     on error  undo, return error substitute( "&1. &2&3&4", vss-include-info0, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       72     on stop   undo, return error substitute( "&1. stop", vss-include-info0 )
+       73     on endkey undo, return error substitute( "&1. endkey", vss-include-info0 )
+       74     :
+       75       define variable v-run-bkp-str as character no-undo .
+       76       get-key-value section "onlinebkp"
+       77                         key "run-bkp"
+       78                       value v-run-bkp-str.
+       79       if v-run-bkp-str = ?
+       80         or CAPS( v-run-bkp-str ) = "FALSE":U
+       81         or CAPS( v-run-bkp-str ) = "NO":U
+       82       then do:
+       83         assign
+       84           p-need-bkp = false
+       85         .
+       86       end.
+       87       else do:
+       88         assign
+       89           p-need-bkp = true
+       90         .
+       91       end.
+       92       return .
+       93     end.
+       94   end procedure.
+       95   do
+       96   on error undo, return error return-value
+       97   :
+       98     define variable v-need-bkp    as logical   no-undo .
+       99     define variable v-bat-name    as character no-undo .
+      100     define variable v-msg-name    as character no-undo .
+      101     define variable v-path-dlc    as character no-undo .
+      102     define variable v-path-src-db as character no-undo .
+      103     define variable v-path-dst-db as character no-undo .
+      104     define variable v-del-file    as character no-undo .
+      105     define variable v-err-code    as integer   no-undo .
+      106     define variable v-err-mess    as character no-undo .
+      107     define variable v-ind         as integer   no-undo .
+      108     define variable v-temp-char   as character no-undo .
+      109     define buffer buf_batchprocess for ub.batchprocess .
+      110     define buffer buf_db           for ub.db .
+      111     define variable v-full-db-list   as character no-undo .
+      112     define variable v-lock-db-list   as character no-undo .
+      113     define variable v-unlock-db-list as character no-undo .
+      114     define stream ImpStream .
+      115     define frame inf
+      116       "Подождите..." space(5)
+      117       with view-as dialog-box side-labels 1 columns three-d title "Online backup".
+      118     run check-need-onlinebkp in this-procedure
+      119       ( output v-need-bkp
+      120       ) no-error .
+      121     if error-status :error then do:
+      122       message
+      123         vss-workfile vss-revision vss-description skip
+      124         "Ошибка при определении необходимости проведения onlinebkp" skip
+      125         error-status :get-message(1) skip
+      126         return-value skip
+      127         view-as alert-box error .
+      128     end.
+      129     if v-need-bkp <> true then do:
+      130       assign
+      131         p-message = "":U
+      132       .
+      133       return .
+      134     end.
+      135     get-key-value section "onlinebkp"
+      136                       key "bat-name"
+      137                     value v-bat-name.
+      138     if v-bat-name = ? then do
+      139     :
+      140       assign
+      141         p-message = substitute( "&1. Backup не произведен. Отсутствует настройка на файл запуска (ключ [bat-name] в секции [onlinebkp]). ", vss-workfile )
+      142       .
+      143     end.
+      144     else do:
+      145       view frame inf.
+      146       if search( v-bat-name ) = ? then do
+      147       :
+      148         return error substitute( "&1. Не найден файл запуска online backup (&2).", vss-workfile, v-bat-name ) .
+      149       end.
+      150       assign
+      151         v-bat-name = search( v-bat-name )
+      152       .
+      153       get-key-value section "onlinebkp"
+      154                         key "msg-name"
+      155                       value v-msg-name.
+      156       if v-msg-name = ? then do:
+      157         return error substitute( "&1. Ошибка .ini файла: отсутствует ключ [msg-name] в секции [onlinebkp].", vss-workfile ) .
+      158       end.
+      159       get-key-value section "onlinebkp"
+      160                         key "path-dlc"
+      161                       value v-path-dlc.
+      162       if v-path-dlc = ? then do:
+      163         return error substitute( "&1. Ошибка .ini файла: отсутствует ключ [path-dlc] в секции [onlinebkp].", vss-workfile ) .
+      164       end.
+      165       assign
+      166         file-info:file-name = v-path-dlc
+      167       .
+      168       if file-info:file-type = ?
+      169         or not ( file-info:file-type begins "D":U )
+      170       then do:
+      171         return error substitute( "&1. Каталог &2 отсутствует", vss-workfile, v-path-dlc ) .
+      172       end.
+      173       get-key-value section "onlinebkp"
+      174                         key "path-src-db"
+      175                       value v-path-src-db.
+      176       if v-path-src-db = ? then do:
+      177         return error substitute( "&1. Ошибка .ini файла: отсутствует ключ [pach-src-db] в секции [onlinebkp].", vss-workfile ) .
+      178       end.
+      179       get-key-value section "onlinebkp"
+      180                         key "path-dst-db"
+      181                       value v-path-dst-db.
+      182       if v-path-dst-db = ? then do:
+      183         return error substitute( "&1. Ошибка .ini файла: отсутствует ключ [pach-dst-db] в секции [onlinebkp].", vss-workfile ) .
+      184       end.
+      185       do transaction
+      186       on error undo, return error return-value
+      187       :
+      188         assign
+      189           v-full-db-list   = "":U
+      190           v-lock-db-list   = "":U
+      191           v-unlock-db-list = "":U
+      192         .
+      193         for each buf_db
+      194         on error undo, return error return-value
+      195         :
+      196           if v-full-db-list <> "":U then do:
+      197             assign
+      198               v-full-db-list = v-full-db-list + chr(44)
+      199             .
+      200           end.
+      201           assign
+      202             v-full-db-list = v-full-db-list + substitute( "&1", buf_db.db-num )
+      203           .
+      204           run nws/lock-nws.p ( input buf_db.db-num
+      205                               ,buffer buf_db
+      206                              ) no-error .
+      207           if error-status:error then do:
+      208             if v-unlock-db-list <> "":U then do:
+      209               assign
+      210                 v-unlock-db-list = v-unlock-db-list + chr(44)
+      211               .
+      212             end.
+      213             assign
+      214               v-unlock-db-list = v-unlock-db-list + substitute( "&1", buf_db.db-num )
+      215             .
+      216           end.
+      217           else do:
+      218             if v-lock-db-list <> "":U then do:
+      219               assign
+      220                 v-lock-db-list = v-lock-db-list + chr(44)
+      221               .
+      222             end.
+      223             assign
+      224               v-lock-db-list = v-lock-db-list + substitute( "&1", buf_db.db-num )
+      225             .
+      226           end.
+      227         end.
+      228         if v-lock-db-list <> v-full-db-list then do:
+      229           assign
+      230             p-message = substitute( "&1. Произвести Online backup невозможно, т.к. заблокированы БД &2", vss-workfile, v-unlock-db-list )
+      231           .
+      232           undo, return .
+      233         end.
+      234         do while search( v-msg-name ) <> ?
+      235         on error undo, return error return-value
+      236         :
+      237           assign
+      238             v-del-file = search( v-msg-name )
+      239             v-err-code = 0
+      240           .
+      241           bl1:
+      242           do v-ind = 1 to 60 :
+      243             os-delete value( v-del-file ).
+      244             assign
+      245               v-err-code = os-error
+      246               file-info:file-name = v-del-file
+      247             .
+      248             if v-err-code = 0
+      249               or file-info:file-type = ?
+      250             then do:
+      251               assign
+      252                 v-err-code = 0
+      253               .
+      254               leave bl1 .
+      255             end.
+      256             pause 1 no-message .
+      257           end.
+      258           if v-err-code <> 0 then do:
+      259             run adm/os-err.p ( output v-err-mess ).
+      260             return error substitute( "&1. Невозможно удалить файл отчета о выполнении backup (&2) &3 &4"
+      261                                     ,vss-workfile
+      262                                     ,v-del-file
+      263                                     ,chr(10)
+      264                                     ,v-err-mess
+      265                                   ).
+      266           end.
+      267         end.
+      268         os-command SILENT value( substitute( '&1 "&2" "&3" "&4" "&5"', v-bat-name, v-path-dlc, v-path-src-db, v-path-dst-db, v-msg-name ) ).
+      269         if search( v-msg-name ) = ? then do:
+      270           return error substitute( "&1. Не найден файл отчета о выполнении backup (&2).", vss-workfile, v-msg-name ) .
+      271         end.
+      272         assign
+      273           v-msg-name = search( v-msg-name )
+      274         .
+      275         input stream ImpStream from value( v-msg-name ) .
+      276         assign
+      277           p-message = "":U
+      278         .
+      279         repeat
+      280         on error undo, return error substitute( "&1. Error repeat", vss-workfile )
+      281         :
+      282           import stream ImpStream unformatted v-temp-char no-error .
+      283           if p-message = "":U then do:
+      284             if trim( v-temp-char ) <> "":U then do:
+      285               assign
+      286                 p-message = v-temp-char
+      287               .
+      288             end.
+      289           end.
+      290           else do:
+      291             assign
+      292               p-message = p-message + chr(10) + v-temp-char
+      293             .
+      294           end.
+      295         end.
+      296         input stream ImpStream close .
+      297         assign
+      298           p-message = trim( p-message )
+      299         .
+      300         if CAPS( p-message ) begins "YES":U
+      301           or CAPS( p-message ) begins "OK":U
+      302         then do:
+      303           assign
+      304             p-message = substitute( "Backup успешно завершен." )
+      305           .
+      306         end.
+      307         else do:
+      308           return error substitute( "&1. Ошибка backup:&2&3", vss-workfile, chr(10), p-message ) .
+      309         end.
+      310       end.
+      311     end.
+      312     hide frame inf.
+      313   end.

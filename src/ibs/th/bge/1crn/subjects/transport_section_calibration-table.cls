@@ -1,0 +1,97 @@
+
+/*
+
+$Revision$
+$Author$
+$Date$
+$Workfile$
+$Archive$
+
+Структура данных transport_section_ct-lvl в 1С
+
+Автор: Елена Шкляр
+Дата создания: 26/09/17
+Author: Shklyar Elena
+Creation date: 26/09/17
+
+*/
+
+using Progress.Lang.*.
+block-level on error undo, throw.
+
+
+class ibs.th.bge.1crn.subjects.transport_section_calibration-table inherits ibs.th.bge.1crn.subjects.asubject:
+  define override public property vss-revision    as character no-undo init "$Revision:$":U get .
+  define override public property vss-author      as character no-undo init "$Author:$":U get.
+  define override public property vss-date        as character no-undo init "$Date:$":U get.
+  define override public property vss-workfile    as character no-undo init "$Workfile:$":U get.
+  define override public property vss-archive     as character no-undo init "$Archive:$":U get.
+  
+  define property sec-num    as integer    no-undo get. 
+    private set.
+  define property deviation  as integer     no-undo get. 
+    private set.
+  define property amount    as decimal      no-undo get. 
+    private set.
+  define property deltaV    as decimal      no-undo get. 
+    private set.
+
+  define override property InitTag as character no-undo init "ct-lvl"
+    get. 
+    
+     
+  method override protected void SetPropProtected (inTag as char, inValue as char):
+    case inTag:
+      when "sec-num" then 
+        do:
+          assign 
+            sec-num = integer(inValue) .
+        end.
+      when "deviation" then 
+        do:
+          assign 
+            deviation = integer(inValue) .
+        end.
+      when "amount" then 
+        do:
+          assign 
+            amount = decimal (inValue) .
+        end.
+      when "deltaV" then 
+        do:
+          assign 
+            deltaV = decimal (inValue) .
+        end.
+    end case.
+  end.
+
+
+  method override protected void CheckData ():
+
+    def var v-str as char no-undo.
+    
+    assign
+      v-str = v-str + ",sec-mum" 
+      when sec-num = ?
+      v-str = v-str + ",deviation" 
+      when deviation = ?
+      v-str = v-str + ",amount" 
+      when amount = ?
+      .
+    v-str = trim (v-str, ",").
+    if v-str > ''
+      then 
+      undo, throw new Progress.Lang.AppError( substitute ("Теги &1 не могут иметь неопределное значение", v-str)).
+
+  end.
+  
+  method override protected void ClearSub():
+    assign 
+      sec-num   = ?
+      deviation = ?
+      amount    = ?
+      deltaV    = ?
+    .
+  end.
+
+end class.

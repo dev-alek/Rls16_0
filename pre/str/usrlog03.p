@@ -1,0 +1,87 @@
+block-level on error undo, throw.
+define input  parameter p-db-num  as integer   no-undo .
+define input  parameter p-user-id as character no-undo .
+define variable vss-revision    as character no-undo init "$Revision: 8118e8855adf, 3171, rls $":U .
+define variable vss-author      as character no-undo init "$Author: DRuban $":U .
+define variable vss-date        as character no-undo init "$Date: 2022/12/27 12:54:23 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: usrlog03.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: str/usrlog03.p $":U .
+define variable vss-description as character no-undo init "Удалить логин пользователя (user-login)".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define buffer buf_user-login for ub.user-login .
+do transaction
+on error undo, return error return-value
+:
+  find first buf_user-login exclusive-lock
+    where buf_user-login.db-num  = p-db-num
+      and buf_user-login.user-id = p-user-id
+    no-error .
+  if not available buf_user-login
+  then do:
+    message
+      vss-workfile vss-revision vss-description skip
+      "Ошибка задания входных параметров" skip
+      "БД" p-db-num skip
+      "Идентификатор" p-user-id skip
+      view-as alert-box error .
+    undo, return error return-value .
+  end.
+  buf_user-login.status_ = 1.
+end.

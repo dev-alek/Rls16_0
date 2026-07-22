@@ -1,0 +1,927 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-log-handle  as handle no-undo .
+        3   define input parameter p-parent-handle as handle no-undo .
+        4   define input parameter p-doc-type as character no-undo .
+        5   define input parameter p-doc-code like ub.trn-doc.doc-code no-undo .
+        6   define input parameter p-d-card like ub.dis-card.d-card no-undo .
+        7   define input parameter p-step             as integer no-undo .
+        8   define input parameter p-is-news          as logical no-undo .
+        9   define input parameter log-file-name      as character no-undo .
+       10   define output parameter p-num-dc          as integer no-undo .
+       11   define variable vss-revision    as character no-undo initial "$Revision: 5c3607367a23, 584, rls $":U .
+       12   define variable vss-author      as character no-undo initial "$Author: SShalanin $":U .
+       13   define variable vss-date        as character no-undo initial "$Date: Mon Apr 11 17:28:29 2016 +0400 $":U .
+       14   define variable vss-workfile    as character no-undo initial "$Workfile: lock-dc.p $":U .
+       15   define variable vss-archive     as character no-undo initial "$Archive: str/lock-dc.p $":U .
+       16   define variable vss-description as character no-undo initial "Блокировка товаров по документу":U .
+       17   procedure vss-get-info :
+       18     define output parameter p-vss-revision    like vss-revision    no-undo .
+       19     define output parameter p-vss-author      like vss-author      no-undo .
+       20     define output parameter p-vss-date        like vss-date        no-undo .
+       21     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       22     define output parameter p-vss-archive     like vss-archive     no-undo .
+       23     define output parameter p-vss-description like vss-description no-undo .
+       24     assign
+       25       p-vss-revision    = vss-revision
+       26       p-vss-author      = vss-author
+       27       p-vss-date        = vss-date
+       28       p-vss-workfile    = vss-workfile
+       29       p-vss-archive     = vss-archive
+       30       p-vss-description = vss-description
+       31     .
+       32   end procedure.
+       33   procedure vss-get-parameters :
+       34     define output parameter p-vss-parameters as character no-undo .
+       35       assign
+       36         p-vss-parameters = substitute('&1|&2',p-doc-code,p-is-news)
+       37       .
+       38   end procedure.
+       39   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       40   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       41   define variable v-vssrevis-logger                   as handle    no-undo .
+       42   procedure vss-logevent :
+       43     define input  parameter p-extra-paramters as character no-undo .
+       44     define variable v-vssrevis-parameters as character no-undo .
+       45     do
+       46     on error undo, return error return-value
+       47     :
+       48       if  valid-handle(v-vssrevis-logger)
+       49       and v-vssrevis-logger :get-signature("logevent") <> ""
+       50       then do:
+       51         run vss-get-parameters in this-procedure
+       52           (output v-vssrevis-parameters
+       53           ).
+       54         run logevent in v-vssrevis-logger
+       55           (input vss-workfile
+       56           ,input vss-revision
+       57           ,input v-vssrevis-parameters
+       58           ,input p-extra-paramters
+       59           ).
+       60       end.
+       61     end.
+       62   end procedure.
+       63   assign
+       64     v-vssrevis-logger = g#vssrevis-logger
+       65   .
+       66   if  valid-handle(v-vssrevis-logger)
+       67   and v-vssrevis-logger :get-signature("logevent") <> ""
+       68   then do:
+       69     assign
+       70       v-vssrevis-logevent = true
+       71     .
+       72     run vss-logevent in this-procedure (input vss-description) .
+       73   end.
+       74   define new global shared variable g#language as character no-undo .
+       75   if g#language <> '' and g#language <> 'rus':U then do:
+       76     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       77   end.
+       78   define new global shared variable g#library  as handle no-undo .
+       79   define new global shared variable g#library2 as handle no-undo .
+       80   define   shared variable g#auto as logical no-undo.
+       81   define   shared variable g#news as logical no-undo.
+       82   define   shared variable g#oxml as logical no-undo.
+       83   define   shared variable g#esys as logical no-undo.
+       84   define   shared variable g#news-source-db as integer no-undo.
+       85   define   shared variable g#esys-source-esys as integer no-undo.
+       86   define   shared variable g#db-num as integer   no-undo .
+       87   define   shared variable g#userid as character no-undo .
+       88   define   shared variable g#passwd as character no-undo .
+       89   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       90   procedure gen-key-rec :
+       91     define input  parameter p-tbl-name    as character no-undo.
+       92     define input  parameter p-bh_tbl-name as handle    no-undo.
+       93     define output parameter p-key-rec     as character no-undo.
+       94     do
+       95     on error  undo, return error substitute( "&1 (gen-key-rec). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       96     on stop   undo, return error substitute( "&1 (gen-key-rec). stop", vss-workfile )
+       97     on endkey undo, return error substitute( "&1 (gen-key-rec). endkey", vss-workfile )
+       98     :
+       99       define variable fh               as handle    no-undo .
+      100       define variable v-ok             as logical   no-undo .
+      101       define variable v-inform         as character no-undo .
+      102       define variable v-ind            as integer   no-undo .
+      103       define variable v-idx-field-qnty as integer   no-undo .
+      104       if p-tbl-name = ?
+      105         or p-tbl-name = "":U
+      106       then do:
+      107         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Не задано имя таблицы.", vss-include-info0 ).
+      108       end.
+      109       if not p-bh_tbl-name:available then do:
+      110         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Переданый буфер таблицы &2 не доступен", vss-include-info0, p-tbl-name ).
+      111       end.
+      112       assign
+      113         p-key-rec = p-tbl-name
+      114         v-inform  = p-bh_tbl-name:index-information(1)
+      115         v-ind     = 2
+      116       .
+      117       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      118       on error undo, return error
+      119       :
+      120         assign
+      121           v-inform = p-bh_tbl-name:index-information( v-ind )
+      122           v-ind    = v-ind + 1
+      123         .
+      124       end.
+      125       if v-inform = ?
+      126         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      127         or entry( 3, v-inform, ",":U ) <> "1":U
+      128       then do:
+      129         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, p-tbl-name ).
+      130       end.
+      131       else do:
+      132         assign
+      133           v-idx-field-qnty = num-entries( v-inform ) - 4
+      134         .
+      135         if v-idx-field-qnty < 2 then do:
+      136           return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, p-tbl-name ).
+      137         end.
+      138         do v-ind = 1 to v-idx-field-qnty by 2
+      139         on error undo, return error
+      140         :
+      141           assign
+      142             fh = p-bh_tbl-name:buffer-field( entry( 4 + v-ind, v-inform, ",":U ) ).
+      143             p-key-rec = p-key-rec + chr(3) + substitute("&1", replace(fh:buffer-value(),chr(3),chr(2) + chr(9) + chr (2)))
+      144           .
+      145         end.
+      146       end.
+      147       if p-key-rec = ? then do:
+      148         assign
+      149           p-key-rec = "":U
+      150         .
+      151         return error substitute( "&1. Поле(поля) первичного ключа таблицы &2 имеет(ют) неопределенное значение", vss-include-info0, p-tbl-name ).
+      152       end.
+      153     end.
+      154     return.
+      155   end procedure.
+      156   procedure gen-where-keyr-tab :
+      157     define input  parameter i-tableSerach as character no-undo.
+      158     define input  parameter i-tablekey   as character  no-undo.
+      159     define input  parameter p-key-rec    as character  no-undo.
+      160     define input  parameter p-key-handle as handle     no-undo .
+      161     define input  parameter p-db-name    as character  no-undo .
+      162     define input  parameter p-tt-handle  as handle     no-undo .
+      163     define output parameter o-Where      as character  no-undo.
+      164     do
+      165     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      166     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      167     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile )
+      168     :
+      169       define variable v-full-tbl-name  as character no-undo .
+      170       define variable bh_tbl-name      as handle    no-undo .
+      171       define variable fh_key           as handle    no-undo .
+      172       define variable fh_search        as handle    no-undo .
+      173       define variable v-field-num      as integer   no-undo .
+      174       define variable v-count-fld      as integer   no-undo .
+      175       define variable v-inform         as character no-undo .
+      176       define variable v-ind            as integer   no-undo .
+      177       define variable v-idx-field-qnty as integer   no-undo .
+      178       define variable v-field-name     as character no-undo .
+      179       define variable v-field-val      as character no-undo .
+      180       define variable v-word-link      as character no-undo .
+      181       define variable vTable           as character no-undo.
+      182       define variable bh_tbl-key       as handle    no-undo .
+      183       assign
+      184         p-key-rec = trim( p-key-rec )
+      185       .
+      186       if p-key-handle <> ? then do:
+      187         if not valid-handle(p-key-handle)
+      188            or p-key-handle:type <> "buffer"
+      189         then do:
+      190           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Задан невалидный буфер для поиска.", vss-include-info0 ).
+      191         end.
+      192         if num-entries( p-key-rec, chr(3) ) > 1
+      193           or p-key-rec = ?
+      194           or p-key-rec = "":U
+      195         then do:
+      196           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. При поиске по буферу вместо ключа (&2) должено быть 'имя таблицы'.", vss-include-info0, p-key-rec ).
+      197         end.
+      198       end.
+      199       else do:
+      200         if p-key-rec = ?
+      201           or p-key-rec = "":U
+      202         then do:
+      203           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      204         end.
+      205       end.
+      206       assign
+      207         vTable = entry( 1 , p-key-rec, chr(3) )
+      208       .
+      209       if p-tt-handle <> ?
+      210         and ( not valid-handle(p-tt-handle)
+      211               or p-tt-handle:type <> "buffer"
+      212             )
+      213       then do:
+      214         return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. &2&3Передан невалидный handle для поиска или handle не типа BUFFER", vss-include-info0, vTable, chr(10) ).
+      215       end.
+      216       if p-tt-handle = ? then do:
+      217         assign
+      218           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable )
+      219         .
+      220         create buffer bh_tbl-name for table v-full-tbl-name .
+      221       end.
+      222       else do:
+      223         create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      224       end.
+      225       assign
+      226         v-inform = bh_tbl-name:index-information(1)
+      227         v-ind    = 2
+      228       .
+      229       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      230       on error undo, return error
+      231       :
+      232         assign
+      233           v-inform = bh_tbl-name:index-information( v-ind )
+      234           v-ind    = v-ind + 1
+      235         .
+      236       end.
+      237       if v-inform = ?
+      238         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      239         or entry( 3, v-inform, ",":U ) <> "1":U
+      240       then do:
+      241         delete object bh_tbl-name no-error.
+      242         return error substitute( "&1. Таблица &2 не имеет первичного ключа", vss-include-info0, vTable ).
+      243       end.
+      244       assign
+      245         v-idx-field-qnty = num-entries( v-inform ) - 4
+      246       .
+      247       if v-idx-field-qnty < 2 then do:
+      248         delete object bh_tbl-name no-error.
+      249         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, vTable ).
+      250       end.
+      251       assign
+      252         o-where     = "where":U
+      253         v-word-link = "":U
+      254         v-field-num = num-entries( p-key-rec, chr(3) ) - 1
+      255         v-count-fld = 0
+      256       .
+      257       if i-tablekey ne "" and i-tablekey ne ?
+      258       then do:
+      259         assign
+      260           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tablekey )
+      261         .
+      262         create buffer bh_tbl-key for table v-full-tbl-name .
+      263       end.
+      264       if i-tableSerach ne "" and i-tableSerach ne ?
+      265       then do:
+      266         delete object bh_tbl-name no-error.
+      267         assign
+      268           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach )
+      269         .
+      270         create buffer bh_tbl-name for table v-full-tbl-name .
+      271       end.
+      272       block_where:
+      273       do v-ind = 1 to v-idx-field-qnty by 2
+      274       on error undo, return error
+      275       :
+      276         assign
+      277           v-count-fld = v-count-fld + 1
+      278         .
+      279         if p-key-handle = ?
+      280           and v-count-fld > v-field-num
+      281         then do:
+      282           leave block_where.
+      283         end.
+      284         define variable VfieldKeyTable as handle no-undo.
+      285         assign
+      286           v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      287           fh_search    = bh_tbl-name:buffer-field( v-field-name )
+      288         .
+      289         if     bh_tbl-key ne ?
+      290         then do:
+      291            VfieldKeyTable = bh_tbl-key:buffer-field( v-field-name ) no-error.
+      292            if VfieldKeyTable eq ?
+      293            then next block_where.
+      294         end.
+      295         if v-full-tbl-name ne "" and v-full-tbl-name ne ?
+      296         then
+      297            o-where = substitute( "&1 &2 &3.&4 =", o-where, v-word-link,v-full-tbl-name, v-field-name ).
+      298         else
+      299            o-where = substitute( "&1 &2 &3 =", o-where, v-word-link, v-field-name ).
+      300         if p-key-handle = ? then do:
+      301           assign
+      302             v-field-val = replace (entry( v-count-fld + 1 , p-key-rec, chr(3) ),chr(2) + chr(9) + chr (2),chr(3))
+      303           .
+      304         end.
+      305         else do:
+      306           assign
+      307             fh_key = p-key-handle:buffer-field( v-field-name )
+      308           .
+      309           if fh_key = ?
+      310             or not valid-handle( fh_key )
+      311           then do:
+      312             delete object bh_tbl-name.
+      313             if     bh_tbl-key ne ?
+      314             then
+      315                delete object bh_tbl-key.
+      316             return error substitute( "&1. Буфер &2 не содержит поля &3 необходимого для поиска.", vss-include-info0, p-key-handle:name, v-field-name ).
+      317           end.
+      318           assign
+      319             v-field-val = fh_key:buffer-value
+      320           .
+      321         end.
+      322         if fh_search:data-type ="character":U then do:
+      323           assign
+      324             v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+      325             v-field-val = replace( v-field-val, '"':U, '~~"':U )
+      326             v-field-val = replace( v-field-val, "'":U, "~~'":U )
+      327             v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+      328             v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+      329             v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+      330             v-field-val = replace( v-field-val, chr(10), '~~n':U )
+      331             v-field-val = replace( v-field-val, chr(9), '~~t':U )
+      332             v-field-val = replace( v-field-val, chr(13), '~~r':U )
+      333             v-field-val = replace( v-field-val, chr(27), '~~E':U )
+      334             v-field-val = replace( v-field-val, chr(8), '~~b':U )
+      335             v-field-val = replace( v-field-val, chr(12), '~~f':U )
+      336             v-field-val = substitute( '"&1"', v-field-val )
+      337           .
+      338         end.
+      339         assign
+      340           o-where = substitute( "&1 &2", o-where, v-field-val )
+      341         .
+      342         if v-word-link = "":U then do:
+      343           assign
+      344             v-word-link = "and":U
+      345           .
+      346         end.
+      347       end.
+      348       delete object bh_tbl-name.
+      349       if     bh_tbl-key ne ?
+      350       then
+      351          delete object bh_tbl-key.
+      352       if p-key-handle = ?
+      353         and v-count-fld <> v-field-num
+      354       then do:
+      355         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2", vss-include-info0, vTable ).
+      356       end.
+      357     end.
+      358   end procedure.
+      359   procedure gen-hn-keyr-tab :
+      360     define input  parameter i-tableSerach as character no-undo.
+      361     define input  parameter i-tablekey   as character no-undo.
+      362     define input  parameter p-key-rec    as character no-undo.
+      363     define input  parameter p-key-handle as handle    no-undo .
+      364     define input  parameter p-db-name    as character no-undo .
+      365     define input  parameter p-tt-handle  as handle    no-undo .
+      366     define input  parameter p-stts-lock  as integer   no-undo .
+      367     define output parameter o-hn         as handle    no-undo.
+      368     define variable v-full-tbl-name as character no-undo.
+      369     define variable v-where         as character no-undo.
+      370     define variable bh_tbl-name     as handle    no-undo.
+      371     define variable vTable          as character no-undo.
+      372     do
+      373     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      374     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      375     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile ):
+      376         run gen-where-keyr-tab(i-tableSerach,
+      377                                i-tablekey,
+      378                                p-key-rec,
+      379                                p-key-handle,
+      380                                p-db-name,
+      381                                p-tt-handle,
+      382                                output v-where).
+      383         if i-tableSerach ne "" and i-tableSerach ne ?
+      384         then do:
+      385            v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach ).
+      386            create buffer bh_tbl-name for table v-full-tbl-name .
+      387         end.
+      388         else do:
+      389            if p-tt-handle = ? then do:
+      390               assign
+      391                  vTable = entry( 1 , p-key-rec, chr(3) )
+      392               .
+      393               v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable ).
+      394               create buffer bh_tbl-name for table v-full-tbl-name .
+      395            end.
+      396            else do:
+      397               create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      398            end.
+      399         end.
+      400         if p-tt-handle = ? then do:
+      401            bh_tbl-name:find-first( v-where, p-stts-lock ) no-error .
+      402         end.
+      403         else do:
+      404            bh_tbl-name:find-first( v-where ) no-error .
+      405         end.
+      406         o-hn = bh_tbl-name.
+      407      end.
+      408   end procedure.
+      409   procedure gen-hn-keyr :
+      410     define input  parameter p-key-rec    as character no-undo.
+      411     define input  parameter p-key-handle as handle    no-undo .
+      412     define input  parameter p-db-name    as character no-undo .
+      413     define input  parameter p-tt-handle  as handle    no-undo .
+      414     define input  parameter p-stts-lock  as integer   no-undo .
+      415     define output parameter o-hn         as handle    no-undo.
+      416     run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output o-hn).
+      417   end.
+      418   procedure gen-row-keyr :
+      419     define input  parameter p-key-rec    as character no-undo.
+      420     define input  parameter p-key-handle as handle    no-undo .
+      421     define input  parameter p-db-name    as character no-undo .
+      422     define input  parameter p-tt-handle  as handle    no-undo .
+      423     define input  parameter p-stts-lock  as integer   no-undo .
+      424     define output parameter p-tbl-row    as rowid     no-undo.
+      425     define output parameter p-tbl-name   as character no-undo.
+      426     define variable vHn as handle no-undo.
+      427       run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output vHn).
+      428       p-tbl-row = if vHn:available then vHn:rowid else ?.
+      429       p-tbl-name =  vHn:table.
+      430       delete object vHn no-error.
+      431     if p-tbl-row = ? then do:
+      432       return substitute( "Не найдена запись таблицы &2 по ключу &3", vss-include-info0, p-tbl-name, p-key-rec ).
+      433     end.
+      434     else do:
+      435       return.
+      436     end.
+      437   end procedure.
+      438   procedure gen-key-fv :
+      439     define input  parameter p-key-rec    as character no-undo .
+      440     define output parameter p-field-list as character no-undo .
+      441     define output parameter p-value-list as character no-undo.
+      442     do
+      443     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      444     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      445     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      446     :
+      447       define variable v-full-tbl-name  as character no-undo .
+      448       define variable bh_tbl-name      as handle    no-undo .
+      449       define variable v-tbl-name       as character no-undo .
+      450       define variable v-field-num      as integer   no-undo .
+      451       define variable v-count-fld      as integer   no-undo .
+      452       define variable v-inform         as character no-undo .
+      453       define variable v-ind            as integer   no-undo .
+      454       define variable v-idx-field-qnty as integer   no-undo .
+      455       define variable v-delim-key      as character no-undo .
+      456       if p-key-rec = ?
+      457         or p-key-rec = "":U
+      458       then do:
+      459         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      460       end.
+      461       assign
+      462         v-tbl-name      = entry( 1 , p-key-rec, chr(3) )
+      463         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      464       .
+      465       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      466       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверный уникальный ключ.", vss-include-info0 ).
+      467       assign
+      468         v-inform = bh_tbl-name:index-information(1)
+      469         v-ind    = 2
+      470       .
+      471       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      472       on error undo, return error
+      473       :
+      474         assign
+      475           v-inform = bh_tbl-name:index-information( v-ind )
+      476           v-ind    = v-ind + 1
+      477         .
+      478       end.
+      479       if v-inform = ?
+      480         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      481         or entry( 3, v-inform, ",":U ) <> "1":U
+      482       then do:
+      483         delete object bh_tbl-name no-error.
+      484         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      485       end.
+      486       assign
+      487         v-idx-field-qnty = num-entries( v-inform ) - 4
+      488       .
+      489       if v-idx-field-qnty < 2 then do:
+      490         delete object bh_tbl-name no-error.
+      491         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      492       end.
+      493       assign
+      494         p-field-list = "":U
+      495         p-value-list = "":U
+      496         v-delim-key  = "":U
+      497         v-field-num  = num-entries( p-key-rec, chr(3) ) - 1
+      498         v-count-fld  = 0
+      499       .
+      500       block_where:
+      501       do v-ind = 1 to v-idx-field-qnty by 2
+      502       on error undo, return error
+      503       :
+      504         assign
+      505           v-count-fld = v-count-fld + 1
+      506         .
+      507         if v-count-fld > v-field-num then do:
+      508           leave block_where.
+      509         end.
+      510         assign
+      511           p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U )
+      512           p-value-list = p-value-list + v-delim-key + entry( v-count-fld + 1 , p-key-rec, chr(3) )
+      513         .
+      514         if v-ind = 1 then do:
+      515           assign
+      516             v-delim-key = chr(3)
+      517           .
+      518         end.
+      519       end.
+      520       delete object bh_tbl-name.
+      521       if v-count-fld <> v-field-num then do:
+      522         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2 в БД", vss-include-info0, v-tbl-name ).
+      523       end.
+      524     end.
+      525   end procedure.
+      526   procedure gen-key-field :
+      527     define input  parameter p-table      as character no-undo .
+      528     define output parameter p-field-list as character no-undo .
+      529     do
+      530     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      531     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      532     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      533     :
+      534       define variable v-full-tbl-name  as character no-undo .
+      535       define variable bh_tbl-name      as handle    no-undo .
+      536       define variable v-tbl-name       as character no-undo .
+      537       define variable v-field-num      as integer   no-undo .
+      538       define variable v-count-fld      as integer   no-undo .
+      539       define variable v-inform         as character no-undo .
+      540       define variable v-ind            as integer   no-undo .
+      541       define variable v-idx-field-qnty as integer   no-undo .
+      542       define variable v-delim-key      as character no-undo .
+      543       if p-table = ?
+      544         or p-table = "":U
+      545       then do:
+      546         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан таблица.", vss-include-info0 ).
+      547       end.
+      548       assign
+      549         v-tbl-name      = p-table
+      550         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      551       .
+      552       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      553       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверная таблица.", vss-include-info0 ).
+      554       assign
+      555         v-inform = bh_tbl-name:index-information(1)
+      556         v-ind    = 2
+      557       .
+      558       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      559       on error undo, return error
+      560       :
+      561         assign
+      562           v-inform = bh_tbl-name:index-information( v-ind )
+      563           v-ind    = v-ind + 1
+      564         .
+      565       end.
+      566       if v-inform = ?
+      567         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      568         or entry( 3, v-inform, ",":U ) <> "1":U
+      569       then do:
+      570         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      571       end.
+      572       assign
+      573         v-idx-field-qnty = num-entries( v-inform ) - 4
+      574       .
+      575       if v-idx-field-qnty < 2 then do:
+      576         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      577       end.
+      578       assign
+      579         p-field-list = "":U
+      580         v-delim-key  = "":U
+      581         v-count-fld  = 0
+      582       .
+      583       block_where:
+      584       do v-ind = 1 to v-idx-field-qnty by 2
+      585       on error undo, return error
+      586       :
+      587         assign
+      588           v-count-fld = v-count-fld + 1
+      589         .
+      590         p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U ).
+      591         if v-ind = 1 then do:
+      592           assign
+      593             v-delim-key = chr(3)
+      594           .
+      595         end.
+      596       end.
+      597       delete object bh_tbl-name.
+      598     end.
+      599   end procedure.
+      600   define variable v-count   as integer   no-undo initial 0 .
+      601   define variable v-tbl-row as rowid no-undo .
+      602   define variable v-tbl-name as character no-undo .
+      603   define variable v-lock-chr as character no-undo .
+      604   define variable v-first-main-card as character no-undo .
+      605   define variable v-d-card as character no-undo .
+      606   define buffer buf_trn-doc  for ub.trn-doc .
+      607   define buffer buf_dis-card for ub.dis-card  .
+      608   define buffer buf2_dis-card for ub.dis-card  .
+      609   define buffer buf3_dis-card for ub.dis-card  .
+      610   define buffer buf_chk-doc for ub.chk-doc.
+      611   define buffer buf_dis-card-type for ub.dis-card-type.
+      612   define buffer buf_fin-doc for ub.fin-doc.
+      613   define buffer buf_payment for ub.payment.
+      614   main-block :
+      615   do transaction
+      616   on error undo main-block, return error return-value
+      617   :
+      618     if valid-handle(p-log-handle) then do:
+      619       run write-log-and-file in p-log-handle (
+      620             input 1
+      621           , input log-file-name
+      622           , input 1
+      623           , input substitute("Блокировка ДК..." )).
+      624     end.
+      625     CASE p-doc-type:
+      626       when 'inkas':U then do:
+      627         find first buf_trn-doc no-lock
+      628           where buf_trn-doc.doc-code = p-doc-code
+      629           no-error .
+      630         if not available buf_trn-doc then do:
+      631           message
+      632             vss-workfile vss-revision vss-description skip
+      633             "Ошибка задания входных параметров" skip
+      634             "Не найден документ" skip
+      635             "Документ" p-doc-code skip
+      636             view-as alert-box error .
+      637           undo main-block, return error .
+      638         end.
+      639         for each buf_chk-doc no-lock where
+      640                 buf_chk-doc.obj-type = buf_trn-doc.obj-type
+      641             and buf_chk-doc.obj-code = buf_trn-doc.obj-code
+      642             and buf_chk-doc.d-card > '':U
+      643         on error undo main-block, return error
+      644         :
+      645           if lookup(string(buf_chk-doc.chk-type), '14,15,16,36,17,8,11,12,13,40,101,106,108,169,196,114,115,116,117,111,112,136,113,201,206,208,301,306,2,3,4,5,7,43,44':U) > 0 then NEXT .
+      646           find first buf_dis-card no-lock
+      647             where buf_dis-card.d-card = buf_chk-doc.d-card
+      648             no-error .
+      649           if not available buf_Dis-card then do:
+      650             undo main-block, return error substitute ("&1 &2 &3&4Не найдена ДК&4Документ &5&4Чек &6"
+      651                                                       ,vss-workfile
+      652                                                       ,vss-revision
+      653                                                       ,vss-description
+      654                                                       ,chr(10)
+      655                                                       ,buf_trn-doc.doc-code
+      656                                                       ,buf_chk-doc.doc-code).
+      657           end.
+      658           assign
+      659           v-count  = v-count + 1
+      660           .
+      661           if v-count mod 10 = 0 then do:
+      662             if log-file-name <> '':U
+      663             and valid-handle (p-log-handle) then do:
+      664               run show-counter in p-log-handle .
+      665               run write-counter in p-log-handle (substitute("Обработано: &1. Подготовка данных - карта &2"
+      666                                                 , v-count
+      667                                                 , buf_dis-card.d-card
+      668                                                 )) no-error.
+      669             end.
+      670           end.
+      671           find current buf_dis-card exclusive-lock .
+      672           assign
+      673           v-first-main-card = buf_dis-card.first-main-card.
+      674           release buf_dis-card .
+      675           for each buf2_dis-card where
+      676                   buf2_dis-card.first-main-card =  v-first-main-card
+      677           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      678           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+      679           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+      680           :
+      681             find buf_dis-card exclusive-lock where buf_dis-card.d-card = buf2_dis-card.d-card.
+      682             release buf_dis-card .
+      683           end.
+      684         end.
+      685       end.
+      686       when 'trn-doc':U then do:
+      687         find first buf_trn-doc no-lock
+      688           where buf_trn-doc.doc-code = p-doc-code
+      689           no-error .
+      690         if not available buf_trn-doc then do:
+      691           message
+      692             vss-workfile vss-revision vss-description skip
+      693             "Ошибка задания входных параметров" skip
+      694             "Не найден документ" skip
+      695             "Документ" p-doc-code skip
+      696             view-as alert-box error .
+      697           undo main-block, return error .
+      698         end.
+      699         for each buf2_dis-card no-lock where
+      700                 buf2_dis-card.d-card = buf_trn-doc.d-card
+      701         on error undo main-block, return error :
+      702           find first buf_dis-card no-lock where buf_Dis-card.d-card = buf2_dis-card.d-card no-error.
+      703           if not available buf_Dis-card then do:
+      704             undo main-block, return error substitute ("&1 &2 &3&4Не найдена ДК из шапки документа&4Документ &5&4"
+      705                                                       ,vss-workfile
+      706                                                       ,vss-revision
+      707                                                       ,vss-description
+      708                                                       ,chr(10)
+      709                                                       ,buf_trn-doc.doc-code
+      710                                                       ).
+      711           end.
+      712           v-first-main-card = buf_dis-card.first-main-card.
+      713           for each buf3_dis-card where
+      714                   buf3_dis-card.first-main-card =  v-first-main-card
+      715           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      716           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+      717           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+      718           :
+      719             find buf_dis-card exclusive-lock where buf_dis-card.d-card = buf3_dis-card.d-card.
+      720             release buf_dis-card .
+      721           end.
+      722         end.
+      723       end.
+      724       when 'dis-card-type':U then do:
+      725         run gen-row-keyr in this-procedure
+      726           ( input p-doc-code
+      727            ,input ?
+      728            ,input "ub"
+      729            ,input ?
+      730            ,input NO-LOCK
+      731            ,output v-tbl-row
+      732            ,output v-tbl-name
+      733           ) no-error.
+      734         find first buf_Dis-card-type no-lock where
+      735                   rowid(buf_dis-card-type) = v-tbl-row no-error.
+      736         if not available buf_dis-card-type then do:
+      737           message
+      738             vss-workfile vss-revision vss-description skip
+      739             "Ошибка задания входных параметров" skip
+      740             "Не найден ТИП ДК" p-doc-code skip
+      741             view-as alert-box error .
+      742           undo main-block, return error .
+      743         end.
+      744         _dis-card:
+      745         for each buf2_dis-card no-lock where
+      746                 buf2_dis-card.type              = buf_dis-card-type.type
+      747             and buf2_dis-card.emitent-host-code = buf_dis-card-type.emitent-host-code
+      748             and buf2_dis-card.d-card            > p-d-card
+      749         on error undo main-block, return error
+      750         :
+      751           v-first-main-card = buf2_dis-card.first-main-card.
+      752           find first buf_dis-card no-lock
+      753             where buf_dis-card.d-card = buf2_dis-card.d-card
+      754             no-error .
+      755           if not available buf_Dis-card then do:
+      756             undo main-block, return error substitute ("&1 &2 &3&4Не найдена ДК &5&4Тип &5"
+      757                                                       ,vss-workfile
+      758                                                       ,vss-revision
+      759                                                       ,vss-description
+      760                                                       ,chr(10)
+      761                                                       ,buf2_Dis-card.d-card
+      762                                                       ,p-doc-code
+      763                                                       ).
+      764           end.
+      765           if v-lock-chr <> '*':U then do:
+      766             run is-to-lock-d-card in p-parent-handle ( input buf_dis-card.d-card, output v-lock-chr ) no-error.
+      767             if v-lock-chr = "*"  then do:
+      768             end.
+      769             else if v-lock-chr = 'no' then do:
+      770               v-lock-chr = '':U.
+      771               next _dis-card.
+      772             end.
+      773           end.
+      774           assign
+      775           v-count  = v-count + 1
+      776           .
+      777           if v-count mod 10 = 0 then do:
+      778             if log-file-name <> '':U
+      779             and valid-handle (p-log-handle) then do:
+      780               run show-counter in p-log-handle .
+      781               run write-counter in p-log-handle (substitute("Обработано: &1. Подготовка данных - карта &2"
+      782                                                 , v-count
+      783                                                 , buf_dis-card.d-card
+      784                                                 )) no-error.
+      785             end.
+      786           end.
+      787           for each buf3_dis-card no-lock where
+      788                   buf3_dis-card.first-main-card = v-first-main-card
+      789           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      790           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+      791           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+      792           :
+      793             find buf_dis-card exclusive-lock where buf_dis-card.d-card = buf3_dis-card.d-card.
+      794             release buf_dis-card .
+      795           end.
+      796           if v-count = 100 then do:
+      797             p-num-dc = v-count.
+      798             return.
+      799           end.
+      800         end.
+      801         p-num-dc = v-count.
+      802       end.
+      803       when 'dis-card':U then do:
+      804         find first buf_Dis-card no-lock where
+      805                  buf_dis-card.d-card = p-doc-code no-error.
+      806         if not available buf_dis-card then do:
+      807           message
+      808             vss-workfile vss-revision vss-description skip
+      809             "Ошибка задания входных параметров" skip
+      810             "Не найдена ДК" p-doc-code skip
+      811             view-as alert-box error .
+      812           undo main-block, return error .
+      813         end.
+      814         v-first-main-card = buf_dis-card.first-main-card.
+      815         _dis-card:
+      816         for each buf2_dis-card no-lock where
+      817               buf2_dis-card.first-main-card      = v-first-main-card
+      818         on error undo main-block, return error
+      819         :
+      820           find first buf_dis-card exclusive-lock where buf_dis-card.d-card = buf2_dis-card.d-card.
+      821           release buf_dis-card .
+      822         end.
+      823       end.
+      824       when 'payment':U then do:
+      825         find first buf_payment no-lock
+      826           where buf_payment.pmnt-code = p-doc-code
+      827           no-error .
+      828         if not available buf_payment then do:
+      829           message
+      830             vss-workfile vss-revision vss-description skip
+      831             "Ошибка задания входных параметров" skip
+      832             "Не найден платеж по ДК" skip
+      833             "Документ" p-doc-code skip
+      834             view-as alert-box error .
+      835           undo main-block, return error .
+      836         end.
+      837         for each buf2_dis-card no-lock where
+      838                 buf2_dis-card.d-card = buf_payment.d-card
+      839         on error undo main-block, return error :
+      840           find first buf_dis-card no-lock where buf_Dis-card.d-card = buf2_dis-card.d-card no-error.
+      841           if not available buf_Dis-card then do:
+      842             undo main-block, return error substitute ("&1 &2 &3&4Не найдена ДК из шапки платежа&4Документ &5&4"
+      843                                                       ,vss-workfile
+      844                                                       ,vss-revision
+      845                                                       ,vss-description
+      846                                                       ,chr(10)
+      847                                                       ,buf_payment.pmnt-code
+      848                                                       ).
+      849           end.
+      850           v-first-main-card = buf_dis-card.first-main-card.
+      851           for each buf3_dis-card where
+      852                   buf3_dis-card.first-main-card =  v-first-main-card
+      853           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      854           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+      855           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+      856           :
+      857             find buf_dis-card exclusive-lock where buf_dis-card.d-card = buf3_dis-card.d-card.
+      858             release buf_dis-card .
+      859           end.
+      860         end.
+      861       end.
+      862       when 'fin-doc':U then do:
+      863         find first buf_fin-doc no-lock
+      864           where buf_fin-doc.fin-doc-code = integer(p-doc-code)
+      865           no-error .
+      866         if not available buf_fin-doc then do:
+      867           message
+      868             vss-workfile vss-revision vss-description skip
+      869             "Ошибка задания входных параметров" skip
+      870             "Не найден платеж"  p-doc-code skip
+      871             view-as alert-box error .
+      872           undo main-block, return error .
+      873         end.
+      874         for each buf_payment no-lock where
+      875                 buf_payment.source-type = 'платеж':U
+      876             and buf_payment.source-ref = string(buf_fin-doc.fin-doc-code)
+      877             and buf_payment.d-card > '':U
+      878         on error undo main-block, return error
+      879         :
+      880           find first buf_dis-card no-lock
+      881             where buf_dis-card.d-card = buf_payment.d-card
+      882             no-error .
+      883           if not available buf_Dis-card then do:
+      884             undo main-block, return error substitute ("&1 &2 &3&4Не найдена ДК&4Платеж &5&4Платеж на ДК &6"
+      885                                                       ,vss-workfile
+      886                                                       ,vss-revision
+      887                                                       ,vss-description
+      888                                                       ,chr(10)
+      889                                                       ,buf_fin-doc.fin-doc-code
+      890                                                       ,buf_payment.pmnt-code).
+      891           end.
+      892           assign
+      893           v-count  = v-count + 1
+      894           .
+      895           if v-count mod 10 = 0 then do:
+      896             if log-file-name <> '':U
+      897             and valid-handle (p-log-handle) then do:
+      898               run show-counter in p-log-handle .
+      899               run write-counter in p-log-handle (substitute("Обработано: &1. Подготовка данных - карта &2"
+      900                                                 , v-count
+      901                                                 , buf_dis-card.d-card
+      902                                                 )) no-error.
+      903             end.
+      904           end.
+      905           find current buf_dis-card exclusive-lock .
+      906           assign
+      907           v-first-main-card = buf_dis-card.first-main-card
+      908           v-d-card = buf_dis-card.d-card
+      909           .
+      910           release buf_dis-card .
+      911           for each buf2_dis-card where
+      912                   buf2_dis-card.first-main-card =  v-first-main-card
+      913           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      914           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+      915           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+      916           :
+      917             if buf2_dis-card.d-card <> v-d-card then do:
+      918               v-count = v-count + 1.
+      919             end.
+      920             find buf_dis-card exclusive-lock where buf_dis-card.d-card = buf2_dis-card.d-card.
+      921             release buf_dis-card .
+      922           end.
+      923         end.
+      924         p-num-dc = v-count.
+      925       end.
+      926     END CASE.
+      927   end.

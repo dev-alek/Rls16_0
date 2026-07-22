@@ -1,0 +1,558 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-db-num like ub.ext-file.db-num no-undo .
+        3   define input parameter p-from-db-num like ub.ext-file.from-db-num no-undo .
+        4   define input parameter p-file-num like ub.ext-file.file-num no-undo .
+        5   define input parameter p-dir-path as character no-undo .
+        6   define input-output parameter p-override as integer no-undo .
+        7   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        8   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        9   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+       10   define variable vss-workfile    as character no-undo init "$Workfile: extfsavd.p $":U .
+       11   define variable vss-archive     as character no-undo init "$Archive: adm/extfsavd.p $":U .
+       12   define variable vss-description as character no-undo init "Сохранение на диск файла, хранящегося в БД".
+       13   procedure vss-get-info :
+       14     define output parameter p-vss-revision    like vss-revision    no-undo .
+       15     define output parameter p-vss-author      like vss-author      no-undo .
+       16     define output parameter p-vss-date        like vss-date        no-undo .
+       17     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       18     define output parameter p-vss-archive     like vss-archive     no-undo .
+       19     define output parameter p-vss-description like vss-description no-undo .
+       20     assign
+       21       p-vss-revision    = vss-revision
+       22       p-vss-author      = vss-author
+       23       p-vss-date        = vss-date
+       24       p-vss-workfile    = vss-workfile
+       25       p-vss-archive     = vss-archive
+       26       p-vss-description = vss-description
+       27     .
+       28   end procedure.
+       29   procedure vss-get-parameters :
+       30     define output parameter p-vss-parameters as character no-undo .
+       31   end procedure.
+       32   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       33   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       34   define variable v-vssrevis-logger                   as handle    no-undo .
+       35   procedure vss-logevent :
+       36     define input  parameter p-extra-paramters as character no-undo .
+       37     define variable v-vssrevis-parameters as character no-undo .
+       38     do
+       39     on error undo, return error return-value
+       40     :
+       41       if  valid-handle(v-vssrevis-logger)
+       42       and v-vssrevis-logger :get-signature("logevent") <> ""
+       43       then do:
+       44         run vss-get-parameters in this-procedure
+       45           (output v-vssrevis-parameters
+       46           ).
+       47         run logevent in v-vssrevis-logger
+       48           (input vss-workfile
+       49           ,input vss-revision
+       50           ,input v-vssrevis-parameters
+       51           ,input p-extra-paramters
+       52           ).
+       53       end.
+       54     end.
+       55   end procedure.
+       56   assign
+       57     v-vssrevis-logger = g#vssrevis-logger
+       58   .
+       59   if  valid-handle(v-vssrevis-logger)
+       60   and v-vssrevis-logger :get-signature("logevent") <> ""
+       61   then do:
+       62     assign
+       63       v-vssrevis-logevent = true
+       64     .
+       65     run vss-logevent in this-procedure (input vss-description) .
+       66   end.
+       67   define new global shared variable g#language as character no-undo .
+       68   if g#language <> '' and g#language <> 'rus':U then do:
+       69     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       70   end.
+       71   define new global shared variable g#library  as handle no-undo .
+       72   define new global shared variable g#library2 as handle no-undo .
+       73   define stream sinp .
+       74   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       75   define variable v-binfile-converter-program as character no-undo initial 'exe/base64.exe':U .
+       76   define temp-table temp-ext-file-line no-undo like ub.ext-file-line
+       77     .
+       78   procedure binfile_clear :
+       79     define input  parameter p-db-num      as integer   no-undo .
+       80     define input  parameter p-from-db-num as integer   no-undo .
+       81     define input  parameter p-file-num    as integer   no-undo .
+       82     define buffer buf_temp-ext-file-line  for temp-ext-file-line .
+       83     do
+       84     on error undo, return error return-value
+       85     :
+       86       for each buf_temp-ext-file-line
+       87         where buf_temp-ext-file-line.db-num   = p-db-num
+       88           and buf_temp-ext-file-line.from-db-num = p-from-db-num
+       89           and buf_temp-ext-file-line.file-num = p-file-num
+       90       on error undo, return error return-value
+       91       :
+       92         delete buf_temp-ext-file-line .
+       93       end.
+       94     end.
+       95   end procedure.
+       96   procedure binfile_read :
+       97     define input  parameter p-db-num       as integer   no-undo .
+       98     define input  parameter p-from-db-num  as integer   no-undo .
+       99     define input  parameter p-file-num     as integer   no-undo .
+      100     define input  parameter p-file-name    as character no-undo .
+      101     define variable v-temp-file-name        as character no-undo .
+      102     define variable v-convert-full-pathname as character no-undo .
+      103     define variable v-input-full-pathname   as character no-undo .
+      104     define variable v-temp-full-pathname    as character no-undo .
+      105     define variable v-read-line             as character no-undo .
+      106     define variable v-line-num              as integer   no-undo .
+      107     define variable v-command-line          as character no-undo .
+      108     define buffer buf_temp-ext-file-line for temp-ext-file-line .
+      109     do
+      110     on error undo, return error return-value
+      111     :
+      112       run binfile_clear in this-procedure
+      113         (input p-db-num
+      114         ,input p-from-db-num
+      115         ,input p-file-num
+      116         ) .
+      117       run gbl/_tmpfile.p
+      118         (input  't':U
+      119         ,input  '.b64':U
+      120         ,output v-temp-file-name
+      121         ) .
+      122   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      123   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      124     (input v-temp-file-name
+      125     ,input '':U
+      126     )  .
+      127       assign
+      128         file-info :file-name    = v-binfile-converter-program
+      129         v-convert-full-pathname = file-info :full-pathname
+      130       .
+      131       assign
+      132         file-info :file-name    = p-file-name
+      133         v-input-full-pathname   = file-info :full-pathname
+      134       .
+      135       assign
+      136         file-info :file-name    = v-temp-file-name
+      137         v-temp-full-pathname    = file-info :full-pathname
+      138       .
+      139       assign
+      140         v-command-line = substitute('&1 -e "&2" &3':U
+      141                                         ,v-convert-full-pathname
+      142                                         ,v-input-full-pathname
+      143                                         ,v-temp-full-pathname
+      144                                         )
+      145       .
+      146       os-command silent value(v-command-line) .
+      147       input stream sinp from value(v-temp-full-pathname) .
+      148       assign
+      149         v-line-num = 0
+      150       .
+      151       repeat
+      152       :
+      153         assign
+      154           v-read-line = '':U
+      155         .
+      156         import stream sinp unformatted v-read-line .
+      157         if v-read-line <> '':U
+      158         then do:
+      159           assign
+      160             v-line-num  = v-line-num + 1
+      161           .
+      162           create buf_temp-ext-file-line .
+      163           assign
+      164             buf_temp-ext-file-line.db-num       = p-db-num
+      165             buf_temp-ext-file-line.from-db-num  = p-from-db-num
+      166             buf_temp-ext-file-line.file-num     = p-file-num
+      167             buf_temp-ext-file-line.line-num     = v-line-num
+      168             buf_temp-ext-file-line.sub-line-num = 0
+      169             buf_temp-ext-file-line.line-text    = v-read-line
+      170           .
+      171         end.
+      172       end.
+      173       input stream sinp close .
+      174       os-delete value(v-temp-full-pathname) .
+      175     end.
+      176   end procedure.
+      177   procedure binfile_write :
+      178     define input  parameter p-db-num        as integer   no-undo .
+      179     define input  parameter p-from-db-num   as integer   no-undo .
+      180     define input  parameter p-file-num      as integer   no-undo .
+      181     define input  parameter p-bin-file-name as character no-undo .
+      182     define variable v-temp-file-name        as character no-undo .
+      183     define variable v-temp-full-pathname    as character no-undo .
+      184     define variable v-output-full-pathname  as character no-undo .
+      185     define variable v-convert-full-pathname as character no-undo .
+      186     define variable v-command-line          as character no-undo .
+      187     define buffer buf_temp-ext-file-line for temp-ext-file-line .
+      188     do
+      189     on error undo, return error return-value
+      190     :
+      191       run gbl/_tmpfile.p
+      192         (input  't':U
+      193         ,input  '.b64':U
+      194         ,output v-temp-file-name
+      195         ) .
+      196       output stream sinp to value(v-temp-file-name) .
+      197       for each buf_temp-ext-file-line
+      198         where buf_temp-ext-file-line.db-num   = p-db-num
+      199           and buf_temp-ext-file-line.from-db-num = p-from-db-num
+      200           and buf_temp-ext-file-line.file-num = p-file-num
+      201       by buf_temp-ext-file-line.line-num
+      202       by buf_temp-ext-file-line.sub-line-num
+      203       on error undo, return error return-value
+      204       :
+      205         put stream sinp unformatted
+      206           buf_temp-ext-file-line.line-text + chr(10)
+      207           .
+      208       end.
+      209       output stream sinp close .
+      210       assign
+      211         file-info :file-name    = v-binfile-converter-program
+      212         v-convert-full-pathname = file-info :full-pathname
+      213       .
+      214       assign
+      215         file-info :file-name    = v-temp-file-name
+      216         v-temp-full-pathname    = file-info :full-pathname
+      217       .
+      218   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      219   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      220     (input p-bin-file-name
+      221     ,input '':U
+      222     )  .
+      223       assign
+      224         file-info :file-name    = p-bin-file-name
+      225         v-output-full-pathname   = file-info :full-pathname
+      226       .
+      227       assign
+      228         v-command-line =  substitute('&1 -d &2 "&3"':U
+      229                                     ,v-convert-full-pathname
+      230                                     ,v-temp-full-pathname
+      231                                     ,v-output-full-pathname
+      232                                     )
+      233       .
+      234       os-command silent value(v-command-line) .
+      235       os-delete value(v-temp-full-pathname) .
+      236     end.
+      237   end procedure.
+      238   procedure binfile_clear-from-db :
+      239     define input  parameter p-db-num        as integer   no-undo .
+      240     define input  parameter p-from-db-num   as integer   no-undo .
+      241     define input  parameter p-file-num      as integer   no-undo .
+      242     define buffer buf_ext-file-line for ub.ext-file-line .
+      243     do
+      244     on error undo, return error return-value
+      245     :
+      246       for each buf_ext-file-line
+      247         where buf_ext-file-line.db-num   = p-db-num
+      248           and buf_ext-file-line.from-db-num   = p-from-db-num
+      249           and buf_ext-file-line.file-num = p-file-num
+      250       on error undo, return error return-value
+      251       :
+      252         delete buf_ext-file-line .
+      253       end.
+      254     end.
+      255   end procedure.
+      256   procedure binfile_read-to-db :
+      257     define input  parameter p-db-num         as integer   no-undo .
+      258     define input  parameter p-from-db-num    as integer   no-undo .
+      259     define input  parameter p-file-num       as integer   no-undo .
+      260     define input  parameter p-file-name      as character no-undo .
+      261     define variable v-temp-file-name        as character no-undo .
+      262     define variable v-convert-full-pathname as character no-undo .
+      263     define variable v-input-full-pathname   as character no-undo .
+      264     define variable v-temp-full-pathname    as character no-undo .
+      265     define variable v-read-line             as character no-undo .
+      266     define variable v-line-num              as integer   no-undo .
+      267     define variable v-command-line          as character no-undo .
+      268     define buffer buf_ext-file-line for ub.ext-file-line .
+      269     do
+      270     on error undo, return error return-value
+      271     :
+      272       run binfile_clear-from-db in this-procedure
+      273         (input p-db-num
+      274         ,input p-from-db-num
+      275         ,input p-file-num
+      276         ) .
+      277       run gbl/_tmpfile.p
+      278         (input  't':U
+      279         ,input  '.b64':U
+      280         ,output v-temp-file-name
+      281         ) .
+      282   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      283   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      284     (input v-temp-file-name
+      285     ,input '':U
+      286     )  .
+      287       assign
+      288         file-info :file-name    = v-binfile-converter-program
+      289         v-convert-full-pathname = file-info :full-pathname
+      290       .
+      291       assign
+      292         file-info :file-name    = p-file-name
+      293         v-input-full-pathname   = file-info :full-pathname
+      294       .
+      295       assign
+      296         file-info :file-name    = v-temp-file-name
+      297         v-temp-full-pathname    = file-info :full-pathname
+      298       .
+      299       assign
+      300         v-command-line = substitute('&1 -e "&2" "&3"':U
+      301                                         ,v-convert-full-pathname
+      302                                         ,v-input-full-pathname
+      303                                         ,v-temp-full-pathname
+      304                                         )
+      305       .
+      306       os-command silent value(v-command-line) .
+      307       input stream sinp from value(v-temp-full-pathname) .
+      308       assign
+      309         v-line-num = 0
+      310       .
+      311       repeat
+      312       :
+      313         assign
+      314           v-read-line = '':U
+      315         .
+      316         import stream sinp unformatted v-read-line .
+      317         if v-read-line <> '':U
+      318         then do:
+      319           assign
+      320             v-line-num  = v-line-num + 1
+      321           .
+      322           create buf_ext-file-line .
+      323           assign
+      324             buf_ext-file-line.db-num       = p-db-num
+      325             buf_ext-file-line.from-db-num  = p-from-db-num
+      326             buf_ext-file-line.file-num     = p-file-num
+      327             buf_ext-file-line.line-num     = v-line-num
+      328             buf_ext-file-line.sub-line-num = 0
+      329             buf_ext-file-line.line-text    = v-read-line
+      330           .
+      331         end.
+      332       end.
+      333       input stream sinp close .
+      334       os-delete value(v-temp-full-pathname) .
+      335     end.
+      336   end procedure.
+      337   procedure binfile_write-from-db :
+      338     define input  parameter p-db-num        as integer   no-undo .
+      339     define input  parameter p-from-db-num   as integer   no-undo .
+      340     define input  parameter p-file-num      as integer   no-undo .
+      341     define input  parameter p-bin-file-name as character no-undo .
+      342     define variable v-temp-file-name        as character no-undo .
+      343     define variable v-temp-full-pathname    as character no-undo .
+      344     define variable v-output-full-pathname  as character no-undo .
+      345     define variable v-convert-full-pathname as character no-undo .
+      346     define variable v-command-line          as character no-undo .
+      347     define buffer buf_ext-file-line for ub.ext-file-line .
+      348     do
+      349     on error undo, return error return-value
+      350     :
+      351       run gbl/_tmpfile.p
+      352         (input  't':U
+      353         ,input  '.b64':U
+      354         ,output v-temp-file-name
+      355         ) .
+      356       output stream sinp to value(v-temp-file-name) .
+      357       for each buf_ext-file-line
+      358         where buf_ext-file-line.db-num   = p-db-num
+      359           and buf_ext-file-line.from-db-num   = p-from-db-num
+      360           and buf_ext-file-line.file-num = p-file-num
+      361       by buf_ext-file-line.line-num
+      362       by buf_ext-file-line.sub-line-num
+      363       on error undo, return error return-value
+      364       :
+      365         put stream sinp unformatted
+      366           buf_ext-file-line.line-text + chr(10)
+      367           .
+      368       end.
+      369       output stream sinp close .
+      370       assign
+      371         file-info :file-name    = v-binfile-converter-program
+      372         v-convert-full-pathname = file-info :full-pathname
+      373       .
+      374       assign
+      375         file-info :file-name    = v-temp-file-name
+      376         v-temp-full-pathname    = file-info :full-pathname
+      377       .
+      378   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      379   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      380     (input p-bin-file-name
+      381     ,input '':U
+      382     )  .
+      383       assign
+      384         file-info :file-name    = p-bin-file-name
+      385         v-output-full-pathname   = file-info :full-pathname
+      386       .
+      387       assign
+      388         v-command-line =  substitute('&1 -d &2 "&3"':U
+      389                                     ,v-convert-full-pathname
+      390                                     ,v-temp-full-pathname
+      391                                     ,v-output-full-pathname
+      392                                     )
+      393       .
+      394       os-command silent value(v-command-line) .
+      395       os-delete value(v-temp-full-pathname) .
+      396     end.
+      397   end procedure.
+      398   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      399   function prepare-path returns character ( input p-nonprepared-path as character ):
+      400   define variable v-prepared-path as character no-undo .
+      401   assign
+      402   v-prepared-path = replace(p-nonprepared-path, chr(92), chr(47))
+      403   v-prepared-path = right-trim(v-prepared-path, chr(47))
+      404   .
+      405   return v-prepared-path.
+      406   END FUNCTION.
+      407   function prepare-path2 returns character ( input p-nonprepared-path as character ):
+      408   define variable v-prepared-path as character no-undo .
+      409   assign
+      410   v-prepared-path = replace(p-nonprepared-path, chr(47), chr(92))
+      411   v-prepared-path = right-trim(v-prepared-path, chr(92))
+      412   .
+      413   return v-prepared-path.
+      414   END FUNCTION.
+      415   function quote-spaces returns character ( input p-full-path as character):
+      416   define variable v-ii as integer no-undo .
+      417   define variable v-result as character no-undo .
+      418   do v-ii = 1 to num-entries(p-full-path, chr(92)):
+      419     v-result = v-result + (if v-ii = 1 then '' else chr(92)) +
+      420                (if index(entry(v-ii, p-full-path, chr(92)), chr(32)) > 0
+      421                then  substitute("&1&2&1", chr(34), entry(v-ii, p-full-path, chr(92)))
+      422                else entry(v-ii, p-full-path, chr(92))
+      423                )
+      424     .
+      425   end.
+      426   return v-result.
+      427   end function.
+      428   define variable v-full-path-name as character no-undo .
+      429   define variable v-md5-signature as character no-undo .
+      430   define variable v-dir-type as character no-undo .
+      431   define variable v-can-write as logical no-undo .
+      432   define variable choice as integer no-undo .
+      433   define variable v-is-temp-file as logical no-undo .
+      434   define buffer buf_ext-file for ub.ext-file.
+      435   do
+      436   on error undo, return error return-value
+      437   :
+      438      find first buf_ext-file  exclusive-lock where
+      439               buf_Ext-file.db-num = p-db-num
+      440           and buf_Ext-file.from-db-num = p-from-db-num
+      441           and buf_Ext-file.file-num = p-file-num no-error .
+      442     if not available buf_Ext-file then do:
+      443       undo, return error substitute("Не найден файл, сохраненный в БД:&1БД &2 № файла &3"
+      444                             , chr(10)
+      445                             , p-db-num
+      446                             , p-file-num).
+      447     end.
+      448     if p-dir-path = ? then do:
+      449        run gbl/dir-sel.p (
+      450                         output p-dir-path
+      451                       , output v-dir-type
+      452                       , output v-can-write
+      453                             )
+      454         .
+      455       if p-dir-path = ? then do:
+      456         return.
+      457       end.
+      458       if not v-can-write then do:
+      459           message
+      460           substitute("Вы не имеете прав на запись в выбранный каталог &1", p-dir-path)
+      461           view-as alert-box error .
+      462           return error.
+      463       end.
+      464     end.
+      465     file-info:file-name = p-dir-path.
+      466     if file-info:file-type = ?
+      467     or index( file-info:file-type, "D" ) = 0 then do:
+      468       assign
+      469       v-full-path-name = p-dir-path
+      470       v-is-temp-file = yes
+      471       .
+      472     end.
+      473     else do:
+      474     assign
+      475     v-full-path-name = entry(1, buf_ext-file.file-name, ">")
+      476     v-full-path-name = prepare-path(v-full-path-name)
+      477     v-full-path-name = p-dir-path + chr(47) +
+      478                        entry(num-entries(v-full-path-name, chr(47))
+      479                              , v-full-path-name
+      480                              , chr(47)
+      481                             )
+      482     .
+      483     end.
+      484     assign
+      485     file-info:file-name = v-full-path-name.
+      486     if file-info:full-pathname <> ? then do:
+      487       if p-override = 0
+      488       then do:
+      489         run gbl/daskfile.w (
+      490                       input "Дальнейшие действия"
+      491                      ,input v-full-path-name
+      492                      ,input file-info:file-size
+      493                      ,input file-info:file-mod-date
+      494                      ,input file-info:file-mod-time
+      495                      ,input buf_ext-file.file-name
+      496                      ,input buf_Ext-file.file-size
+      497                      ,input buf_Ext-file.update-sys-date
+      498                      ,input buf_Ext-file.update-sys-time-int
+      499                      ,input 4
+      500                      ,input 6
+      501                      ,output choice).
+      502         if choice = 6
+      503         then do:
+      504           p-override = choice.
+      505           return.
+      506         end.
+      507       end.
+      508       if choice = 2
+      509       or choice = 4
+      510       or choice = 5
+      511       then do:
+      512         p-override = choice.
+      513       end.
+      514       if choice = 3
+      515       or choice = 4 then do:
+      516         return.
+      517       end.
+      518     end.
+      519     if file-info:full-pathname = ?
+      520     or (p-override = 1
+      521     or p-override = 2
+      522     or (p-override = 5
+      523         and  (buf_Ext-file.update-sys-date > file-info:file-mod-date
+      524               or
+      525               (buf_Ext-file.update-sys-date = file-info:file-mod-date
+      526               and buf_Ext-file.update-sys-time-int >= file-info:file-mod-time)
+      527               )
+      528        )
+      529     )
+      530     or v-is-temp-file = yes
+      531     then do:
+      532       run binfile_write-from-db in this-procedure (
+      533          input p-db-num
+      534         ,input  p-from-db-num
+      535         ,input  p-file-num
+      536         ,input  v-full-path-name
+      537         ) .
+      538       run gbl/md5.p (
+      539           input  v-full-path-name
+      540         ,output v-md5-signature
+      541         ) .
+      542       if buf_ext-file.crc-field <> v-md5-signature then do:
+      543         if p-dir-path = ? then do:
+      544           message
+      545           substitute("!!!Сохраненный файл &1 имеет неверную сигнатуру md5 - удаляется с диска"
+      546                 , v-full-path-name )
+      547           view-as alert-box error .
+      548           .
+      549           os-delete value(v-full-path-name).
+      550           return error .
+      551         end.
+      552         else do:
+      553           return error  substitute("!!!Сохраненный файл &1 имеет неверную сигнатуру md5 - удаляется"
+      554                 , v-full-path-name ).
+      555         end.
+      556       end.
+      557     end.
+      558   end.

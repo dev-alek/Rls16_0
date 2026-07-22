@@ -1,0 +1,5 @@
+0 "" "InputForm" "" 1 0 "dis-card-property" "" "Форма ввода"
+0 "" "FormName" "InputForm" 2 1 "dis-card-property" "Форма ввода" "Имя формы"
+0 "" "ManualEdit" "" 3 0 "dis-card-property" "" "Ручное редактирование"
+0 "" "SectionNum" "ManualEdit" 4 3 "dis-card-property" "Ручное редактирование" "Номер секции в меню"
+0 "" "UserCanEdit" "" 5 0 "dis-card-property" "" "Можно редактировать"

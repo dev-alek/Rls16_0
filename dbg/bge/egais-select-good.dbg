@@ -1,0 +1,1282 @@
+        1   define input parameter p-ms-base     as decimal no-undo .
+        2   define input parameter p-proof       as decimal no-undo .
+        3   define input parameter p-alc-type-code as character no-undo .
+        4   define input parameter bh-gds-egais  as handle no-undo .
+        5   define output parameter p-alc-code   as character no-undo .
+        6   define variable qh-gds-egais as handle no-undo .
+        7   define variable br-hndl-gds  as handle no-undo .
+        8   define variable ii as integer no-undo .
+        9   define new global shared variable g#language as character no-undo .
+       10   if g#language <> '' and g#language <> 'rus':U then do:
+       11     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       12   end.
+       13   DEFINE BUTTON b-cancel AUTO-END-KEY
+       14        LABEL "Отмена"
+       15        SIZE 15 BY 1.14
+       16        BGCOLOR 8 .
+       17   DEFINE BUTTON b-select AUTO-GO
+       18        LABEL "Выбор"
+       19        SIZE 15 BY 1.14
+       20        BGCOLOR 8 .
+       21   Define variable NameContext as character view-as fill-in size 30 by 1 fgcolor 12 no-undo.
+       22   DEFINE FRAME Dialog-Frame
+       23        b-select AT ROW 1.24 COL 2
+       24        b-cancel AT ROW 1.24 COL 18
+       25        NameContext at row 1.24 COL 45 label "Нач. слова"
+       26        SPACE(22) SKIP(10.5)
+       27       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+       28            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+       29            TITLE "Выбор товара из ЕГАИС для связки"
+       30            DEFAULT-BUTTON b-select CANCEL-BUTTON b-cancel WIDGET-ID 100.
+       31   ASSIGN
+       32          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+       33          FRAME Dialog-Frame:HIDDEN           = TRUE.
+       34   ON WINDOW-CLOSE OF FRAME Dialog-Frame
+       35   DO:
+       36     APPLY "END-ERROR":U TO SELF.
+       37   END.
+       38   ON CHOOSE OF b-select IN FRAME Dialog-Frame
+       39   DO:
+       40       if not bh-gds-egais:available then return .
+       41       assign
+       42           p-alc-code = bh-gds-egais:buffer-field ("alc-code"):buffer-value
+       43       .
+       44   END.
+       45   ON return OF NameContext IN FRAME Dialog-Frame do:
+       46       assign NameContext.
+       47       if trim(NameContext) = "" then do :
+       48           qh-gds-egais:query-prepare (substitute("for each tt-gds-eg where tt-gds-EG.ms-base = '&1'
+       49                                                                        and tt-gds-EG.proof = '&2'
+       50                                                                        and trim(tt-gds-EG.alc-type-code) = '&3'",
+       51                                                                        p-ms-base, p-proof, trim(p-alc-type-code) ) ).
+       52       end.
+       53       else do :
+       54           qh-gds-egais:query-prepare (substitute("for each tt-gds-eg where tt-gds-EG.ms-base = '&1' 
+       55                                                                        and tt-gds-EG.proof   = '&2' 
+       56                                                                        and trim(tt-gds-EG.alc-type-code) = '&3'
+       57                                                                        and tt-gds-EG.gds-name contains '&4'
+       58                                                                         INDEXED-REPOSITION ",
+       59                                                                        p-ms-base, p-proof, trim(p-alc-type-code), (trim(NameContext) + "*") ) ).
+       60       end.
+       61       qh-gds-egais:query-open .
+       62   end.
+       63   IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+       64   THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+       65   MAIN-BLOCK:
+       66   DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+       67      ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+       68     run create-br .
+       69   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ Библиотека изменения размеров окна".
+       70   define variable v-diasize-need-maximize        as logical   no-undo init true  .
+       71   define variable v-diasize-orig-frame-height    as decimal   no-undo .
+       72   define variable v-diasize-orig-frame-width     as decimal   no-undo .
+       73   define variable v-diasize-current-frame-width  as decimal   no-undo .
+       74   define variable v-diasize-current-frame-height as decimal   no-undo .
+       75   define variable v-diasize-change-size          as logical   no-undo .
+       76   define variable v-diasize-resize-button        as handle    no-undo .
+       77   define variable v-diasize-wndmax               as logical   no-undo .
+       78   define variable v-diasize-wndstore             as logical   no-undo .
+       79   define variable v-diasize-proc-name            as character no-undo .
+       80   define variable v-diasize-browse-handle        as handle    no-undo .
+       81   define variable v-diasize-browse-number        as integer   no-undo .
+       82   define variable v-diasize-need-full-display    as logical   no-undo init false .
+       83   define temp-table temp-diasize-handle no-undo
+       84     field handle-value  as handle
+       85     field save-position as decimal
+       86     index xpk is primary unique handle-value
+       87     .
+       88   define temp-table temp-browse-handle no-undo
+       89     field browse-type   as character
+       90     field browse-number as integer
+       91     field browse-handle as handle
+       92     field original-size as decimal
+       93     index xpk is primary unique browse-type browse-number
+       94     index xie browse-type browse-handle
+       95   .
+       96   procedure diasize_change-height :
+       97     define input  parameter p-change-value  as decimal   no-undo .
+       98     define input  parameter p-move-resize   as logical   no-undo .
+       99     define variable v-field-group-handle    as handle    no-undo .
+      100     define variable v-object-handle         as handle    no-undo .
+      101     define variable v-frame-height          as decimal   no-undo .
+      102     define variable v-frame-virtual-height  as decimal   no-undo .
+      103     define variable v-browse-height         as decimal   no-undo .
+      104     define variable v-window-height         as decimal   no-undo .
+      105     define variable v-window-virtual-height as decimal   no-undo .
+      106     define variable v-change-sign           as integer   no-undo .
+      107     define buffer buf_temp-diasize-handle for temp-diasize-handle .
+      108     define buffer buf_temp-browse-handle  for temp-browse-handle .
+      109     if p-change-value > 0
+      110     then do:
+      111       if frame Dialog-Frame :height + p-change-value
+      112           > decimal(session :work-area-height-pixels) / session :pixels-per-row
+      113       then do:
+      114         assign
+      115           p-change-value = decimal(session :work-area-height-pixels) / session :pixels-per-row
+      116                           - (frame Dialog-Frame :height-chars)
+      117         .
+      118         if p-change-value <= 0
+      119         then do:
+      120           run diasize_position-resize-button in this-procedure .
+      121           return .
+      122         end.
+      123       end.
+      124     end.
+      125     if p-change-value < 0
+      126     then do:
+      127       if frame Dialog-Frame :height + p-change-value < v-diasize-orig-frame-height
+      128       then do:
+      129         assign
+      130           p-change-value = v-diasize-orig-frame-height
+      131                          - (frame Dialog-Frame :height-chars)
+      132         .
+      133         if p-change-value >= 0
+      134         then do:
+      135           run diasize_position-resize-button in this-procedure .
+      136           return .
+      137         end.
+      138       end.
+      139     end.
+      140     if p-change-value >= 0
+      141     then do:
+      142       assign
+      143         v-change-sign = 1
+      144       .
+      145     end.
+      146     else do:
+      147       assign
+      148         v-change-sign = -1
+      149       .
+      150     end.
+      151     assign
+      152       p-change-value = truncate(abs(p-change-value), 0) * v-change-sign
+      153     .
+      154     if p-change-value = 0
+      155     then do:
+      156       run diasize_position-resize-button in this-procedure .
+      157       return .
+      158     end.
+      159     move_block:
+      160     do
+      161     on error undo move_block, retry move_block
+      162     :
+      163       if retry
+      164       then do:
+      165         do
+      166         on error undo move_block, leave move_block
+      167         :
+      168           if p-change-value > 0
+      169           then do:
+      170             for each buf_temp-diasize-handle
+      171             on error undo, next
+      172             :
+      173               assign
+      174                 v-object-handle = buf_temp-diasize-handle.handle-value
+      175               .
+      176               if v-object-handle <> v-diasize-resize-button
+      177               then do:
+      178                 assign
+      179                   v-object-handle :row = buf_temp-diasize-handle.save-position
+      180                 .
+      181               end.
+      182             end.
+      183             assign
+      184               v-diasize-browse-handle :height = v-browse-height
+      185             .
+      186             for each buf_temp-browse-handle
+      187               where buf_temp-browse-handle.browse-type = 'height':u
+      188             on error undo, next
+      189             :
+      190               assign
+      191                 buf_temp-browse-handle.browse-handle :height = buf_temp-browse-handle.original-size
+      192               .
+      193             end.
+      194             assign
+      195               frame Dialog-Frame :height = v-frame-height
+      196             .
+      197             if frame Dialog-Frame :scrollable = true
+      198             then do:
+      199               assign
+      200                 frame Dialog-Frame :virtual-height = v-frame-virtual-height
+      201               .
+      202             end.
+      203             run diasize_position-resize-button in this-procedure .
+      204           end.
+      205           else do:
+      206             if frame Dialog-Frame :scrollable = true
+      207             then do:
+      208               assign
+      209                 frame Dialog-Frame :virtual-height = v-frame-virtual-height
+      210               .
+      211             end.
+      212             assign
+      213               frame Dialog-Frame :height = v-frame-height
+      214             .
+      215             assign
+      216               v-diasize-browse-handle :height = v-browse-height
+      217             .
+      218             for each buf_temp-browse-handle
+      219               where buf_temp-browse-handle.browse-type = 'height':u
+      220             on error undo, next
+      221             :
+      222               assign
+      223                 buf_temp-browse-handle.browse-handle :height = buf_temp-browse-handle.original-size
+      224               .
+      225             end.
+      226             for each buf_temp-diasize-handle
+      227             on error undo, next
+      228             :
+      229               assign
+      230                 v-object-handle = buf_temp-diasize-handle.handle-value
+      231               .
+      232               if v-object-handle <> v-diasize-resize-button
+      233               then do:
+      234                 assign
+      235                   v-object-handle :row = buf_temp-diasize-handle.save-position
+      236                 .
+      237               end.
+      238             end.
+      239             run diasize_position-resize-button in this-procedure .
+      240           end.
+      241           assign
+      242             v-diasize-change-size = false
+      243           .
+      244           leave move_block .
+      245         end.
+      246       end.
+      247       assign
+      248         v-diasize-need-full-display = true
+      249       .
+      250       if v-diasize-change-size = false
+      251       then do:
+      252         assign
+      253           v-diasize-change-size = true
+      254         .
+      255       end.
+      256       else do:
+      257         return .
+      258       end.
+      259       assign
+      260         v-frame-height = frame Dialog-Frame :height
+      261         v-frame-virtual-height = frame Dialog-Frame :virtual-height
+      262         v-browse-height = v-diasize-browse-handle :height
+      263       .
+      264       for each buf_temp-browse-handle
+      265         where buf_temp-browse-handle.browse-type = 'height':u
+      266       :
+      267         assign
+      268           buf_temp-browse-handle.original-size = buf_temp-browse-handle.browse-handle :height
+      269         .
+      270       end.
+      271       for each buf_temp-diasize-handle
+      272       :
+      273         delete buf_temp-diasize-handle .
+      274       end.
+      275       assign
+      276         v-field-group-handle = frame Dialog-Frame :first-child
+      277       .
+      278       do while valid-handle(v-field-group-handle)
+      279       :
+      280         assign
+      281           v-object-handle = v-field-group-handle :first-child
+      282         .
+      283         do while valid-handle(v-object-handle)
+      284         :
+      285           if  v-object-handle <> v-diasize-browse-handle :handle
+      286           and can-query(v-object-handle, "row")
+      287           and can-query(v-object-handle, "height")
+      288           and ( v-object-handle :row > v-diasize-browse-handle :row )
+      289           then do:
+      290             find first buf_temp-browse-handle
+      291               where buf_temp-browse-handle.browse-type   = 'height':u
+      292                 and buf_temp-browse-handle.browse-handle = v-object-handle
+      293               no-error .
+      294             if available buf_temp-browse-handle
+      295             then do:
+      296             end.
+      297             else do:
+      298               create buf_temp-diasize-handle .
+      299               assign
+      300                 buf_temp-diasize-handle.handle-value  = v-object-handle
+      301                 buf_temp-diasize-handle.save-position = v-object-handle :row
+      302               .
+      303             end.
+      304           end.
+      305           assign
+      306             v-object-handle = v-object-handle :next-sibling
+      307           .
+      308         end.
+      309         assign
+      310           v-field-group-handle = v-field-group-handle :next-sibling
+      311         .
+      312       end.
+      313       do with frame Dialog-Frame
+      314       :
+      315         hide v-diasize-resize-button .
+      316         assign
+      317           v-diasize-resize-button :row    = 1
+      318           v-diasize-resize-button :column = 1
+      319         .
+      320       end.
+      321       if p-change-value > 0
+      322       then do:
+      323         if frame Dialog-Frame :scrollable = true
+      324         then do:
+      325           assign
+      326             frame Dialog-Frame :virtual-height = frame Dialog-Frame :virtual-height + p-change-value
+      327             no-error .
+      328           if error-status :error
+      329           or error-status :get-message(1) <> ""
+      330           then do:
+      331             undo move_block, retry move_block .
+      332           end.
+      333         end.
+      334         assign
+      335           frame Dialog-Frame :height = frame Dialog-Frame :height + p-change-value
+      336           no-error .
+      337         if error-status :error
+      338         or error-status :get-message(1) <> ""
+      339         then do:
+      340           undo move_block, retry move_block .
+      341         end.
+      342         assign
+      343           v-diasize-browse-handle :height = v-diasize-browse-handle :height + p-change-value
+      344           no-error .
+      345         if error-status :error
+      346         or error-status :get-message(1) <> ""
+      347         then do:
+      348           undo move_block, retry move_block .
+      349         end.
+      350         for each buf_temp-browse-handle
+      351           where buf_temp-browse-handle.browse-type = 'height':u
+      352         on error undo move_block, retry move_block
+      353         :
+      354           assign
+      355             buf_temp-browse-handle.browse-handle :height
+      356               = buf_temp-browse-handle.browse-handle :height + p-change-value
+      357             no-error .
+      358           if error-status :error
+      359           or error-status :get-message(1) <> ""
+      360           then do:
+      361             undo move_block, retry move_block .
+      362           end.
+      363         end.
+      364         for each buf_temp-diasize-handle
+      365         on error undo move_block, retry move_block
+      366         :
+      367           assign
+      368             v-object-handle = buf_temp-diasize-handle.handle-value
+      369           .
+      370           if v-object-handle <> v-diasize-resize-button
+      371           then do:
+      372             assign
+      373               v-object-handle :row = v-object-handle :row + p-change-value
+      374               no-error .
+      375             if error-status :error
+      376             or error-status :get-message(1) <> ""
+      377             then do:
+      378               undo move_block, retry move_block .
+      379             end.
+      380           end.
+      381         end.
+      382       end.
+      383       else do:
+      384         for each buf_temp-diasize-handle
+      385         on error undo move_block, retry move_block
+      386         :
+      387           assign
+      388             v-object-handle = buf_temp-diasize-handle.handle-value
+      389           .
+      390           if v-object-handle <> v-diasize-resize-button
+      391           then do:
+      392             assign
+      393               v-object-handle :row = v-object-handle :row + p-change-value
+      394               no-error .
+      395             if error-status :error
+      396             or error-status :get-message(1) <> ""
+      397             then do:
+      398               undo move_block, retry move_block .
+      399             end.
+      400           end.
+      401         end.
+      402         assign
+      403           v-diasize-browse-handle :height = v-diasize-browse-handle :height + p-change-value
+      404           no-error .
+      405         if error-status :error
+      406         or error-status :get-message(1) <> ""
+      407         then do:
+      408           undo move_block, retry move_block .
+      409         end.
+      410         for each buf_temp-browse-handle
+      411           where buf_temp-browse-handle.browse-type = 'height':u
+      412         on error undo move_block, retry move_block
+      413         :
+      414           assign
+      415             buf_temp-browse-handle.browse-handle :height
+      416               = buf_temp-browse-handle.browse-handle :height + p-change-value
+      417             no-error .
+      418           if error-status :error
+      419           or error-status :get-message(1) <> ""
+      420           then do:
+      421             undo move_block, retry move_block .
+      422           end.
+      423         end.
+      424         assign
+      425           frame Dialog-Frame :height = frame Dialog-Frame :height + p-change-value
+      426           no-error .
+      427         if error-status :error
+      428         or error-status :get-message(1) <> ""
+      429         then do:
+      430           undo move_block, retry move_block .
+      431         end.
+      432         if frame Dialog-Frame :scrollable = true
+      433         then do:
+      434           assign
+      435             frame Dialog-Frame :virtual-height = frame Dialog-Frame :virtual-height + p-change-value
+      436             no-error .
+      437           if error-status :error
+      438           or error-status :get-message(1) <> ""
+      439           then do:
+      440             undo move_block, retry move_block .
+      441           end.
+      442         end.
+      443       end.
+      444       if p-move-resize = true
+      445       then do:
+      446         run diasize_position-resize-button in this-procedure .
+      447       end.
+      448       if v-diasize-wndstore = true
+      449       then do:
+      450         if connected("ub") = true
+      451         then do:
+      452           define variable v-cntxt-db-num        as integer   no-undo .
+      453           define variable v-cntxt-userid        as character no-undo .
+      454           RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+      455                                             , OUTPUT v-cntxt-userid
+      456                                             ) .
+      457           run gbl/wndsizew.p
+      458             (input  v-cntxt-db-num
+      459             ,input  v-cntxt-userid
+      460             ,input  v-diasize-proc-name
+      461             ,input  'height':u
+      462             ,input  string(frame Dialog-Frame :height - v-diasize-orig-frame-height)
+      463             ) .
+      464         end.
+      465       end.
+      466     end.
+      467     assign
+      468       v-diasize-change-size = false
+      469     .
+      470   end procedure.
+      471   procedure diasize_set-height :
+      472     define input  parameter p-new-height  as decimal   no-undo .
+      473     define input  parameter p-move-resize as logical   no-undo .
+      474     do
+      475     on error undo, return error return-value
+      476     :
+      477       run diasize_change-height in this-procedure
+      478         (input  (p-new-height - frame Dialog-Frame :height)
+      479         ,input  p-move-resize
+      480         ) .
+      481     end.
+      482   end procedure.
+      483   procedure diasize_change-width :
+      484     define input  parameter p-change-value as decimal   no-undo .
+      485     define input  parameter p-move-resize  as logical   no-undo .
+      486     define variable v-field-group-handle   as handle    no-undo .
+      487     define variable v-object-handle        as handle    no-undo .
+      488     define variable v-frame-width          as decimal   no-undo .
+      489     define variable v-frame-virtual-width  as decimal   no-undo .
+      490     define variable v-browse-width         as decimal   no-undo .
+      491     define variable v-window-width         as decimal   no-undo .
+      492     define variable v-window-virtual-width as decimal   no-undo .
+      493     define variable v-change-sign          as integer   no-undo .
+      494     define buffer buf_temp-diasize-handle for temp-diasize-handle .
+      495     define buffer buf_temp-browse-handle  for temp-browse-handle .
+      496     if p-change-value > 0
+      497     then do:
+      498       if frame Dialog-Frame :width + p-change-value >
+      499           session :width-chars
+      500       then do:
+      501         assign
+      502           p-change-value = session :width-chars - frame Dialog-Frame :width
+      503         .
+      504         if p-change-value <= 0
+      505         then do:
+      506           run diasize_position-resize-button in this-procedure .
+      507           return .
+      508         end.
+      509       end.
+      510     end.
+      511     if p-change-value < 0
+      512     then do:
+      513       if frame Dialog-Frame :width + p-change-value < v-diasize-orig-frame-width
+      514       then do:
+      515         assign
+      516           p-change-value = v-diasize-orig-frame-width
+      517                          - frame Dialog-Frame :width
+      518         .
+      519         if p-change-value >= 0
+      520         then do:
+      521           run diasize_position-resize-button in this-procedure .
+      522           return .
+      523         end.
+      524       end.
+      525     end.
+      526     if p-change-value >= 0
+      527     then do:
+      528       assign
+      529         v-change-sign = 1
+      530       .
+      531     end.
+      532     else do:
+      533       assign
+      534         v-change-sign = -1
+      535       .
+      536     end.
+      537     assign
+      538       p-change-value = truncate(abs(p-change-value), 0) * v-change-sign
+      539     .
+      540     if p-change-value = 0
+      541     then do:
+      542       run diasize_position-resize-button in this-procedure .
+      543       return .
+      544     end.
+      545     move_block:
+      546     do
+      547     on error undo move_block, leave move_block
+      548     :
+      549       if retry
+      550       then do:
+      551         do
+      552         on error undo move_block, leave move_block
+      553         :
+      554           if p-change-value > 0
+      555           then do:
+      556             for each buf_temp-diasize-handle
+      557             on error undo, next
+      558             :
+      559               assign
+      560                 v-object-handle = buf_temp-diasize-handle.handle-value
+      561               .
+      562               if v-object-handle <> v-diasize-resize-button
+      563               then do:
+      564                 assign
+      565                   v-object-handle :col = buf_temp-diasize-handle.save-position
+      566                 .
+      567               end.
+      568             end.
+      569             assign
+      570               v-diasize-browse-handle :width = v-browse-width
+      571             .
+      572             for each buf_temp-browse-handle
+      573               where buf_temp-browse-handle.browse-type = 'width':u
+      574             on error undo, next
+      575             :
+      576               assign
+      577                 buf_temp-browse-handle.browse-handle :width = buf_temp-browse-handle.original-size
+      578               .
+      579             end.
+      580             assign
+      581               frame Dialog-Frame :width = v-frame-width
+      582             .
+      583             if frame Dialog-Frame :scrollable = true
+      584             then do:
+      585               assign
+      586                 frame Dialog-Frame :virtual-width = v-frame-virtual-width
+      587               .
+      588             end.
+      589             run diasize_position-resize-button in this-procedure .
+      590           end.
+      591           else do:
+      592             if frame Dialog-Frame :scrollable = true
+      593             then do:
+      594               assign
+      595                 frame Dialog-Frame :virtual-width = v-frame-virtual-width
+      596               .
+      597             end.
+      598             assign
+      599               frame Dialog-Frame :width = v-frame-width
+      600             .
+      601             for each buf_temp-browse-handle
+      602               where buf_temp-browse-handle.browse-type = 'width':u
+      603             on error undo, next
+      604             :
+      605               assign
+      606                 buf_temp-browse-handle.browse-handle :width = buf_temp-browse-handle.original-size
+      607               .
+      608             end.
+      609             assign
+      610               v-diasize-browse-handle :width = v-browse-width
+      611             .
+      612             for each buf_temp-diasize-handle
+      613             on error undo, next
+      614             :
+      615               assign
+      616                 v-object-handle = buf_temp-diasize-handle.handle-value
+      617               .
+      618               if v-object-handle <> v-diasize-resize-button
+      619               then do:
+      620                 assign
+      621                   v-object-handle :col = buf_temp-diasize-handle.save-position
+      622                 .
+      623               end.
+      624             end.
+      625             run diasize_position-resize-button in this-procedure .
+      626           end.
+      627           assign
+      628             v-diasize-change-size = false
+      629           .
+      630           leave move_block .
+      631         end.
+      632       end.
+      633       assign
+      634         v-diasize-need-full-display = true
+      635       .
+      636       if v-diasize-change-size = false
+      637       then do:
+      638         assign
+      639           v-diasize-change-size = true
+      640         .
+      641       end.
+      642       else do:
+      643         return .
+      644       end.
+      645       assign
+      646         v-frame-width = frame Dialog-Frame :width
+      647         v-frame-virtual-width = frame Dialog-Frame :virtual-width
+      648         v-browse-width = v-diasize-browse-handle :width
+      649       .
+      650       for each buf_temp-browse-handle
+      651         where buf_temp-browse-handle.browse-type = 'width':u
+      652       :
+      653         assign
+      654           buf_temp-browse-handle.original-size = buf_temp-browse-handle.browse-handle :width
+      655         .
+      656       end.
+      657       for each buf_temp-diasize-handle
+      658       :
+      659         delete buf_temp-diasize-handle .
+      660       end.
+      661       assign
+      662         v-field-group-handle = frame Dialog-Frame :first-child
+      663       .
+      664       do while valid-handle(v-field-group-handle)
+      665       :
+      666         assign
+      667           v-object-handle = v-field-group-handle :first-child
+      668         .
+      669         do while valid-handle(v-object-handle)
+      670         :
+      671           if  v-object-handle <> v-diasize-browse-handle :handle
+      672           and v-object-handle <> v-diasize-resize-button
+      673           and can-query(v-object-handle, "row")
+      674           and can-query(v-object-handle, "height")
+      675           and ( v-object-handle :col + v-object-handle :width
+      676                 > v-diasize-browse-handle :col + v-diasize-browse-handle :width
+      677               )
+      678           then do:
+      679             find first buf_temp-browse-handle
+      680               where buf_temp-browse-handle.browse-type   = 'width':u
+      681                 and buf_temp-browse-handle.browse-handle = v-object-handle
+      682               no-error .
+      683             if available buf_temp-browse-handle
+      684             then do:
+      685             end.
+      686             else do:
+      687               create buf_temp-diasize-handle .
+      688               assign
+      689                 buf_temp-diasize-handle.handle-value  = v-object-handle
+      690                 buf_temp-diasize-handle.save-position = v-object-handle :col
+      691               .
+      692             end.
+      693           end.
+      694           assign
+      695             v-object-handle = v-object-handle :next-sibling
+      696           .
+      697         end.
+      698         assign
+      699           v-field-group-handle = v-field-group-handle :next-sibling
+      700         .
+      701       end.
+      702       do with frame Dialog-Frame
+      703       :
+      704         hide v-diasize-resize-button .
+      705         v-diasize-resize-button :row = 1.
+      706         v-diasize-resize-button :column = 1.
+      707       end.
+      708       if p-change-value > 0
+      709       then do:
+      710         if frame Dialog-Frame :scrollable = true
+      711         then do:
+      712           assign
+      713             frame Dialog-Frame :virtual-width = frame Dialog-Frame :virtual-width + p-change-value
+      714             no-error .
+      715           if error-status :error
+      716           or error-status :get-message(1) <> ""
+      717           then do:
+      718             undo move_block, retry move_block.
+      719           end.
+      720         end.
+      721         assign
+      722           frame Dialog-Frame :width = v-frame-width + p-change-value
+      723           no-error .
+      724         if error-status :error
+      725         or error-status :get-message(1) <> ""
+      726         then do:
+      727           undo move_block, retry move_block.
+      728         end.
+      729         assign
+      730           v-diasize-browse-handle :width = v-browse-width + p-change-value
+      731         no-error .
+      732         if error-status :error
+      733         or error-status :get-message(1) <> ""
+      734         then do:
+      735           undo move_block, retry move_block.
+      736         end.
+      737         for each buf_temp-browse-handle
+      738           where buf_temp-browse-handle.browse-type = 'width':u
+      739         on error undo move_block, retry move_block
+      740         :
+      741           assign
+      742             buf_temp-browse-handle.browse-handle :width
+      743               = buf_temp-browse-handle.browse-handle :width + p-change-value
+      744             no-error .
+      745           if error-status :error
+      746           or error-status :get-message(1) <> ""
+      747           then do:
+      748             undo move_block, retry move_block .
+      749           end.
+      750         end.
+      751         for each buf_temp-diasize-handle
+      752         on error undo move_block, retry move_block
+      753         :
+      754           assign
+      755             v-object-handle = buf_temp-diasize-handle.handle-value
+      756           .
+      757           if v-object-handle <> v-diasize-resize-button
+      758           then do:
+      759             assign
+      760               v-object-handle :col = v-object-handle :col + p-change-value
+      761               no-error .
+      762             if error-status :error
+      763             or error-status :get-message(1) <> ""
+      764             then do:
+      765               undo move_block, retry move_block .
+      766             end.
+      767           end.
+      768         end.
+      769       end.
+      770       else do:
+      771         for each buf_temp-diasize-handle
+      772         on error undo move_block, retry move_block
+      773         :
+      774           assign
+      775             v-object-handle = buf_temp-diasize-handle.handle-value
+      776           .
+      777           if v-object-handle <> v-diasize-resize-button
+      778           then do:
+      779             assign
+      780               v-object-handle :col = v-object-handle :col + p-change-value
+      781               no-error .
+      782             if error-status :error
+      783             or error-status :get-message(1) <> ""
+      784             then do:
+      785               undo move_block, retry move_block .
+      786             end.
+      787           end.
+      788         end.
+      789         for each buf_temp-browse-handle
+      790           where buf_temp-browse-handle.browse-type = 'width':u
+      791         on error undo move_block, retry move_block
+      792         :
+      793           assign
+      794             buf_temp-browse-handle.browse-handle :width
+      795               = buf_temp-browse-handle.browse-handle :width + p-change-value
+      796             no-error .
+      797           if error-status :error
+      798           or error-status :get-message(1) <> ""
+      799           then do:
+      800             undo move_block, retry move_block .
+      801           end.
+      802         end.
+      803         assign
+      804           v-diasize-browse-handle :width = v-diasize-browse-handle :width + p-change-value
+      805           no-error .
+      806         if error-status :error
+      807         or error-status :get-message(1) <> ""
+      808         then do:
+      809           undo move_block, retry move_block.
+      810         end.
+      811         assign
+      812           frame Dialog-Frame :width = frame Dialog-Frame :width + p-change-value
+      813         no-error .
+      814         if error-status :error
+      815         or error-status :get-message(1) <> ""
+      816         then do:
+      817           undo move_block, retry move_block.
+      818         end.
+      819         if frame Dialog-Frame :scrollable = true
+      820         then do:
+      821           assign
+      822             frame Dialog-Frame :virtual-width = frame Dialog-Frame :virtual-width + p-change-value
+      823           no-error .
+      824           if error-status :error
+      825           or error-status :get-message(1) <> ""
+      826           then do:
+      827             undo move_block, retry move_block.
+      828           end.
+      829         end.
+      830       end.
+      831       if p-move-resize
+      832       then do:
+      833         run diasize_position-resize-button in this-procedure .
+      834       end.
+      835       if v-diasize-wndstore = true
+      836       then do:
+      837         if connected("ub") = true
+      838         then do:
+      839           define variable v-cntxt-db-num        as integer   no-undo .
+      840           define variable v-cntxt-userid        as character no-undo .
+      841           RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+      842                                             , OUTPUT v-cntxt-userid
+      843                                             ) .
+      844           run gbl/wndsizew.p
+      845             (input  v-cntxt-db-num
+      846             ,input  v-cntxt-userid
+      847             ,input  v-diasize-proc-name
+      848             ,input  'width':u
+      849             ,input  string(frame Dialog-Frame :width - v-diasize-orig-frame-width)
+      850             ) .
+      851         end.
+      852       end.
+      853     end.
+      854     assign
+      855       v-diasize-change-size = false
+      856     .
+      857   end procedure.
+      858   procedure diasize_set-width :
+      859     define input  parameter p-new-width  as decimal   no-undo .
+      860     define input  parameter p-move-resize as logical   no-undo .
+      861     do
+      862     on error undo, return error return-value
+      863     :
+      864       run diasize_change-width in this-procedure
+      865         (input  (p-new-width - frame Dialog-Frame :width)
+      866         ,input  p-move-resize
+      867         ) .
+      868     end.
+      869   end procedure.
+      870   procedure diasize_position-resize-button :
+      871     do with frame Dialog-Frame
+      872     :
+      873       hide v-diasize-resize-button .
+      874       assign
+      875         v-diasize-resize-button :row = frame Dialog-Frame :height - v-diasize-resize-button :height
+      876                     - 1
+      877                     - (frame Dialog-Frame :border-bottom-pixels / session :pixels-per-row)
+      878         v-diasize-resize-button :col = frame Dialog-Frame :width - v-diasize-resize-button :width
+      879                     - 1
+      880                     - (frame Dialog-Frame :border-right-pixels / session :pixels-per-column)
+      881       .
+      882       view v-diasize-resize-button .
+      883     end.
+      884   end procedure.
+      885   on alt-right anywhere
+      886   do:
+      887     run diasize_change-width in this-procedure
+      888       (input 1
+      889       ,input true
+      890       ) .
+      891     return no-apply .
+      892   end.
+      893   on alt-left anywhere
+      894   do:
+      895     run diasize_change-width in this-procedure
+      896       (input -1
+      897       ,input true
+      898       ) .
+      899     return no-apply .
+      900   end.
+      901   on alt-down anywhere
+      902   do:
+      903     run diasize_change-height in this-procedure
+      904       (input 1
+      905       ,input true
+      906       ) .
+      907     return no-apply .
+      908   end.
+      909   on alt-up anywhere
+      910   do:
+      911     run diasize_change-height in this-procedure
+      912       (input -1
+      913       ,input true
+      914       ) .
+      915     return no-apply .
+      916   end.
+      917   on alt-enter of frame Dialog-Frame
+      918   do:
+      919     run diasize_maximize in this-procedure
+      920       (input  ?
+      921       ).
+      922     return no-apply .
+      923   end.
+      924   procedure diasize_end-move :
+      925     do
+      926     on error undo, return error return-value
+      927     :
+      928       define variable v-row-delta as decimal   no-undo .
+      929       define variable v-col-delta as decimal   no-undo .
+      930       define variable v-new-row as decimal   no-undo .
+      931       define variable v-new-col as decimal   no-undo .
+      932       assign
+      933         v-new-row = decimal(last-event :y) / (session :pixels-per-row)
+      934         v-new-col = decimal(last-event :x) / (session :pixels-per-column)
+      935       .
+      936       assign
+      937         v-row-delta = v-new-row - frame Dialog-Frame :height
+      938         v-col-delta = v-new-col - frame Dialog-Frame :width
+      939       .
+      940       run diasize_change-height in this-procedure
+      941         (input v-row-delta
+      942         ,input true
+      943         ) .
+      944       run diasize_change-width in this-procedure
+      945         (input v-col-delta
+      946         ,input true
+      947         ) .
+      948     end.
+      949   end procedure.
+      950   procedure diasize_maximize :
+      951     define input  parameter p-action as logical   no-undo .
+      952     do
+      953     on error undo, return error return-value
+      954     :
+      955       if p-action = ?
+      956       then do:
+      957         if v-diasize-need-maximize = true
+      958         then do:
+      959           assign
+      960             p-action = true
+      961           .
+      962         end.
+      963         else do:
+      964           assign
+      965             p-action = false
+      966           .
+      967         end.
+      968       end.
+      969       if p-action = true
+      970       then do:
+      971         run diasize_change-height in this-procedure
+      972           (input decimal(session :work-area-height-pixels) / session :pixels-per-row
+      973               - frame Dialog-Frame :height-chars
+      974           ,input true
+      975           ) .
+      976         run diasize_change-width in this-procedure
+      977           (input session :width-chars
+      978               - frame Dialog-Frame :width-chars
+      979           ,input true
+      980           ) .
+      981         assign
+      982           v-diasize-need-maximize = false
+      983         .
+      984       end.
+      985       else do:
+      986         run diasize_change-width in this-procedure
+      987           (input v-diasize-orig-frame-width
+      988               - frame Dialog-Frame :width-chars
+      989           ,input true
+      990           ) .
+      991         run diasize_change-height in this-procedure
+      992           (input v-diasize-orig-frame-height
+      993               - frame Dialog-Frame :height-chars
+      994           ,input true
+      995           ) .
+      996         assign
+      997           v-diasize-need-maximize = true
+      998         .
+      999       end.
+     1000     end.
+     1001   end procedure.
+     1002   procedure diasize_restore-orig-size :
+     1003     do
+     1004     on error undo, return error return-value
+     1005     :
+     1006       assign
+     1007         v-diasize-current-frame-width  = frame Dialog-Frame :width
+     1008         v-diasize-current-frame-height = frame Dialog-Frame :height
+     1009       .
+     1010       run diasize_set-height in this-procedure
+     1011         (input  v-diasize-orig-frame-height
+     1012         ,input  true
+     1013         ) .
+     1014       run diasize_set-width in this-procedure
+     1015         (input  v-diasize-orig-frame-width
+     1016         ,input  true
+     1017         ) .
+     1018     end.
+     1019   end procedure.
+     1020   procedure diasize_restore-current-size :
+     1021     do
+     1022     on error undo, return error return-value
+     1023     :
+     1024       run diasize_set-height in this-procedure
+     1025         (input  v-diasize-current-frame-height
+     1026         ,input  true
+     1027         ) .
+     1028       run diasize_set-width in this-procedure
+     1029         (input  v-diasize-current-frame-width
+     1030         ,input  true
+     1031         ) .
+     1032     end.
+     1033   end procedure.
+     1034   procedure diasize_set-browse-handle :
+     1035     define input  parameter p-browse-handle as handle   no-undo .
+     1036     define buffer buf_temp-browse-handle for temp-browse-handle .
+     1037     do
+     1038     on error undo, return error return-value
+     1039     :
+     1040       assign
+     1041         v-diasize-browse-handle = p-browse-handle
+     1042       .
+     1043       for each buf_temp-browse-handle
+     1044       on error undo, return error return-value
+     1045       :
+     1046         delete buf_temp-browse-handle .
+     1047       end.
+     1048     end.
+     1049   end procedure.
+     1050   procedure diasize_add_browse :
+     1051     define input  parameter p-browse-type   as character no-undo .
+     1052     define input  parameter p-browse-handle as handle    no-undo .
+     1053     define buffer buf_temp-browse-handle for temp-browse-handle .
+     1054     do
+     1055     on error undo, return error return-value
+     1056     :
+     1057       assign
+     1058         v-diasize-browse-number = v-diasize-browse-number + 1
+     1059       .
+     1060       create buf_temp-browse-handle .
+     1061       assign
+     1062         buf_temp-browse-handle.browse-type   = p-browse-type
+     1063         buf_temp-browse-handle.browse-number = v-diasize-browse-number
+     1064         buf_temp-browse-handle.browse-handle = p-browse-handle
+     1065       .
+     1066     end.
+     1067   end procedure.
+     1068   procedure diasize_init :
+     1069     define variable v-default-value    as logical   no-undo .
+     1070     define variable v-restore-saved    as logical   no-undo .
+     1071     define variable v-resize-value-str as character no-undo .
+     1072     do
+     1073     on error undo, return error return-value
+     1074     :
+     1075       do with frame Dialog-Frame
+     1076       :
+     1077         assign
+     1078           v-diasize-orig-frame-height = frame Dialog-Frame :height
+     1079           v-diasize-orig-frame-width  = frame Dialog-Frame :width
+     1080           v-diasize-browse-handle     = br-hndl-gds
+     1081         .
+     1082         create button v-diasize-resize-button
+     1083         assign
+     1084           parent        = frame Dialog-Frame :first-child
+     1085           label         = "s"
+     1086           height-pixels = 16
+     1087           width-pixels  = 16
+     1088           visible       = true
+     1089           sensitive     = true
+     1090           movable       = true
+     1091           triggers:
+     1092             on end-move persistent run diasize_end-move in this-procedure .
+     1093           end triggers.
+     1094         v-diasize-resize-button :load-mouse-pointer("SIZE") .
+     1095         v-diasize-resize-button :load-image("exe/grip.bmp":U) .
+     1096         v-diasize-resize-button :load-image-down("exe/grip.bmp":U) .
+     1097         v-diasize-resize-button :load-image-insensitive("exe/grip.bmp":U) .
+     1098         assign
+     1099           v-diasize-wndmax = false
+     1100         .
+     1101         if connected("ub") = true
+     1102         then do:
+     1103           define variable v-cntxt-db-num        as integer   no-undo .
+     1104           define variable v-cntxt-userid        as character no-undo .
+     1105           RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+     1106                                             , OUTPUT v-cntxt-userid
+     1107                                             ) .
+     1108           run gbl/wndpar_r.p
+     1109             (input  v-cntxt-db-num
+     1110             ,input  v-cntxt-userid
+     1111             ,input  'wndmax':U
+     1112             ,output v-diasize-wndmax
+     1113             ,output v-default-value
+     1114             ) .
+     1115         end.
+     1116         assign
+     1117           v-diasize-wndstore = false
+     1118         .
+     1119         if connected("ub") = true
+     1120         then do:
+     1121           run gbl/wndpar_r.p
+     1122             (input  v-cntxt-db-num
+     1123             ,input  v-cntxt-userid
+     1124             ,input  'wndstore':U
+     1125             ,output v-diasize-wndstore
+     1126             ,output v-default-value
+     1127             ) .
+     1128         end.
+     1129         assign
+     1130           v-diasize-proc-name = entry(1, program-name(2), '.')
+     1131         .
+     1132         if v-diasize-wndstore = true
+     1133         then do:
+     1134           assign
+     1135             v-restore-saved = false
+     1136           .
+     1137           if connected("ub") = true
+     1138           then do:
+     1139             run gbl/wndsizer.p
+     1140               (input  v-cntxt-db-num
+     1141               ,input  v-cntxt-userid
+     1142               ,input  v-diasize-proc-name
+     1143               ,input  'height':u
+     1144               ,output v-resize-value-str
+     1145               ) .
+     1146             if v-resize-value-str <> '':U
+     1147             then do:
+     1148               run diasize_change-height in this-procedure
+     1149                 (input  integer(v-resize-value-str)
+     1150                 ,input  true
+     1151                 ) .
+     1152               assign
+     1153                 v-restore-saved = true
+     1154               .
+     1155             end.
+     1156           end.
+     1157           if connected("ub") = true
+     1158           then do:
+     1159             run gbl/wndsizer.p
+     1160               (input  v-cntxt-db-num
+     1161               ,input  v-cntxt-userid
+     1162               ,input  v-diasize-proc-name
+     1163               ,input  'width':u
+     1164               ,output v-resize-value-str
+     1165               ) .
+     1166             if v-resize-value-str <> '':U
+     1167             then do:
+     1168               run diasize_change-width in this-procedure
+     1169                 (input  integer(v-resize-value-str)
+     1170                 ,input  true
+     1171                 ) .
+     1172               assign
+     1173                 v-restore-saved = true
+     1174               .
+     1175             end.
+     1176           end.
+     1177           if v-restore-saved <> true
+     1178           then do:
+     1179             if v-diasize-wndmax = true
+     1180             then do:
+     1181               run diasize_maximize in this-procedure
+     1182                 (input  true
+     1183                 ) .
+     1184             end.
+     1185           end.
+     1186         end.
+     1187         else do:
+     1188           if v-diasize-wndmax = true
+     1189           then do:
+     1190             run diasize_maximize in this-procedure
+     1191               (input  true
+     1192               ) .
+     1193           end.
+     1194         end.
+     1195       end.
+     1196     end.
+     1197   end procedure.
+     1198   procedure diasize_need-full-display :
+     1199     define output parameter p-need-full-display as logical   no-undo .
+     1200     do
+     1201     on error undo, return error return-value
+     1202     :
+     1203       assign
+     1204         p-need-full-display = v-diasize-need-full-display
+     1205       .
+     1206       assign
+     1207         v-diasize-need-full-display = false
+     1208       .
+     1209     end.
+     1210   end procedure.
+     1211   procedure get-context :
+     1212      define output parameter p-db-num as integer          no-undo.
+     1213      define output parameter p-user-id as character        no-undo.
+     1214      define variable v-login               as character    no-undo.
+     1215      define buffer buf_sys-ctrl    for ub.sys-ctrl .
+     1216      define buffer buf_user-login  for ub.user-login .
+     1217      do
+     1218      on error undo, return error
+     1219      :
+     1220            FIND FIRST buf_sys-ctrl no-lock.
+     1221            ASSIGN
+     1222               v-login = USERID("ub")
+     1223               p-db-num = buf_sys-ctrl.db-num
+     1224            .
+     1225            FIND FIRST buf_user-login
+     1226                 WHERE buf_user-login.db-num = p-db-num
+     1227                   AND buf_user-login.user-login = v-login
+     1228                 no-lock
+     1229                 no-error
+     1230                 .
+     1231            IF AVAILABLE buf_user-login
+     1232            THEN DO:
+     1233               assign
+     1234                  p-user-id = buf_user-login.user-id
+     1235               .
+     1236            END.
+     1237      end.
+     1238   end procedure.
+     1239     run diasize_init in this-procedure .
+     1240     RUN enable_UI.
+     1241     WAIT-FOR GO OF FRAME Dialog-Frame.
+     1242   END.
+     1243   RUN disable_UI.
+     1244   PROCEDURE create-br :
+     1245       if not valid-handle(bh-gds-egais) then do :
+     1246           message "Неверная ссылка на буффер ЕГАИС" view-as alert-box .
+     1247           return error .
+     1248       end.
+     1249       create query qh-gds-egais .
+     1250       qh-gds-egais:set-buffers(bh-gds-egais).
+     1251       qh-gds-egais:query-prepare (substitute("for each tt-gds-eg where tt-gds-EG.ms-base = '&1' and tt-gds-EG.proof = '&2' and trim(tt-gds-EG.alc-type-code) = '&3'", p-ms-base, p-proof, trim(p-alc-type-code) ) ).
+     1252       qh-gds-egais:query-open .
+     1253       create browse br-hndl-gds
+     1254           assign
+     1255               frame       = frame Dialog-Frame:handle
+     1256               query       = qh-gds-egais
+     1257               x           = 10
+     1258               y           = 40
+     1259               width       = 106
+     1260               height      = 10
+     1261               visible     = true
+     1262               read-only   = false
+     1263               sensitive   = true
+     1264               separators  = true
+     1265               column-resizable = true
+     1266       .
+     1267       v-diasize-browse-handle = br-hndl-gds.
+     1268       br-hndl-gds:add-like-column ("tt-gds-eg.gds-name") .
+     1269       br-hndl-gds:add-like-column ("tt-gds-eg.alc-code") .
+     1270       br-hndl-gds:get-browse-column (1):width-chars = 70.
+     1271       br-hndl-gds:get-browse-column (2):width-chars = 30.
+     1272       if qh-gds-egais:num-results > 0 then br-hndl-gds:refresh().
+     1273       br-hndl-gds:expandable = true.
+     1274   END PROCEDURE.
+     1275   PROCEDURE disable_UI :
+     1276     HIDE FRAME Dialog-Frame.
+     1277   END PROCEDURE.
+     1278   PROCEDURE enable_UI :
+     1279     ENABLE b-select b-cancel NameContext
+     1280         WITH FRAME Dialog-Frame.
+     1281     VIEW FRAME Dialog-Frame.
+     1282   END PROCEDURE.

@@ -1,0 +1,163 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-rvs-code          as character no-undo .
+        3   define input parameter p-action            as character no-undo .
+        4   define input parameter p-no-check-rvs-code as character no-undo .
+        5   define input parameter p-is-berate         as logical   no-undo .
+        6   define variable v-auto as logical no-undo.
+        7   define variable vss-revision    as character no-undo initial "$Revision$":U .
+        8   define variable vss-author      as character no-undo initial "$Author$":U .
+        9   define variable vss-date        as character no-undo initial "$Date$":U .
+       10   define variable vss-workfile    as character no-undo initial "$Workfile$":U .
+       11   define variable vss-archive     as character no-undo initial "$Archive$":U .
+       12   define variable vss-description as character no-undo initial "Блокировка и расблокировка товаров по документу сверки":U .
+       13   procedure vss-get-info :
+       14     define output parameter p-vss-revision    like vss-revision    no-undo .
+       15     define output parameter p-vss-author      like vss-author      no-undo .
+       16     define output parameter p-vss-date        like vss-date        no-undo .
+       17     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       18     define output parameter p-vss-archive     like vss-archive     no-undo .
+       19     define output parameter p-vss-description like vss-description no-undo .
+       20     assign
+       21       p-vss-revision    = vss-revision
+       22       p-vss-author      = vss-author
+       23       p-vss-date        = vss-date
+       24       p-vss-workfile    = vss-workfile
+       25       p-vss-archive     = vss-archive
+       26       p-vss-description = vss-description
+       27     .
+       28   end procedure.
+       29   procedure vss-get-parameters :
+       30     define output parameter p-vss-parameters as character no-undo .
+       31   end procedure.
+       32   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       33   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       34   define variable v-vssrevis-logger                   as handle    no-undo .
+       35   procedure vss-logevent :
+       36     define input  parameter p-extra-paramters as character no-undo .
+       37     define variable v-vssrevis-parameters as character no-undo .
+       38     do
+       39     on error undo, return error return-value
+       40     :
+       41       if  valid-handle(v-vssrevis-logger)
+       42       and v-vssrevis-logger :get-signature("logevent") <> ""
+       43       then do:
+       44         run vss-get-parameters in this-procedure
+       45           (output v-vssrevis-parameters
+       46           ).
+       47         run logevent in v-vssrevis-logger
+       48           (input vss-workfile
+       49           ,input vss-revision
+       50           ,input v-vssrevis-parameters
+       51           ,input p-extra-paramters
+       52           ).
+       53       end.
+       54     end.
+       55   end procedure.
+       56   assign
+       57     v-vssrevis-logger = g#vssrevis-logger
+       58   .
+       59   if  valid-handle(v-vssrevis-logger)
+       60   and v-vssrevis-logger :get-signature("logevent") <> ""
+       61   then do:
+       62     assign
+       63       v-vssrevis-logevent = true
+       64     .
+       65     run vss-logevent in this-procedure (input vss-description) .
+       66   end.
+       67   define new global shared variable g#language as character no-undo .
+       68   if g#language <> '' and g#language <> 'rus':U then do:
+       69     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       70   end.
+       71   main-block :
+       72   do transaction
+       73   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       74   on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+       75   on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+       76   :
+       77     find first ub.rvs-doc no-lock
+       78       where ub.rvs-doc.rvs-code = p-rvs-code
+       79       no-error .
+       80     if not available ub.rvs-doc then do:
+       81       if p-is-berate = yes then do:
+       82         message
+       83           vss-workfile vss-revision vss-description skip
+       84           "Ошибка задания входных параметров" skip
+       85           "Не найден документ сверки" skip
+       86           "Документ сверки" p-rvs-code skip
+       87         view-as alert-box error .
+       88       end.
+       89       undo main-block, return error substitute( '&1: не найден документ сверки "&2"', vss-workfile, p-rvs-code ) .
+       90     end.
+       91       find first  doc-attr where
+       92           doc-attr.doc-code = rvs-doc.rvs-code and
+       93           doc-attr.attr-code = "rvs-auto" and
+       94           doc-attr.attr-value = "Yes" no-lock no-error.
+       95       if available doc-attr then
+       96       do:
+       97           v-auto = yes .
+       98       end.
+       99       if v-auto <> yes then
+      100       do:
+      101           for each ub.rvs-line no-lock
+      102               where ub.rvs-line.rvs-code = ub.rvs-doc.rvs-code
+      103               on error undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      104               :
+      105               if num-entries(ub.rvs-doc.rvs-code, "-") = 3
+      106               and (p-action begins "assign-rvs-on=" or p-action begins "check-rvs-on=")
+      107               then do :
+      108                 if p-action begins "assign-rvs-on="
+      109                 then do :
+      110                   for first ub.pl-gds no-lock where ub.pl-gds.obj-type = ub.rvs-line.obj-type
+      111                                                 and ub.pl-gds.obj-code = ub.rvs-line.obj-code
+      112                                                 and ub.pl-gds.pl-code  = ub.rvs-line.pl-code
+      113                                                 and ub.pl-gds.gds-code = ub.rvs-line.gds-code
+      114                                                 and ub.pl-gds.rvs-on  <> logical(entry(2, p-action, "="))
+      115                   :
+      116                     if p-no-check-rvs-code = ? then p-no-check-rvs-code = "" .
+      117                     p-no-check-rvs-code = p-no-check-rvs-code + "," + ub.rvs-doc.rvs-code .
+      118                     p-no-check-rvs-code = trim(p-no-check-rvs-code, ",") .
+      119                     run trg/lockplgd.p
+      120                         ( input ub.rvs-line.obj-type
+      121                         , input ub.rvs-line.obj-code
+      122                         , input ub.rvs-line.pl-code
+      123                         , input ub.rvs-line.gds-code
+      124                         , input p-action
+      125                         , input p-no-check-rvs-code
+      126                         , input p-is-berate
+      127                         ) .
+      128                   end .
+      129                 end .
+      130                 if p-action begins "check-rvs-on="
+      131                 then do :
+      132                   for first ub.pl-gds no-lock where ub.pl-gds.obj-type = ub.rvs-line.obj-type
+      133                                                 and ub.pl-gds.obj-code = ub.rvs-line.obj-code
+      134                                                 and ub.pl-gds.pl-code  = ub.rvs-line.pl-code
+      135                                                 and ub.pl-gds.gds-code = ub.rvs-line.gds-code
+      136                                                 and ub.pl-gds.rvs-on   = logical(entry(2, p-action, "="))
+      137                   :
+      138                     run trg/lockplgd.p
+      139                         ( input ub.rvs-line.obj-type
+      140                         , input ub.rvs-line.obj-code
+      141                         , input ub.rvs-line.pl-code
+      142                         , input ub.rvs-line.gds-code
+      143                         , input p-action
+      144                         , input p-no-check-rvs-code
+      145                         , input p-is-berate
+      146                         ) .
+      147                   end .
+      148                 end .
+      149               end .
+      150               else do :
+      151                 run trg/lockplgd.p
+      152                     ( input ub.rvs-line.obj-type
+      153                     , input ub.rvs-line.obj-code
+      154                     , input ub.rvs-line.pl-code
+      155                     , input ub.rvs-line.gds-code
+      156                     , input p-action
+      157                     , input p-no-check-rvs-code
+      158                     , input p-is-berate
+      159                     ) .
+      160               end .
+      161           end.
+      162       end.
+      163   end.

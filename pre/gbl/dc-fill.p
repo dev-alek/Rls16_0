@@ -1,0 +1,214 @@
+block-level on error undo, throw.
+define input parameter par-run-name as character no-undo .
+define input parameter RS-list-method  as character no-undo .
+define input parameter RS-status as character no-undo .
+define input parameter line-mode as character no-undo .
+define input parameter  p-filter-var as character no-undo .
+define output parameter lns-cnt as integer no-undo .
+define output parameter line-rec as recid no-undo .
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+define variable vss-author      as character no-undo init "$Author: expertek $":U .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: dc-fill.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: gbl/dc-fill.p $":U .
+define variable vss-description as character no-undo init "Фильтр в списке дисконтных карт".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+define   shared variable g#auto as logical no-undo.
+define   shared variable g#news as logical no-undo.
+define   shared variable g#oxml as logical no-undo.
+define   shared variable g#esys as logical no-undo.
+define   shared variable g#news-source-db as integer no-undo.
+define   shared variable g#esys-source-esys as integer no-undo.
+define   shared variable g#db-num as integer   no-undo .
+define   shared variable g#userid as character no-undo .
+define   shared variable g#passwd as character no-undo .
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define shared temp-table dc-list no-undo like ub.dis-card
+  field to-del as logical
+  field order-num as integer
+  field fdec as decimal
+  field fint as integer
+  field flog as logical
+  field fchar as character
+  index pi  is primary unique d-card
+  index cn      card-num
+  index cli cli-type cli-code
+  index host-dscnt  emitent-host-code status_ d-pcnt
+  index host-type  emitent-host-code type d-pcnt
+  index oi order-num
+  .
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define  shared  temp-table dc-list-hist no-undo
+field list-table as character
+field id as integer
+field line as integer
+field hist-mode as character
+field des as character
+field num-recs as integer
+field option_ as character
+field item_ as character
+field status_ as character
+field num-add as integer
+field num-ignored as integer
+field done as logical
+field err_ as logical
+field err-mes as character
+index pi is primary
+id
+line
+index isdone
+done
+.
+define variable dsp-rs as char format "x(50)" no-undo.
+define variable glog as logical no-undo .
+define variable v-prepare-string as character no-undo .
+define query dc-fill for ub.dis-card.
+define frame abc
+dsp-rs no-label
+with view-as dialog-box SIDE-LABELS NO-UNDERLINE THREE-D SCROLLABLE
+TITLE par-run-name.
+view frame abc.
+display dsp-rs with frame abc.
+v-prepare-string = "for each ub.dis-card where true " + p-filter-var .
+glog = query dc-fill:handle:query-prepare(v-prepare-string) no-error.
+if not glog
+or error-status:error then do:
+  message
+  substitute("Ошибка при заполнении по фильтру&1:&2&1Выражение для Фильтра:&1&3"
+             , chr(10)
+             , error-status:get-message(1)
+             , v-prepare-string)
+  view-as alert-box error .
+  undo, return error .
+end.
+glog = query dc-fill:handle:query-open() no-error.
+if not glog
+or error-status:error then do:
+  message
+  substitute("Ошибка при заполнении по фильтру&1:&2&1Выражение для Фильтра:&1&3"
+             , chr(10)
+             , error-status:get-message(1)
+             , v-prepare-string)
+  view-as alert-box error .
+  undo, return error .
+end.
+REPEAT WITH FRAME abc:
+  query dc-fill:handle:GET-NEXT().
+  IF query dc-fill:handle:QUERY-OFF-END THEN LEAVE.
+  process events.
+  run ex-dc in this-procedure (input rs-list-method, input rs-status, input line-mode).
+end.
+glog = query dc-fill:handle:query-close() no-error.
+hide frame abc.
+define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+PROCEDURE ex-dc :
+define input parameter rs-list-method as character no-undo .
+define input parameter rs-status as character no-undo .
+define input parameter line-mode as character no-undo .
+if rs-list-method = "single":U or
+  (ub.dis-card.status_ = 'тек':U and (rs-status = 'тек':U or rs-status = 'все':U)) or
+  (ub.dis-card.status_ = 'удал':U and (rs-status = 'удал':U or rs-status = 'все':U)) or
+  (ub.dis-card.status_ = 'блок':U and (rs-status = 'блок':U or rs-status = 'все':U))
+  then do:
+  if line-mode = 'удаление':U or line-mode = 'ОСТАВИТЬ':U then do:
+    find first dc-list where
+               dc-list.d-card = ub.dis-card.d-card no-error.
+    if available dc-list then do:
+      if line-mode = 'удаление':U then do:
+        lns-cnt = lns-cnt + 1.
+        delete dc-list.
+      end.
+      else do:
+        if dc-list.to-del = ? then.
+        else do:
+          lns-cnt = lns-cnt + 1.
+          dc-list.to-del = ?.
+        end.
+      end.
+    end.
+  end.
+  else
+    if line-mode = 'ДОБАВЛЕНИЕ':U then do:
+define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+find dc-list
+  where dc-list.d-card = dis-card.d-card
+  no-error .
+if available dc-list then do:
+  assign
+    dc-list.to-del = no
+  .
+end.
+else do:
+  create dc-list .
+  buffer-copy dis-card to dc-list
+  assign
+    dc-list.to-del = no
+  .
+  assign
+    lns-cnt = lns-cnt + 1
+    line-rec = recid (dc-list)
+  .
+end.
+    end.
+  disp "Ждите..." + string (lns-cnt) @ dsp-rs with frame abc.
+end.
+end.

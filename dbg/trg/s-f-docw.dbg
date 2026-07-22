@@ -1,0 +1,183 @@
+        1   block-level on error undo, throw.
+        2   TRIGGER PROCEDURE FOR WRITE OF ub.schet-fact-doc OLD old_schet-fact-doc.
+        3   define variable vss-revision    as character no-undo init "$Revision$":U .
+        4   define variable vss-author      as character no-undo init "$Author$":U .
+        5   define variable vss-date        as character no-undo init "$Date$":U .
+        6   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        7   define variable vss-archive     as character no-undo init "$Archive$":U .
+        8   define variable vss-description as character no-undo init "Триггер на запись счета-фактуры".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27       assign
+       28         p-vss-parameters = substitute('&1|&2|&3', ub.schet-fact-doc.doc-code, ub.schet-fact-doc.doc-date, ub.schet-fact-doc.status_)
+       29       .
+       30   end procedure.
+       31   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       32   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       33   define variable v-vssrevis-logger                   as handle    no-undo .
+       34   procedure vss-logevent :
+       35     define input  parameter p-extra-paramters as character no-undo .
+       36     define variable v-vssrevis-parameters as character no-undo .
+       37     do
+       38     on error undo, return error return-value
+       39     :
+       40       if  valid-handle(v-vssrevis-logger)
+       41       and v-vssrevis-logger :get-signature("logevent") <> ""
+       42       then do:
+       43         run vss-get-parameters in this-procedure
+       44           (output v-vssrevis-parameters
+       45           ).
+       46         run logevent in v-vssrevis-logger
+       47           (input vss-workfile
+       48           ,input vss-revision
+       49           ,input v-vssrevis-parameters
+       50           ,input p-extra-paramters
+       51           ).
+       52       end.
+       53     end.
+       54   end procedure.
+       55   assign
+       56     v-vssrevis-logger = g#vssrevis-logger
+       57   .
+       58   if  valid-handle(v-vssrevis-logger)
+       59   and v-vssrevis-logger :get-signature("logevent") <> ""
+       60   then do:
+       61     assign
+       62       v-vssrevis-logevent = true
+       63     .
+       64     run vss-logevent in this-procedure (input vss-description) .
+       65   end.
+       66   define new global shared variable g#language as character no-undo .
+       67   if g#language <> '' and g#language <> 'rus':U then do:
+       68     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       69   end.
+       70   define new global shared variable g#library  as handle no-undo .
+       71   define new global shared variable g#library2 as handle no-undo .
+       72   define   shared variable g#auto as logical no-undo.
+       73   define   shared variable g#news as logical no-undo.
+       74   define   shared variable g#oxml as logical no-undo.
+       75   define   shared variable g#esys as logical no-undo.
+       76   define   shared variable g#news-source-db as integer no-undo.
+       77   define   shared variable g#esys-source-esys as integer no-undo.
+       78   define   shared variable g#db-num as integer   no-undo .
+       79   define   shared variable g#userid as character no-undo .
+       80   define   shared variable g#passwd as character no-undo .
+       81   define buffer buf_sysconf for ub.sysconf  .
+       82   define variable v-s-f-office       as logical   no-undo .
+       83   define variable p-sys-time1         as character no-undo .
+       84   define buffer buf_c-schet-fact-doc  for ub.c-schet-fact-doc.
+       85   define buffer buf_c-schet-fact-line for ub.c-schet-fact-line.
+       86   define buffer buf_schet-fact-line   for ub.schet-fact-line.
+       87   main-block :
+       88   do transaction
+       89   on error undo main-block, return error
+       90   :
+       91   find first  buf_sysconf no-lock where
+       92               buf_sysconf.host-code = ub.schet-fact-doc.host-code no-error .
+       93   if error-status :error then do:
+       94       message
+       95       vss-workfile vss-revision vss-description skip
+       96       error-status :get-message(1) skip
+       97       return-value skip
+       98       ""
+       99       view-as alert-box error
+      100       .
+      101       undo,return error .
+      102   end.
+      103   v-s-f-office =  buf_sysconf.gen-s-f-office .
+      104       if v-s-f-office = false  then do:
+      105         if not g#news and g#db-num <> 0 then do:
+      106           if ub.schet-fact-doc.status_ = 'факт':U then do:
+      107             run proc-hist in this-procedure .
+      108             run str/callnews.p (input 'schet-fact-doc':U , input (buffer ub.schet-fact-doc:handle) ) no-error .
+      109             if error-status:error then do:
+      110               message
+      111                 vss-workfile vss-revision vss-description skip   "Ошибка при передаче в новости счета-фактуры" skip
+      112                 error-status :get-message(1) skip    return-value skip     view-as alert-box error .
+      113               undo, return error.
+      114             end.
+      115             run str/callnews.p (input 'c-schet-fact-doc':U , input (buffer buf_c-schet-fact-doc:handle) )  no-error .
+      116             if error-status:error then do:
+      117               message
+      118                 vss-workfile vss-revision vss-description skip   "Ошибка при передаче в новости истории счета-фактуры" skip
+      119                 error-status :get-message(1) skip    return-value skip     view-as alert-box error .
+      120               undo, return error.
+      121             end.
+      122            end.
+      123         end.
+      124         if not g#news and  g#db-num = 0
+      125            and ub.schet-fact-doc.status_ = 'факт':U then do:
+      126             if  ub.schet-fact-doc.db-num <> 0  then do:
+      127                   run trg/cmd-s-fr.p (input ub.schet-fact-doc.doc-code, input ub.schet-fact-doc.db-num) no-error .
+      128                   if error-status :error then do:
+      129                       message
+      130                         vss-workfile vss-revision vss-description skip
+      131                         error-status :get-message(1) skip
+      132                         return-value skip
+      133                         ""
+      134                         view-as alert-box error
+      135                       .
+      136                       return error.
+      137                   end.
+      138             end.
+      139             run proc-hist in this-procedure .
+      140         end.
+      141       end.
+      142       else do:
+      143         if not g#news and ub.schet-fact-doc.status_ = 'факт':U then do:
+      144            run proc-hist in this-procedure .
+      145         end.
+      146       end.
+      147   end.
+      148   procedure proc-hist :
+      149     do
+      150     on error undo, return error return-value
+      151     :
+      152     create buf_c-schet-fact-doc .
+      153     BUFFER-COPY ub.schet-fact-doc TO buf_c-schet-fact-doc .
+      154     assign  buf_c-schet-fact-doc.chip-num  = next-value (s-corr-chip, ub) .
+      155   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      156   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curdburt in g#library
+      157     (output buf_c-schet-fact-doc.corr-user-db-num
+      158     ,output buf_c-schet-fact-doc.corr-user-name
+      159     ,output buf_c-schet-fact-doc.corr-date
+      160     ,output p-sys-time1
+      161     ,output buf_c-schet-fact-doc.corr-time
+      162     )  .
+      163     for each buf_schet-fact-line no-lock
+      164       where buf_schet-fact-line.db-num   = ub.schet-fact-doc.db-num
+      165         and buf_schet-fact-line.doc-code = ub.schet-fact-doc.doc-code
+      166       :
+      167       create buf_c-schet-fact-line .
+      168       BUFFER-COPY buf_schet-fact-line TO buf_c-schet-fact-line .
+      169       assign
+      170         buf_c-schet-fact-line.chip-num         = buf_c-schet-fact-doc.chip-num
+      171         buf_c-schet-fact-line.corr-user-db-num = buf_c-schet-fact-doc.corr-user-db-num
+      172       .
+      173     end.
+      174       run str/calloxml.p ( input 'update':U, input 'schet-fact-doc':U, input ( buffer ub.schet-fact-doc:handle )) no-error.
+      175       if error-status :error then do:
+      176         undo, return error substitute( "&2&1Ошибка при отправке записи в систему OpenXML&1&3&1&4", chr(10), vss-workfile, return-value, error-status :get-message ( 1 ) ).
+      177       end.
+      178       run str/calloxml.p ( input 'update':U, input 'c-schet-fact-doc':U, input ( buffer buf_c-schet-fact-doc:handle )) no-error.
+      179       if error-status :error then do:
+      180         undo, return error substitute( "&2&1Ошибка при отправке записи в систему OpenXML&1&3&1&4", chr(10), vss-workfile, return-value, error-status :get-message ( 1 ) ).
+      181       end.
+      182     end.
+      183   end procedure.

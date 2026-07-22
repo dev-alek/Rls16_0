@@ -1,0 +1,110 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: 8af0ca92507d, 852, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: EShklyar $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Wed Oct 19 12:26:26 2016 +0300 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: limcontr.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: str/limcontr.p $":U .
+        7   define variable vss-description as character no-undo init "проверка на превышение лимита кредита по договору".
+        8   procedure vss-get-info :
+        9     define output parameter p-vss-revision    like vss-revision    no-undo .
+       10     define output parameter p-vss-author      like vss-author      no-undo .
+       11     define output parameter p-vss-date        like vss-date        no-undo .
+       12     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       13     define output parameter p-vss-archive     like vss-archive     no-undo .
+       14     define output parameter p-vss-description like vss-description no-undo .
+       15     assign
+       16       p-vss-revision    = vss-revision
+       17       p-vss-author      = vss-author
+       18       p-vss-date        = vss-date
+       19       p-vss-workfile    = vss-workfile
+       20       p-vss-archive     = vss-archive
+       21       p-vss-description = vss-description
+       22     .
+       23   end procedure.
+       24   procedure vss-get-parameters :
+       25     define output parameter p-vss-parameters as character no-undo .
+       26   end procedure.
+       27   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       28   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       29   define variable v-vssrevis-logger                   as handle    no-undo .
+       30   procedure vss-logevent :
+       31     define input  parameter p-extra-paramters as character no-undo .
+       32     define variable v-vssrevis-parameters as character no-undo .
+       33     do
+       34     on error undo, return error return-value
+       35     :
+       36       if  valid-handle(v-vssrevis-logger)
+       37       and v-vssrevis-logger :get-signature("logevent") <> ""
+       38       then do:
+       39         run vss-get-parameters in this-procedure
+       40           (output v-vssrevis-parameters
+       41           ).
+       42         run logevent in v-vssrevis-logger
+       43           (input vss-workfile
+       44           ,input vss-revision
+       45           ,input v-vssrevis-parameters
+       46           ,input p-extra-paramters
+       47           ).
+       48       end.
+       49     end.
+       50   end procedure.
+       51   assign
+       52     v-vssrevis-logger = g#vssrevis-logger
+       53   .
+       54   if  valid-handle(v-vssrevis-logger)
+       55   and v-vssrevis-logger :get-signature("logevent") <> ""
+       56   then do:
+       57     assign
+       58       v-vssrevis-logevent = true
+       59     .
+       60     run vss-logevent in this-procedure (input vss-description) .
+       61   end.
+       62   define new global shared variable g#language as character no-undo .
+       63   if g#language <> '' and g#language <> 'rus':U then do:
+       64     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       65   end.
+       66   define new global shared variable g#library  as handle no-undo .
+       67   define new global shared variable g#library2 as handle no-undo .
+       68   define input  parameter p-host-code     as integer   no-undo .
+       69   define input  parameter p-contract-code as integer   no-undo .
+       70   define input  parameter p-type          as integer   no-undo .
+       71   define input  parameter p-sum-rubl      as decimal   no-undo .
+       72   define input  parameter p-sum-base      as decimal   no-undo .
+       73   define buffer buf_contract for ub.contract.
+       74   define variable v-exch-rate   as decimal   no-undo .
+       75   define variable v-exch-scale  as integer   no-undo .
+       76   define variable v-curr-abbr   as character no-undo .
+       77   define variable v-kredit-sum  as decimal   no-undo .
+       78   find first buf_contract no-lock
+       79     where buf_contract.host-code     = p-host-code
+       80       and buf_contract.contract-code = p-contract-code
+       81   no-error .
+       82   if available buf_contract and buf_contract.kredit-limit = yes then do:
+       83     assign v-kredit-sum = buf_contract.kredit-sum .
+       84     if buf_contract.curr-code > 0 then do:
+       85   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       86   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run exchrate in g#library
+       87     (input  buf_contract.curr-code
+       88     ,input  today
+       89     ,output v-exch-rate
+       90     ,output v-exch-scale
+       91     ,output v-curr-abbr
+       92     )  .
+       93       assign v-kredit-sum = v-kredit-sum * v-exch-rate / v-exch-scale .
+       94     end.
+       95       case p-type :
+       96         when 0 then do:
+       97           if buf_contract.balance-fo-rubl - buf_contract.balance-plat-rubl + p-sum-rubl > v-kredit-sum then
+       98             return  ERROR substitute('Превышен лимит кредита по договору (вн.№) &1 : текущий баланс &2 руб; лимит &3 руб; сумма по документу: &4 руб', p-contract-code, buf_contract.balance-fo-rubl - buf_contract.balance-plat-rubl, v-kredit-sum , p-sum-base) .
+       99         end.
+      100         when 1 then do:
+      101           if buf_contract.balance-fo-base - buf_contract.balance-plat-base + p-sum-base > v-kredit-sum then
+      102             return  ERROR substitute('Превышен лимит кредита по договору (вн.№) &1 : текущий баланс &2 ; лимит &3 ; сумма по документу: &4 ', p-contract-code, buf_contract.balance-fo-base - buf_contract.balance-plat-base, v-kredit-sum , p-sum-base) .
+      103         end.
+      104         when 2 then do:
+      105           if buf_contract.balance-fo-rubl - buf_contract.balance-plat-rubl + p-sum-rubl > v-kredit-sum or
+      106              buf_contract.balance-fo-base - buf_contract.balance-plat-base + p-sum-base > v-kredit-sum then
+      107             return  ERROR substitute('Превышен лимит кредита по договору (вн.№) &1 : текущий баланс &2 руб; лимит &3 руб; сумма по документу: &4 руб', p-contract-code, buf_contract.balance-fo-rubl - buf_contract.balance-plat-rubl, v-kredit-sum , p-sum-rubl) .
+      108         end.
+      109       end.
+      110     end.

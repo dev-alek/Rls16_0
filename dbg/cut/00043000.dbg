@@ -1,0 +1,652 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: 36493b7e3299, 155, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: EShklyar $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Tue Feb 17 18:03:53 2015 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00043000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cut/00043000.p $".
+        7   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 8.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define  shared temp-table tt-objs no-undo
+       13     field obj-type as character
+       14     field obj-code as integer
+       15     index pi is unique primary obj-type obj-code
+       16     .
+       17   define input parameter vartype-cut            as integer   no-undo.
+       18   define input parameter varlist-db             as character no-undo.
+       19   define input parameter vardate-actual-goods   as date      no-undo.
+       20   define input parameter vardate-actual-docs    as date      no-undo.
+       21   define input parameter vardate-actual-findoc  as date      no-undo.
+       22   define input parameter vardate-output-zone    as date      no-undo.
+       23   define input parameter varstay-recipe-goods   as logical   no-undo.
+       24   define input parameter varstay-weight-goods   as logical   no-undo.
+       25   define input parameter varnot-copy-del-goods  as logical   no-undo.
+       26   define input parameter varstay-history        as logical   no-undo.
+       27   define input parameter vargen-file            as character no-undo.
+       28   define stream str-gen.
+       29   output stream str-gen to vargen-file append.
+       30   if not connected("src") then do:
+       31      return error "Нет коннекта с базой 'src'.".
+       32   end.
+       33   if not connected("dst") then do:
+       34      return error "Нет коннекта с базой 'dst'.".
+       35   end.
+       36   find src.sys-ctrl no-lock.
+       37   if not available src.sys-ctrl then do:
+       38      return error "В базе данных src не найдена уникальная запись sys-ctrl.".
+       39   end.
+       40   if src.sys-ctrl.db-num <> 0 then do:
+       41      return error "Пакет обрезания работает только в главной базе данных. В данной версии удаленные БД создаются выгрузкой из главных.".
+       42   end.
+       43   if vardate-actual-docs <> ? and
+       44      (vardate-actual-goods   > vardate-actual-docs or
+       45       vardate-actual-goods   = ? )   then do:
+       46         return error SUBSTITUTE("Ошибка при задании дат актуальности." +
+       47                                 "Дата актуальности товаров &1."        +
+       48                                 "Дата актуальности документов &2."     +
+       49                                 "Дата актуальности документов должна быть больше или равна дат актуальностей товаров.",
+       50                                 vardate-actual-goods,
+       51                                 vardate-actual-docs).
+       52   end.
+       53   define buffer old-trn-doc        for src.trn-doc        .
+       54   define buffer new-trn-doc        for dst.trn-doc        .
+       55   define buffer old-doc-line       for src.doc-line       .
+       56   define buffer new-doc-line       for dst.doc-line       .
+       57   define buffer old-doc-line-attr  for src.doc-line-attr  .
+       58   define buffer new-doc-line-attr  for dst.doc-line-attr  .
+       59   define buffer old-doc-pl         for src.doc-pl         .
+       60   define buffer new-doc-pl         for dst.doc-pl         .
+       61   define buffer old-doc-pl-attr    for src.doc-pl-attr    .
+       62   define buffer new-doc-pl-attr    for dst.doc-pl-attr    .
+       63   define buffer old-doc-pl-pump    for src.doc-pl-pump    .
+       64   define buffer new-doc-pl-pump    for dst.doc-pl-pump    .
+       65   define buffer old-doc-pl-pump-attr    for src.doc-pl-pump-attr    .
+       66   define buffer new-doc-pl-pump-attr    for dst.doc-pl-pump-attr    .
+       67   define buffer old-doc-fbr-gds    for src.doc-fbr-gds    .
+       68   define buffer new-doc-fbr-gds    for dst.doc-fbr-gds    .
+       69   define buffer old-gds-dtl-attr   for src.gds-dtl-attr   .
+       70   define buffer old-gds-dtl        for src.gds-dtl        .
+       71   define buffer new-gds-dtl-attr   for dst.gds-dtl-attr        .
+       72   define buffer new-gds-dtl        for dst.gds-dtl        .
+       73   define buffer old-parts          for src.parts          .
+       74   define buffer new-parts          for dst.parts          .
+       75   define buffer old-doc-prts       for src.doc-prts       .
+       76   define buffer new-doc-prts       for dst.doc-prts       .
+       77   define buffer old-doc-prts-attr  for src.doc-prts-attr       .
+       78   define buffer new-doc-prts-attr  for dst.doc-prts-attr       .
+       79   define buffer old-inv-doc        for src.inv-doc        .
+       80   define buffer new-inv-doc        for dst.inv-doc        .
+       81   define buffer old-inv-doc-attr   for src.inv-doc-attr   .
+       82   define buffer new-inv-doc-attr   for dst.inv-doc-attr   .
+       83   define buffer old-inv-line       for src.inv-line       .
+       84   define buffer new-inv-line       for dst.inv-line       .
+       85   define buffer old-c-inv-line     for src.c-inv-line       .
+       86   define buffer new-c-inv-line     for dst.c-inv-line       .
+       87   define buffer old-inv-line-attr  for src.inv-line-attr  .
+       88   define buffer new-inv-line-attr  for dst.inv-line-attr  .
+       89   define buffer old-chk-doc        for src.chk-doc        .
+       90   define buffer new-chk-doc        for dst.chk-doc        .
+       91   define buffer old-chk-gds        for src.chk-gds        .
+       92   define buffer new-chk-gds        for dst.chk-gds        .
+       93   define buffer old-chk-gds-pay        for src.chk-gds-pay        .
+       94   define buffer new-chk-gds-pay        for dst.chk-gds-pay        .
+       95   define buffer old-chk-gds-attr        for src.chk-gds-attr        .
+       96   define buffer new-chk-gds-attr        for dst.chk-gds-attr        .
+       97   define buffer old-chk-pay        for src.chk-pay        .
+       98   define buffer new-chk-pay        for dst.chk-pay        .
+       99   define buffer old-chk-pay-attr        for src.chk-pay-attr        .
+      100   define buffer new-chk-pay-attr        for dst.chk-pay-attr        .
+      101   define buffer old-chk-discnt     for src.chk-discnt     .
+      102   define buffer new-chk-discnt     for dst.chk-discnt     .
+      103   define buffer old-chk-discnt-attr for src.chk-discnt-attr .
+      104   define buffer new-chk-discnt-attr for dst.chk-discnt-attr  .
+      105   define buffer old-chk-doc-attr   for src.chk-doc-attr   .
+      106   define buffer new-chk-doc-attr   for dst.chk-doc-attr   .
+      107   define buffer old-c-chk-doc      for src.c-chk-doc        .
+      108   define buffer new-c-chk-doc      for dst.c-chk-doc        .
+      109   define buffer old-c-chk-gds      for src.c-chk-gds        .
+      110   define buffer new-c-chk-gds      for dst.c-chk-gds        .
+      111   define buffer old-c-chk-pay      for src.c-chk-pay        .
+      112   define buffer new-c-chk-pay      for dst.c-chk-pay        .
+      113   define buffer old-c-chk-discnt   for src.c-chk-discnt     .
+      114   define buffer new-c-chk-discnt   for dst.c-chk-discnt     .
+      115   define buffer old-c-chk-doc-attr for src.c-chk-doc-attr   .
+      116   define buffer new-c-chk-doc-attr for dst.c-chk-doc-attr   .
+      117   define buffer old-inkas          for src.inkas          .
+      118   define buffer new-inkas          for dst.inkas          .
+      119   define buffer old-c-inkas        for src.c-inkas          .
+      120   define buffer new-c-inkas        for dst.c-inkas          .
+      121   define buffer old-inkas-pay      for src.inkas-pay      .
+      122   define buffer new-inkas-pay      for dst.inkas-pay      .
+      123   define buffer old-c-inkas-pay      for src.c-inkas-pay      .
+      124   define buffer new-c-inkas-pay      for dst.c-inkas-pay      .
+      125   define buffer old-inkas-pay-desk for src.inkas-pay-desk .
+      126   define buffer new-inkas-pay-desk for dst.inkas-pay-desk .
+      127   define buffer old-c-inkas-pay-desk for src.c-inkas-pay-desk .
+      128   define buffer new-c-inkas-pay-desk for dst.c-inkas-pay-desk .
+      129   define buffer old-inkas-pay-attr      for src.inkas-pay-attr      .
+      130   define buffer new-inkas-pay-attr      for dst.inkas-pay-attr      .
+      131   define buffer old-inkas-pay-desk-attr for src.inkas-pay-desk-attr .
+      132   define buffer new-inkas-pay-desk-attr for dst.inkas-pay-desk-attr .
+      133   define buffer old-inkas-pay-wth      for src.inkas-pay-wth      .
+      134   define buffer new-inkas-pay-wth      for dst.inkas-pay-wth      .
+      135   define buffer old-c-inkas-pay-wth    for src.c-inkas-pay-wth  .
+      136   define buffer new-c-inkas-pay-wth    for dst.c-inkas-pay-wth  .
+      137   define buffer old-sale-doc       for src.sale-doc       .
+      138   define buffer new-sale-doc       for dst.sale-doc       .
+      139   define buffer old-sale-doc-attr  for src.sale-doc-attr  .
+      140   define buffer new-sale-doc-attr  for dst.sale-doc-attr  .
+      141   define buffer old-c-sale-doc       for src.c-sale-doc       .
+      142   define buffer new-c-sale-doc       for dst.c-sale-doc       .
+      143   define buffer old-edi-status   for src.edi-status  .
+      144   define buffer new-edi-status   for dst.edi-status  .
+      145   define buffer new-shop           for dst.shop         .
+      146   define buffer new-store          for dst.store        .
+      147   define buffer new-goods          for dst.goods        .
+      148   do
+      149   on error undo, return error
+      150   :
+      151     on write of dst.trn-doc         override do: end.
+      152     on write of dst.doc-line        override do: end.
+      153     on write of dst.doc-line-attr   override do: end.
+      154     on write of dst.doc-pl          override do: end.
+      155     on write of dst.doc-pl-attr     override do: end.
+      156     on write of dst.doc-pl-pump     override do: end.
+      157     on write of dst.doc-pl-pump-attr override do: end.
+      158     on write of dst.doc-fbr-gds     override do: end.
+      159     on write of dst.gds-dtl         override do: end.
+      160     on write of dst.gds-dtl-attr    override do: end.
+      161     on write of dst.parts           override do: end.
+      162     on write of dst.doc-prts        override do: end.
+      163     on write of dst.doc-prts-attr   override do: end.
+      164     on write of dst.inv-doc         override do: end.
+      165     on write of dst.inv-doc-attr    override do: end.
+      166     on write of dst.inv-line        override do: end.
+      167     on write of dst.c-inv-line      override do: end.
+      168     on write of dst.inv-line-attr   override do: end.
+      169     on write of dst.chk-doc         override do: end.
+      170     on write of dst.chk-doc-attr    override do: end.
+      171     on write of dst.chk-gds         override do: end.
+      172     on write of dst.chk-gds-attr    override do: end.
+      173     on write of dst.chk-gds-pay     override do: end.
+      174     on write of dst.chk-pay         override do: end.
+      175     on write of dst.chk-pay-attr    override do: end.
+      176     on write of dst.chk-discnt      override do: end.
+      177     on write of dst.chk-discnt-attr override do: end.
+      178     on write of dst.c-chk-doc       override do: end.
+      179     on write of dst.c-chk-doc-attr  override do: end.
+      180     on write of dst.c-chk-gds       override do: end.
+      181     on write of dst.c-chk-pay       override do: end.
+      182     on write of dst.c-chk-discnt    override do: end.
+      183     on write of dst.inkas           override do: end.
+      184     on write of dst.c-inkas         override do: end.
+      185     on write of dst.inkas-pay       override do: end.
+      186     on write of dst.c-inkas-pay       override do: end.
+      187     on write of dst.inkas-pay-desk  override do: end.
+      188     on write of dst.c-inkas-pay-desk  override do: end.
+      189     on write of dst.inkas-pay-attr  override do: end.
+      190     on write of dst.inkas-pay-desk-attr override do: end.
+      191     on write of dst.inkas-pay-wth    override do: end.
+      192     on write of dst.c-inkas-pay-wth  override do: end.
+      193     on write of dst.sale-doc        override do: end.
+      194     on write of dst.sale-doc-attr   override do: end.
+      195     on write of dst.c-sale-doc      override do: end.
+      196    on write of dst.edi-status      override do: end.
+      197     define buffer new-db      for dst.db .
+      198     define buffer new-clients for dst.clients .
+      199     for each new-db no-lock
+      200     ,each new-clients no-lock
+      201       where new-clients.db-num = new-db.db-num
+      202     :
+      203       if vardate-actual-docs <> ? then do:
+      204         if vartype-cut = 1 then do:
+      205           find first tt-objs where tt-objs.obj-type = new-clients.obj-type and
+      206                                    tt-objs.obj-code = new-clients.obj-code no-error.
+      207         end.
+      208         if vartype-cut = 0      or
+      209            (vartype-cut = 1 and available tt-objs) then do:
+      210           for each old-trn-doc where old-trn-doc.obj-type   = new-clients.obj-type  and
+      211                                      old-trn-doc.obj-code   = new-clients.obj-code and
+      212                                      old-trn-doc.status_    = 'факт':U              and
+      213                                      old-trn-doc.fact-date >= vardate-actual-docs  no-lock
+      214           use-index stat-fact
+      215           on error undo, return error
+      216           :
+      217             run copy-body in this-procedure.
+      218           end.
+      219         end.
+      220         else do:
+      221           for each old-trn-doc where old-trn-doc.obj-type   = new-clients.obj-type  and
+      222                                      old-trn-doc.obj-code   = new-clients.obj-code and
+      223                                      old-trn-doc.status_    = 'факт':U
+      224           use-index stat-fact
+      225           on error undo, return error
+      226           :
+      227             run copy-body in this-procedure.
+      228           end.
+      229         end.
+      230       end.
+      231       for each new-goods no-lock
+      232       :
+      233         for each old-parts no-lock
+      234           where old-parts.obj-type  = new-clients.obj-type
+      235             and old-parts.obj-code  = new-clients.obj-code
+      236             and old-parts.artic     = new-goods.artic
+      237             and old-parts.prod-type = new-goods.prod-type
+      238             and old-parts.prod-code = new-goods.prod-code
+      239             and old-parts.status_   = false
+      240             and old-parts.rsrv-free = true
+      241             and old-parts.in-code   <> old-parts.out-code
+      242             and old-parts.qnty      <> 0
+      243         on error undo, return error
+      244         :
+      245           find first new-parts
+      246             where new-parts.obj-type  = old-parts.obj-type
+      247               and new-parts.obj-code  = old-parts.obj-code
+      248               and new-parts.artic     = old-parts.artic
+      249               and new-parts.prod-type = old-parts.prod-type
+      250               and new-parts.prod-code = old-parts.prod-code
+      251               and new-parts.in-code   = old-parts.in-code
+      252               and new-parts.out-code  = 'free-zone':U
+      253               and new-parts.part-code = old-parts.part-code
+      254             no-error .
+      255           if not available new-parts then do:
+      256             create new-parts.
+      257             buffer-copy old-parts to new-parts
+      258             assign
+      259               new-parts.out-code  = 'free-zone':U
+      260               new-parts.qnty      = 0
+      261               new-parts.fact-qnty = 0
+      262               new-parts.cli-qnty  = 0
+      263               new-parts.real-qnty = 0
+      264             .
+      265           end.
+      266           define variable v-parts-qnty     as decimal   no-undo .
+      267           define variable v-parts-cli-qnty as decimal   no-undo .
+      268           if old-parts.out-code = 'free-zone':U then do:
+      269             assign
+      270               v-parts-qnty     = old-parts.qnty
+      271               v-parts-cli-qnty = old-parts.cli-qnty
+      272             .
+      273           end.
+      274           else do:
+      275             assign
+      276               v-parts-qnty     = abs(old-parts.qnty)
+      277               v-parts-cli-qnty = abs(old-parts.cli-qnty)
+      278             .
+      279           end.
+      280           assign
+      281             new-parts.qnty      = new-parts.qnty      + v-parts-qnty
+      282             new-parts.fact-qnty = new-parts.qnty
+      283             new-parts.real-qnty = new-parts.qnty
+      284             new-parts.cli-qnty  = new-parts.cli-qnty  + v-parts-cli-qnty
+      285           .
+      286         end.
+      287         define buffer new_out_parts for dst.parts .
+      288         for each new-parts
+      289           where new-parts.obj-type  = new-clients.obj-type
+      290             and new-parts.obj-code  = new-clients.obj-code
+      291             and new-parts.artic     = new-goods.artic
+      292             and new-parts.prod-type = new-goods.prod-type
+      293             and new-parts.prod-code = new-goods.prod-code
+      294             and new-parts.out-code  = 'free-zone':U
+      295             and new-parts.fact-qnty < 0
+      296         on error undo, return error
+      297         :
+      298           if vardate-output-zone = ? or
+      299              new-parts.fact-date < vardate-output-zone then do:
+      300             create new_out_parts .
+      301             buffer-copy new-parts to new_out_parts
+      302             assign
+      303               new_out_parts.out-code  = 'out-zone':U
+      304               new_out_parts.rsrv-free = false
+      305               new_out_parts.qnty      = abs(new-parts.fact-qnty)
+      306               new_out_parts.fact-qnty = abs(new-parts.fact-qnty)
+      307               new_out_parts.real-qnty = abs(new-parts.fact-qnty)
+      308             .
+      309           end.
+      310         end.
+      311       end.
+      312     end.
+      313     for each old-chk-discnt-attr,
+      314           first new-chk-doc no-lock where
+      315                 new-chk-doc.doc-code = old-chk-discnt-attr.doc-code:
+      316       create new-chk-discnt-attr.
+      317       buffer-copy old-chk-discnt-attr to new-chk-discnt-attr.
+      318     end.
+      319     for each old-chk-gds-attr,
+      320           first new-chk-doc no-lock where
+      321                 new-chk-doc.doc-code = old-chk-gds-attr.doc-code:
+      322       create new-chk-gds-attr.
+      323       buffer-copy old-chk-gds-attr to new-chk-gds-attr.
+      324     end.
+      325     for each old-chk-pay-attr,
+      326           first new-chk-doc no-lock where
+      327                 new-chk-doc.doc-code = old-chk-pay-attr.doc-code:
+      328       create new-chk-pay-attr.
+      329       buffer-copy old-chk-pay-attr to new-chk-pay-attr.
+      330     end.
+      331     output stream str-gen close.
+      332     return "Произведен экспорт таблиц: trn-doc doc-line doc-line-attr doc-pl doc-pl-attr doc-pl-pump doc-pl-pump-attr doc-fbr-gds gds-dtl parts doc-prts ~
+      333     inv-doc  inv-doc-attr inv-line c-inv-line inv-line-attr trn-tax chk-doc chk-gds chk-gds-attr chk-gds-pay chk-pay chk-pay-attr chk-discnt chk-discnt-attr ~
+      334     inkas c-inkas inkas-pay c-inkas-pay inkas-pay-desk c-inkas-pay-desk inkas-pay-attr inkas-pay-desk-attr inkas-pay-wth c-inkas-pay-wth ~
+      335      sale-doc sale-doc-attr c-sale-doc edi-status.".
+      336   end.
+      337   procedure copy-body:
+      338   create new-trn-doc.
+      339   buffer-copy old-trn-doc to new-trn-doc.
+      340   for each old-doc-line
+      341     where old-doc-line.doc-code = new-trn-doc.doc-code no-lock
+      342   on error undo, return error
+      343   :
+      344       create new-doc-line.
+      345       buffer-copy old-doc-line to new-doc-line.
+      346   end.
+      347   for each old-doc-line-attr
+      348     where old-doc-line-attr.doc-code  = new-trn-doc.doc-code no-lock
+      349   on error undo, return error
+      350   :
+      351       create new-doc-line-attr.
+      352       buffer-copy old-doc-line-attr to new-doc-line-attr.
+      353   end.
+      354   for each old-doc-pl
+      355     where old-doc-pl.out-code  = new-trn-doc.doc-code no-lock
+      356   on error undo, return error
+      357   :
+      358       create new-doc-pl.
+      359       buffer-copy old-doc-pl to new-doc-pl.
+      360   end.
+      361   for each old-doc-pl-attr
+      362     where old-doc-pl-attr.out-code  = new-trn-doc.doc-code no-lock
+      363   on error undo, return error
+      364   :
+      365       create new-doc-pl-attr.
+      366       buffer-copy old-doc-pl-attr to new-doc-pl-attr.
+      367   end.
+      368   for each old-doc-pl-pump
+      369     where old-doc-pl-pump.out-code  = new-trn-doc.doc-code no-lock
+      370   on error undo, return error
+      371   :
+      372       create new-doc-pl-pump.
+      373       buffer-copy old-doc-pl-pump to new-doc-pl-pump.
+      374   end.
+      375   for each old-doc-pl-pump-attr
+      376     where old-doc-pl-pump-attr.out-code  = new-trn-doc.doc-code no-lock
+      377   on error undo, return error
+      378   :
+      379       create new-doc-pl-pump-attr.
+      380       buffer-copy old-doc-pl-pump-attr to new-doc-pl-pump-attr.
+      381   end.
+      382   for each old-gds-dtl
+      383     where old-gds-dtl.doc-code  = new-trn-doc.doc-code no-lock
+      384   on error undo, return error
+      385   :
+      386     create new-gds-dtl.
+      387     buffer-copy old-gds-dtl to new-gds-dtl.
+      388   end.
+      389   for each old-gds-dtl-attr
+      390     where old-gds-dtl-attr.doc-code  = new-trn-doc.doc-code no-lock
+      391   on error undo, return error
+      392   :
+      393     create new-gds-dtl.
+      394     buffer-copy old-gds-dtl-attr to new-gds-dtl-attr.
+      395   end.
+      396   find first old-inv-doc
+      397     where old-inv-doc.doc-code = new-trn-doc.doc-code no-lock
+      398     no-error .
+      399   if available old-inv-doc then do:
+      400     create new-inv-doc.
+      401     buffer-copy old-inv-doc to new-inv-doc.
+      402   end.
+      403   for each old-inv-line
+      404       where old-inv-line.doc-code = new-trn-doc.doc-code no-lock
+      405     on error undo, return error
+      406     :
+      407         create new-inv-line.
+      408         buffer-copy old-inv-line to new-inv-line.
+      409   end.
+      410   if varstay-history  then for each old-c-inv-line
+      411       where old-c-inv-line.doc-code = new-trn-doc.doc-code no-lock
+      412     on error undo, return error
+      413     :
+      414         create new-c-inv-line.
+      415         buffer-copy old-c-inv-line to new-c-inv-line.
+      416   end.
+      417   for each old-inv-line-attr
+      418       where old-inv-line-attr.doc-code = new-trn-doc.doc-code no-lock
+      419     on error undo, return error
+      420     :
+      421         create new-inv-line-attr.
+      422         buffer-copy old-inv-line-attr to new-inv-line-attr.
+      423   end.
+      424   for each old-inv-doc-attr
+      425       where old-inv-doc-attr.doc-code = new-trn-doc.doc-code no-lock
+      426     on error undo, return error
+      427     :
+      428         create new-inv-doc-attr.
+      429         buffer-copy old-inv-doc-attr to new-inv-doc-attr.
+      430   end.
+      431   for each old-doc-prts
+      432     where old-doc-prts.out-code = new-trn-doc.doc-code no-lock
+      433   on error undo, return error
+      434   :
+      435       create new-doc-prts.
+      436       buffer-copy old-doc-prts to new-doc-prts.
+      437   end.
+      438   for each old-doc-prts-attr
+      439     where old-doc-prts-attr.out-code = new-trn-doc.doc-code no-lock
+      440   on error undo, return error
+      441   :
+      442       create new-doc-prts-attr.
+      443       buffer-copy old-doc-prts-attr to new-doc-prts-attr.
+      444   end.
+      445   for each old-parts
+      446     where old-parts.out-code = new-trn-doc.doc-code no-lock
+      447   use-index out-code
+      448   on error undo, return error
+      449   :
+      450       create new-parts.
+      451       buffer-copy old-parts to new-parts.
+      452   end.
+      453   if old-trn-doc.ext-doc-type = 'es':U
+      454   or old-trn-doc.ext-doc-type = 'rs':U
+      455   then do:
+      456     for each old-doc-fbr-gds
+      457       where old-doc-fbr-gds.out-code  = new-trn-doc.doc-code no-lock
+      458     on error undo, return error
+      459     :
+      460         create new-doc-fbr-gds.
+      461         buffer-copy old-doc-fbr-gds to new-doc-fbr-gds.
+      462     end.
+      463   end.
+      464   if old-trn-doc.ext-doc-type = 'es':U then do:
+      465     for each old-inkas
+      466       where old-inkas.inkas-code = new-trn-doc.doc-code no-lock
+      467     on error undo, return error
+      468     :
+      469         create new-inkas.
+      470         buffer-copy old-inkas to new-inkas.
+      471     end.
+      472     for each old-inkas-pay
+      473       where old-inkas-pay.inkas-code = new-trn-doc.doc-code no-lock
+      474     on error undo, return error
+      475     :
+      476         create new-inkas-pay.
+      477         buffer-copy old-inkas-pay to new-inkas-pay.
+      478     end.
+      479     for each old-inkas-pay-attr
+      480       where old-inkas-pay-attr.inkas-code = new-trn-doc.doc-code no-lock
+      481     on error undo, return error
+      482     :
+      483         create new-inkas-pay-attr.
+      484         buffer-copy old-inkas-pay-attr to new-inkas-pay-attr.
+      485     end.
+      486     for each old-inkas-pay-desk
+      487       where old-inkas-pay-desk.inkas-code = new-trn-doc.doc-code no-lock
+      488     on error undo, return error
+      489     :
+      490         create new-inkas-pay-desk.
+      491         buffer-copy old-inkas-pay-desk to new-inkas-pay-desk.
+      492     end.
+      493     for each old-inkas-pay-desk-attr
+      494       where old-inkas-pay-desk-attr.inkas-code = new-trn-doc.doc-code no-lock
+      495     on error undo, return error
+      496     :
+      497         create new-inkas-pay-desk-attr.
+      498         buffer-copy old-inkas-pay-desk-attr to new-inkas-pay-desk-attr.
+      499     end.
+      500     for each old-inkas-pay-wth
+      501       where old-inkas-pay-wth.inkas-code = new-trn-doc.doc-code no-lock
+      502     on error undo, return error
+      503     :
+      504         create new-inkas-pay-wth.
+      505         buffer-copy old-inkas-pay-wth to new-inkas-pay-wth.
+      506     end.
+      507    if varstay-history  then  for each old-c-inkas
+      508       where old-c-inkas.inkas-code = new-trn-doc.doc-code no-lock
+      509     on error undo, return error
+      510     :
+      511         create new-c-inkas.
+      512         buffer-copy old-c-inkas to new-c-inkas.
+      513     end.
+      514    if varstay-history  then  for each old-c-inkas-pay
+      515       where old-c-inkas-pay.inkas-code = new-trn-doc.doc-code no-lock
+      516     on error undo, return error
+      517     :
+      518         create new-c-inkas-pay.
+      519         buffer-copy old-c-inkas-pay to new-c-inkas-pay.
+      520     end.
+      521     if varstay-history  then for each old-c-inkas-pay-desk
+      522       where old-c-inkas-pay-desk.inkas-code = new-trn-doc.doc-code no-lock
+      523     on error undo, return error
+      524     :
+      525         create new-c-inkas-pay-desk.
+      526         buffer-copy old-c-inkas-pay-desk to new-c-inkas-pay-desk.
+      527     end.
+      528     for each old-c-inkas-pay-wth
+      529       where old-c-inkas-pay-wth.inkas-code = new-trn-doc.doc-code no-lock
+      530     on error undo, return error
+      531     :
+      532         create new-c-inkas-pay-wth.
+      533         buffer-copy old-c-inkas-pay-wth to new-c-inkas-pay-wth.
+      534     end.
+      535     for each old-sale-doc
+      536       where old-sale-doc.inkas-code = new-trn-doc.doc-code no-lock
+      537     on error undo, return error
+      538     :
+      539         create new-sale-doc.
+      540         buffer-copy old-sale-doc to new-sale-doc.
+      541     end.
+      542     for each old-sale-doc-attr
+      543       where old-sale-doc-attr.inkas-code = new-trn-doc.doc-code no-lock
+      544     on error undo, return error
+      545     :
+      546         create new-sale-doc-attr.
+      547         buffer-copy old-sale-doc-attr to new-sale-doc-attr.
+      548     end.
+      549     if varstay-history  then for each old-c-sale-doc
+      550       where old-c-sale-doc.inkas-code = new-trn-doc.doc-code no-lock
+      551     on error undo, return error
+      552     :
+      553         create new-c-sale-doc.
+      554         buffer-copy old-c-sale-doc to new-c-sale-doc.
+      555     end.
+      556     for each old-chk-doc
+      557       where old-chk-doc.out-code = new-trn-doc.doc-code no-lock
+      558     on error undo, return error
+      559     :
+      560       create new-chk-doc.
+      561       buffer-copy old-chk-doc to new-chk-doc.
+      562     end.
+      563     for each old-chk-gds
+      564       where old-chk-gds.out-code = new-trn-doc.doc-code no-lock
+      565     on error undo, return error
+      566     :
+      567         create new-chk-gds.
+      568         buffer-copy old-chk-gds to new-chk-gds.
+      569     end.
+      570     for each old-chk-pay
+      571       where old-chk-pay.out-code = new-trn-doc.doc-code no-lock
+      572     on error undo, return error
+      573     :
+      574         create new-chk-pay.
+      575         buffer-copy old-chk-pay to new-chk-pay.
+      576     end.
+      577     for each old-chk-discnt
+      578       where old-chk-discnt.out-code = new-trn-doc.doc-code no-lock
+      579     on error undo, return error
+      580     :
+      581         create new-chk-discnt.
+      582         buffer-copy old-chk-discnt to new-chk-discnt.
+      583     end.
+      584     for each old-chk-doc-attr
+      585       where old-chk-doc-attr.out-code = new-trn-doc.doc-code no-lock
+      586     on error undo, return error
+      587     :
+      588         create new-chk-doc-attr.
+      589         buffer-copy old-chk-doc-attr to new-chk-doc-attr.
+      590     end.
+      591     for each old-chk-gds-pay
+      592       where old-chk-gds-pay.out-code = new-trn-doc.doc-code no-lock
+      593     on error undo, return error
+      594     :
+      595         create new-chk-gds-pay.
+      596         buffer-copy old-chk-gds-pay to new-chk-gds-pay.
+      597     end.
+      598     if new-trn-doc.whole-send-news > 0 then do:
+      599       for each old-edi-status where
+      600                 old-edi-status.tbl-name = 'trn-doc':U
+      601             and old-edi-status.doc-code = new-trn-doc.doc-code
+      602                 no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      603           create new-edi-status.
+      604           buffer-copy old-edi-status to new-edi-status.
+      605       end.
+      606       for each old-edi-status where
+      607                 old-edi-status.tbl-name = 'doc-line':U
+      608             and old-edi-status.doc-code begins (new-trn-doc.doc-code + chr(4) )
+      609                 no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      610           create new-edi-status.
+      611           buffer-copy old-edi-status to new-edi-status.
+      612       end.
+      613     end.
+      614     if varstay-history  then do:
+      615         for each old-c-chk-doc
+      616           where old-c-chk-doc.out-code = new-trn-doc.doc-code no-lock
+      617         on error undo, return error
+      618         :
+      619             create new-c-chk-doc.
+      620             buffer-copy old-c-chk-doc to new-c-chk-doc.
+      621         end.
+      622         for each old-c-chk-gds
+      623           where old-c-chk-gds.out-code = new-trn-doc.doc-code no-lock
+      624         on error undo, return error
+      625         :
+      626             create new-c-chk-gds.
+      627             buffer-copy old-c-chk-gds to new-c-chk-gds.
+      628         end.
+      629         for each old-c-chk-pay
+      630           where old-c-chk-pay.out-code = new-trn-doc.doc-code no-lock
+      631         on error undo, return error
+      632         :
+      633             create new-c-chk-pay.
+      634             buffer-copy old-c-chk-pay to new-c-chk-pay.
+      635         end.
+      636         for each old-c-chk-discnt
+      637           where old-c-chk-discnt.out-code = new-trn-doc.doc-code no-lock
+      638         on error undo, return error
+      639         :
+      640             create new-c-chk-discnt.
+      641             buffer-copy old-c-chk-discnt to new-c-chk-discnt.
+      642         end.
+      643         for each old-c-chk-doc-attr
+      644           where old-c-chk-doc-attr.out-code = new-trn-doc.doc-code no-lock
+      645         on error undo, return error
+      646         :
+      647             create new-chk-doc-attr.
+      648             buffer-copy old-c-chk-doc-attr to new-c-chk-doc-attr.
+      649         end.
+      650     end.
+      651   end.
+      652   end procedure.

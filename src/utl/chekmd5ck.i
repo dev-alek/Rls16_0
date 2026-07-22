@@ -1,0 +1,1 @@
+encode({1} + "updck" ) + string(index(encode(string({1})), "k"))

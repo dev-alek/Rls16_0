@@ -1,0 +1,162 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.bge.1crn.subjects.*.
+        3   using ibs.th.bge.1crn.import.*.
+        4   block-level on error undo, throw.
+        5   class ibs.th.bge.1crn.import.impsettings inherits ibs.th.gbl.sys.objth implements ibs.th.bge.1crn.import.iimpsubject:
+        6     define override public property vss-revision    as character no-undo init "$Revision:$":U get .
+        7     define override public property vss-author      as character no-undo init "$Author:$":U get.
+        8     define override public property vss-date        as character no-undo init "$Date:$":U get.
+        9     define override public property vss-workfile    as character no-undo init "$Workfile:$":U get.
+       10     define override public property vss-archive     as character no-undo init "$Archive:$":U get.
+       11     define override public property vss-description as character no-undo init "Импорт setting" get.
+       12   method private void getAttrLib ():
+       13      define variable g#attr-lib  as handle no-undo .
+       14      run gbl/getgattrlib.p (output g#attr-lib).
+       15   end.
+       16   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       17   define temp-table thbjattr_thbj-attr no-undo like ub.thbj-attr.
+       18     // thbjattr_thbj-attr
+       19     define property Msg as character no-undo
+       20       get.
+       21       set.
+       22     method public logical Excute( subjectObj as class ibs.th.bge.1crn.subjects.isubject ):
+       23       define variable mImp2CdH as handle no-undo.
+       24       define variable objSettings as class     ibs.th.bge.1crn.subjects.settings no-undo.
+       25       define variable vMaxApiToken as character no-undo init "" .
+       26       define variable v-mem as memptr no-undo .
+       27       define variable v-file as character no-undo .
+       28       define variable v-arh-name as character no-undo .
+       29       define variable v-password as character no-undo init "K7#mP@9xL2$q" .
+       30       define variable v-retfl     as logical no-undo .
+       31       define variable v-param-type as character no-undo .
+       32       define variable v-value-character as character no-undo .
+       33       define variable v-value-date as date no-undo .
+       34       define variable v-value-decimal as decimal no-undo .
+       35       define variable v-value-integer as INTEGER no-undo .
+       36       define variable v-value-logical AS LOGICAL no-undo .
+       37       define variable v-tth as handle no-undo .
+       38       define buffer buf_clients for ub.clients .
+       39       objSettings = cast (subjectObj, ibs.th.bge.1crn.subjects.settings).
+       40       if trim(objSettings:MaxApiToken) = ""
+       41       then do :
+       42         v-retfl = true .
+       43         return true .
+       44       end .
+       45       for first buf_clients no-lock where buf_clients.db-num   = ibs.th.gbl.gbl-var:g#db-num
+       46                                       and buf_clients.obj-type = 'маг':U
+       47                                       and buf_clients.stts     = 0
+       48       :
+       49         if buf_clients.host-code <> integer(objSettings:org-code)
+       50         then do :
+       51           undo, throw new Progress.Lang.AppError(
+       52               "Некорректная привязка токена авторизации к организации."
+       53           ) .
+       54         end .
+       55         assign
+       56           v-arh-name = search( "exe/7z.exe":U )
+       57         .
+       58         if v-arh-name = ? then do:
+       59           assign
+       60             v-arh-name = search( "exe/7za.exe":U )
+       61           .
+       62         end.
+       63         v-mem = base64-decode (objSettings:MaxApiToken) .
+       64         copy-lob from v-mem to file "t_param.zip" .
+       65         os-command silent
+       66           value( substitute( '&1 e -y "-p&4" &2 -o&3':U, v-arh-name, search("t_param.zip"), ".\", v-password ) )
+       67         .
+       68         assign
+       69           file-info:file-name = "t_param.txt"
+       70         .
+       71         if file-info:file-type = ?
+       72         or not (file-info:file-type begins "F":U)
+       73         then do :
+       74           undo, throw new Progress.Lang.AppError(
+       75             substitute(  "Ошибка при распаковке архива с токеном MAX. [&1 &2]",
+       76                          error-status:get-message(1), return-value  )
+       77           ) .
+       78         end .
+       79         output to t_param.txt append .
+       80         put chr(10) .
+       81         output close .
+       82         input from t_param.txt .
+       83         import unformatted vMaxApiToken .
+       84         input close .
+       85         os-delete value (search("t_param.zip")) .
+       86         os-delete value (search("t_param.txt")) .
+       87         v-tth = buffer thbjattr_thbj-attr:table-handle .
+       88         empty temp-table thbjattr_thbj-attr .
+       89         run adm/shattri.p (
+       90                 input "init":U
+       91               , input 'БД':U
+       92               , input buf_clients.db-num
+       93               , input 'gisMT':U
+       94               , input "":U
+       95               , output v-value-character
+       96               , output v-value-date
+       97               , output v-value-decimal
+       98               , output v-value-integer
+       99               , output v-value-logical
+      100               , output v-param-type
+      101               , INPUT-OUTPUT table-handle v-tth
+      102               ) no-error .
+      103         if error-status:error then do:
+      104           undo, throw new Progress.Lang.AppError(
+      105             substitute(  "Ошибка чтения начальных значений настроек работы со справочниками товаров в контексте объекта [&1 &2]",
+      106                          error-status:get-message(1), return-value  )
+      107           ) .
+      108         end .
+      109         for each thbjattr_thbj-attr:
+      110           case thbjattr_thbj-attr.prop-code :
+      111             when 'MaxApiToken':U then do:
+      112               thbjattr_thbj-attr.property-value-character = vMaxApiToken .
+      113               run str/imp2cdgeth.p(output mImp2CdH).
+      114               run fill-setting in mImp2CdH ('thbj-attr':U,
+      115                                             'БД':U,
+      116                                             buf_clients.db-num,
+      117                                             thbjattr_thbj-attr.upper-prop-code,
+      118                                             thbjattr_thbj-attr.prop-code).
+      119             end.
+      120           end case .
+      121         end .
+      122         thbjattr_set-section ('БД':U, buf_clients.db-num, 'gisMT':U, input table thbjattr_thbj-attr) .
+      123         v-retfl = true.
+      124       end .
+      125       catch exAppErrors as class Progress.Lang.AppError :
+      126         define variable v-is-delim as logical no-undo .
+      127         v-is-delim = (num-entries(exAppErrors:ReturnValue, chr(4)) > 1) .
+      128         Msg = if v-is-delim then entry(2, exAppErrors:ReturnValue, chr(4)) else exAppErrors:ReturnValue .
+      129         if Msg > "" then . else do :
+      130           Msg = exAppErrors:GetMessage(1) .
+      131           if Msg > "" then . else Msg = "AppError в АЗС АЗК" .
+      132         end .
+      133         v-retfl = false .
+      134         undo, throw exAppErrors .
+      135       end catch .
+      136       catch exProErrors as class Progress.Lang.ProError :
+      137         Msg = exProErrors:GetMessage(1) .
+      138         if Msg > "" then . else Msg = "ProError в АЗС АЗК" .
+      139         v-retfl = false.
+      140         undo, throw exProErrors .
+      141       end catch .
+      142       catch exAnyErrors as class Progress.Lang.Error:
+      143         Msg = "Unexpected error в АЗС АЗК" .
+      144         v-retfl = false .
+      145         undo, throw exAnyErrors .
+      146       end catch .
+      147       finally :
+      148         return v-retfl .
+      149       end finally .
+      150     end method.
+      151     method private void thbjattr_set-section (input p-obj-type   as character,
+      152                                               input p-obj-code   as integer,
+      153                                               input p-upper-code as character,
+      154                                               input table-handle p-tth) :
+      155           if (valid-handle(ibs.th.gbl.gbl-hndllib:g#attr-lib) <> true) then do:     message       "Не загружена библиотека attr-lib"       view-as alert-box error .     stop . end. run thbjattr_set-section in ibs.th.gbl.gbl-hndllib:g#attr-lib
+      156       (input  p-obj-type
+      157       ,input  p-obj-code
+      158       ,input  p-upper-code
+      159       ,input  table-handle p-tth
+      160       ) .
+      161     end method .
+      162   end class.

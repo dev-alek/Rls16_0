@@ -1,0 +1,598 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.str.alcohol.*.
+        3   using ibs.th.gbl.*.
+        4   block-level on error undo, throw.
+        5   class ibs.th.str.alcohol.excisemarks :
+        6       define temp-table tt-marks
+        7       field exciseMark   as character label "Марка"    format "X(150)"
+        8       field alc-code     as character label "Алк. код" format "X(20)"
+        9       field artic        as character label "Артикл"   format "X(20)"
+       10       field prod-type    as character
+       11       field prod-code    as integer
+       12       field gds-code     as integer
+       13       field doc-code     as character
+       14       field partID       as character
+       15       field refB         as character
+       16       field rowid-part   as rowid
+       17       field line-num     as integer
+       18       field isCurr       as logical
+       19       index pi as primary unique
+       20           exciseMark
+       21   .
+       22   define temp-table tt-alc-qnty
+       23       field artic        as character label "Артикл"   format "X(20)"
+       24       field prod-type    as character
+       25       field prod-code    as integer
+       26       field gds-code     as integer
+       27       field alc-code     as character label "Алк. код" format "X(20)"
+       28       field qnty         as integer   label "Кол."
+       29       field isCurr       as logical
+       30       index pi as primary unique
+       31           artic prod-type prod-code alc-code
+       32   .
+       33       define buffer buf_gen-attr  for ub.gen-attr.
+       34       define buffer free_gen-attr for ub.gen-attr.
+       35       define buffer out_gen-attr  for ub.gen-attr .
+       36       define buffer del_gen-attr  for ub.gen-attr .
+       37       define buffer buf_trn-doc   for ub.trn-doc .
+       38       define variable key-rec-parts      as character no-undo.
+       39       define variable key-rec-parts_free as character no-undo.
+       40       define variable key-rec-parts_out  as character no-undo.
+       41       define variable key-rec            as character no-undo.
+       42       define variable doc-type            as character no-undo .
+       43       define property StatusErr as logical no-undo init false
+       44           get.
+       45           protected set.
+       46       define property ObjType as character no-undo
+       47           get.
+       48           protected set.
+       49       define property ObjCode as integer no-undo
+       50           get.
+       51           protected set.
+       52       define property ReturnMsg as character no-undo
+       53           get.
+       54           private set.
+       55       define property keyRecObj as class ibs.th.gbl.keyrec no-undo
+       56           get.
+       57           private set.
+       58       constructor public excisemarks (inObjType as char, inObjCode as int):
+       59           find first ub.clients where ub.clients.obj-type = inObjType and ub.clients.obj-code = inObjCode no-error.
+       60           if not available (ub.clients)
+       61               then
+       62           do:
+       63               message substitute ("Критическая ошибка. Не найден клиент &1&2. Невозможно создание экземпляра excisemarks.", inObjType, inObjCode) view-as alert-box.
+       64               undo, return error.
+       65           end.
+       66           assign
+       67               ObjType = inObjType
+       68               ObjCode = inObjCode.
+       69           keyRecObj = new keyrec().
+       70     end constructor.
+       71     method public void GetTableMarksForPartsAppend (buffer buf_parts for ub.parts, input-output table tt-marks):
+       72       if not available (buf_parts)
+       73               then
+       74           do:
+       75         StatusErr = true.
+       76         ReturnMsg = substitute ("Не возможно создать список марок, так как буфер записи buf_parts не доступен.").
+       77         return.
+       78       end.
+       79           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+       80       for each buf_gen-attr where buf_gen-attr.table-name = 'excise-mark':U
+       81         and buf_gen-attr.p-key = key-rec-parts no-lock:
+       82         create tt-marks.
+       83         assign
+       84           tt-marks.exciseMark = buf_gen-attr.attr-code
+       85           tt-marks.isCurr = true
+       86           tt-marks.partId = buf_parts.in-code
+       87         .
+       88         assign
+       89           tt-marks.refB = entry (2, buf_parts.alc-ref-ab-path, ",") no-error.
+       90       end.
+       91     end.
+       92     method public void GetTableMarksForParts (buffer buf_parts for ub.parts, input-output table tt-marks):
+       93       empty temp-table tt-marks.
+       94       GetTableMarksForPartsAppend (buffer buf_parts, input-output table tt-marks).
+       95     end.
+       96       method public void GetTableMarksForPartsAppend (input inKeyRec as char, input-output table tt-marks):
+       97       for each buf_gen-attr where buf_gen-attr.table-name = 'excise-mark':U
+       98         and buf_gen-attr.p-key = inKeyRec no-lock:
+       99         create tt-marks.
+      100         assign
+      101           tt-marks.exciseMark = buf_gen-attr.attr-code
+      102           tt-marks.isCurr = true
+      103         .
+      104       end.
+      105     end.
+      106       method public void GetTableMarksForParts (input inKeyRec as char, input-output table tt-marks):
+      107       empty temp-table tt-marks.
+      108           GetTableMarksForPartsAppend (input inKeyRec, input-output table tt-marks).
+      109     end.
+      110       method public void GetRowOutFreePartsForMarks (inMark as character, output outRowParts as rowid):
+      111       define variable vRowId as rowid no-undo.
+      112       define variable vTblName as character no-undo.
+      113       vRowId = ?.
+      114           find first buf_gen-attr no-lock where buf_gen-attr.table-name = 'excise-mark':U
+      115         and buf_gen-attr.attr-code = inMark
+      116         and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      117         and
+      118           (entry(8, buf_gen-attr.p-key, chr(3)) = 'free-zone':U or entry(8, buf_gen-attr.p-key, chr(3)) = 'out-zone':U)
+      119         and entry(2, buf_gen-attr.p-key, chr(3)) = ObjType
+      120         and entry(3 , buf_gen-attr.p-key, chr(3)) = string (ObjCode)
+      121       no-error.
+      122       if available (buf_gen-attr) and buf_gen-attr.whole-send-news = 1
+      123               then
+      124           do:
+      125         release buf_gen-attr.
+      126         StatusErr = true.
+      127         ReturnMsg = substitute ("Марка зарезервирована &2. &1Партия - &3", chr(10), inMark, key-rec-parts).
+      128         return.
+      129       end.
+      130       if available (buf_gen-attr)
+      131               then
+      132           do:
+      133         keyRecObj:GenRowKeyr(buf_gen-attr.p-key, ?, "ub", ?, no-lock, output vRowId, output vTblName).
+      134       end.
+      135       release buf_gen-attr.
+      136       outRowParts = vRowId.
+      137     end.
+      138       method public void GetRowFreePartsForMarks (inMark as character, output freeRowParts as rowid, output keyRecParts as char):
+      139           define variable vRowId   as rowid     no-undo.
+      140           define variable vTblName as character no-undo.
+      141           vRowId = ?.
+      142           find first buf_gen-attr no-lock where buf_gen-attr.table-name = 'excise-mark':U
+      143               and buf_gen-attr.attr-code = inMark
+      144               and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      145               and
+      146               (entry(8, buf_gen-attr.p-key, chr(3)) = 'free-zone':U)
+      147               and entry(2, buf_gen-attr.p-key, chr(3)) = ObjType
+      148               and entry(3 , buf_gen-attr.p-key, chr(3)) = string (ObjCode)
+      149               no-error.
+      150           if available (buf_gen-attr) and buf_gen-attr.whole-send-news = 1
+      151               then
+      152           do:
+      153               release buf_gen-attr.
+      154               StatusErr = true.
+      155               ReturnMsg = substitute ("Марка зарезервирована &2. &1Партия - &3", chr(10), inMark, keyRecParts).
+      156               return.
+      157           end.
+      158           if available (buf_gen-attr)
+      159               then
+      160           do:
+      161               keyRecObj:GenRowKeyr(buf_gen-attr.p-key, ?, "ub", ?, no-lock, output vRowId, output vTblName).
+      162           end.
+      163           keyRecParts = buf_gen-attr.p-key.
+      164           release buf_gen-attr.
+      165           freeRowParts = vRowId.
+      166       end.
+      167       method public void TransferToOutPartsFromFreeZone (buffer buf_parts for ub.parts, input inMark as char):
+      168       keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      169       find first buf_gen-attr exclusive-lock where buf_gen-attr.table-name = 'excise-mark':U
+      170         and buf_gen-attr.p-key = key-rec-parts no-error.
+      171       if not available (buf_gen-attr)
+      172               then
+      173           do:
+      174         StatusErr = true.
+      175         ReturnMsg = substitute ("Ошибка при переносе марки из свободной зоны. Не найденен атрибут для марки в расходной зоне &1", inMark).
+      176         return.
+      177       end.
+      178       entry(8, buf_gen-attr.p-key, chr(3)) = buf_parts.out-code.
+      179       release buf_gen-attr.
+      180     end.
+      181       method public void CrMarkForParts (buffer buf_parts for ub.parts, input inMark as char):
+      182           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      183           find first buf_gen-attr where
+      184               buf_gen-attr.table-name = 'excise-mark':U
+      185               and buf_gen-attr.attr-code = inMark
+      186               and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      187               and buf_gen-attr.p-key = key-rec-parts
+      188               no-lock no-error.
+      189           if available buf_gen-attr
+      190               then
+      191           do :
+      192               StatusErr = true .
+      193               ReturnMsg = substitute ("Уже есть запись с &2 маркой. &1Партия - &3", chr(10), inMark, key-rec-parts) .
+      194               return .
+      195           end.
+      196           find first buf_gen-attr no-lock where buf_gen-attr.table-name = 'excise-mark':U
+      197               and buf_gen-attr.attr-code = inMark
+      198               and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      199               and entry(8, buf_gen-attr.p-key, chr(3)) = 'free-zone':U
+      200               and
+      201               not (
+      202                 (entry(8,key-rec-parts,chr(3)) = entry(7,buf_gen-attr.p-key,chr(3)))
+      203                 or (entry(8,key-rec-parts,chr(3)) = entry (1, entry(9,buf_gen-attr.p-key,chr(3))))
+      204                 )
+      205               and not entry(1, buf_gen-attr.p-key, chr(3)) = entry(1, key-rec-parts, chr(3))
+      206               and not entry(2, buf_gen-attr.p-key, chr(3)) = entry(2, key-rec-parts, chr(3))
+      207               no-error .
+      208           if available buf_gen-attr
+      209               then
+      210           do :
+      211               StatusErr = true .
+      212               ReturnMsg = substitute ("Уже есть запись с &2 маркой в партии свободной зоны. &1Партия - &3", chr(10), inMark, key-rec-parts) .
+      213               return .
+      214           end.
+      215           create buf_gen-attr.
+      216           assign
+      217               buf_gen-attr.table-name      = 'excise-mark':U
+      218               buf_gen-attr.p-key           = key-rec-parts
+      219               buf_gen-attr.attr-code       = inMark
+      220               buf_gen-attr.whole-send-news = 0
+      221           no-error.
+      222           if error-status:error
+      223             then delete buf_gen-attr.
+      224           release buf_gen-attr.
+      225       end.
+      226       method public void CrFreeMarkForParts (buffer buf_parts for ub.parts, buffer free_parts for ub.parts, input inMark as char):
+      227           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      228           keyRecObj:GenKeyRec ("parts", buffer free_parts:handle, output key-rec-parts_free).
+      229           CrFreeMarkForParts (input key-rec-parts, key-rec-parts_free, inMark).
+      230       end.
+      231       method public void CrFreeMarkForParts (input in-key-rec-parts as char, in-key-rec-parts_free as char, input inMark as char):
+      232           find first buf_gen-attr where
+      233               buf_gen-attr.table-name = 'excise-mark':U
+      234               and buf_gen-attr.attr-code = inMark
+      235               and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      236               and buf_gen-attr.p-key = in-key-rec-parts
+      237               no-lock no-error.
+      238           if available buf_gen-attr
+      239               then
+      240           do :
+      241               find first buf_gen-attr where
+      242                   buf_gen-attr.table-name = 'excise-mark':U
+      243                   and buf_gen-attr.attr-code = inMark
+      244                   and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      245                   and buf_gen-attr.p-key = in-key-rec-parts_free
+      246                   no-lock no-error.
+      247               if available (buf_gen-attr) then
+      248               do:
+      249                   find current buf_gen-attr exclusive-lock.
+      250                   delete buf_gen-attr .
+      251               end.
+      252               find first buf_gen-attr no-lock where buf_gen-attr.table-name = 'excise-mark':U
+      253                   and buf_gen-attr.attr-code = inMark
+      254                   and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      255                   and not entry(7, buf_gen-attr.p-key, chr(3)) = entry(7, in-key-rec-parts_free, chr(3))
+      256                   and not entry(1, buf_gen-attr.p-key, chr(3)) = entry(1, key-rec-parts, chr(3))
+      257                   and not entry(2, buf_gen-attr.p-key, chr(3)) = entry(2, key-rec-parts, chr(3))
+      258                   no-error .
+      259           end.
+      260           if available buf_gen-attr
+      261               then
+      262           do :
+      263               StatusErr = true .
+      264               ReturnMsg = substitute ("Уже есть запись с &2 маркой в партии свободной зоны. &1Партия - &3", chr(10), inMark, in-key-rec-parts) .
+      265               return .
+      266           end.
+      267           create buf_gen-attr.
+      268           assign
+      269               buf_gen-attr.table-name      = 'excise-mark':U
+      270               buf_gen-attr.p-key           = in-key-rec-parts_free
+      271               buf_gen-attr.attr-code       = inMark
+      272               buf_gen-attr.whole-send-news = 0
+      273           no-error.
+      274           if error-status:error
+      275             then delete buf_gen-attr.
+      276           release buf_gen-attr.
+      277       end.
+      278       method public void RezervMarkForParts (buffer free_parts for ub.parts, buffer buf_parts for ub.parts, input inMark as char):
+      279           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      280           keyRecObj:GenKeyRec ("parts", buffer free_parts:handle, output key-rec-parts_free).
+      281           find first free_gen-attr where
+      282               free_gen-attr.table-name = 'excise-mark':U
+      283               and free_gen-attr.attr-code = inMark
+      284               and num-entries (free_gen-attr.p-key, chr(3)) >= 8
+      285               and free_gen-attr.p-key = key-rec-parts_free
+      286               no-lock no-error.
+      287           if available free_gen-attr
+      288               then
+      289           do :
+      290               find current free_gen-attr exclusive-lock.
+      291               delete free_gen-attr .
+      292               find first buf_gen-attr no-lock where buf_gen-attr.table-name = 'excise-mark':U
+      293                   and buf_gen-attr.attr-code = inMark
+      294                   and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      295                   and buf_gen-attr.p-key = key-rec-parts
+      296                   no-error .
+      297               create buf_gen-attr.
+      298               assign
+      299                   buf_gen-attr.table-name      = 'excise-mark':U
+      300                   buf_gen-attr.p-key           = key-rec-parts
+      301                   buf_gen-attr.attr-code       = inMark
+      302                   buf_gen-attr.whole-send-news = 0
+      303               no-error.
+      304               if error-status:error
+      305                 then delete buf_gen-attr.
+      306               release buf_gen-attr.
+      307           end.
+      308       end.
+      309       method public void CrOutMarkForParts (buffer buf_parts for ub.parts, buffer out_parts for ub.parts, input inMark as char):
+      310           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      311           keyRecObj:GenKeyRec ("parts", buffer out_parts:handle, output key-rec-parts_out).
+      312           find first buf_gen-attr where
+      313               buf_gen-attr.table-name = 'excise-mark':U
+      314               and buf_gen-attr.attr-code = inMark
+      315               and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      316               and buf_gen-attr.p-key = key-rec-parts
+      317               no-lock no-error.
+      318           if available buf_gen-attr
+      319               then
+      320           do :
+      321               find first out_gen-attr no-lock where out_gen-attr.table-name = 'excise-mark':U
+      322                   and out_gen-attr.attr-code = inMark
+      323                   and num-entries (out_gen-attr.p-key, chr(3)) >= 8
+      324                   and entry(8, out_gen-attr.p-key, chr(3)) = 'out-zone':U
+      325                   no-error .
+      326               if available out_gen-attr
+      327               then do:
+      328                 find current out_gen-attr exclusive-lock.
+      329                 delete out_gen-attr .
+      330               end.
+      331               create out_gen-attr.
+      332               assign
+      333                   out_gen-attr.table-name      = 'excise-mark':U
+      334                   out_gen-attr.p-key           = key-rec-parts_out
+      335                   out_gen-attr.attr-code       = inMark
+      336                   out_gen-attr.whole-send-news = 0
+      337                   .
+      338               release out_gen-attr.
+      339           end.
+      340       end.
+      341       method public void DelAllMarksForParts (buffer buf_parts for ub.parts):
+      342           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      343           for each buf_gen-attr no-lock where
+      344               buf_gen-attr.table-name = 'excise-mark':U
+      345               and buf_gen-attr.p-key = key-rec-parts :
+      346             find first del_gen-attr where recid (del_gen-attr) = recid (buf_gen-attr) exclusive-lock.
+      347             delete del_gen-attr .
+      348           end.
+      349       end.
+      350       method public void DelMarkForParts (buffer del_parts for ub.parts,buffer buf_parts for ub.parts, input inMark as char):
+      351           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      352           keyRecObj:GenKeyRec ("parts", buffer del_parts:handle, output key-rec-parts_out).
+      353           key-rec-parts_free = key-rec-parts .
+      354           entry(8,key-rec-parts_free,chr(3)) = 'free-zone':U .
+      355           find first del_gen-attr where
+      356               del_gen-attr.table-name = 'excise-mark':U
+      357               and del_gen-attr.attr-code = inMark
+      358               and num-entries (del_gen-attr.p-key, chr(3)) >= 8
+      359               and del_gen-attr.p-key = key-rec-parts
+      360               no-error.
+      361           if available del_gen-attr
+      362               then
+      363           do :
+      364               find current del_gen-attr exclusive-lock.
+      365               delete del_gen-attr .
+      366           end.
+      367               find first buf_gen-attr no-lock where buf_gen-attr.table-name = 'excise-mark':U
+      368                   and buf_gen-attr.attr-code = inMark
+      369                   and num-entries (buf_gen-attr.p-key, chr(3)) >= 8
+      370                   and buf_gen-attr.p-key = key-rec-parts_out
+      371                   no-error .
+      372               if available buf_gen-attr
+      373                   then
+      374               do:
+      375                   if entry(8,key-rec-parts,chr(3)) <> entry(7,key-rec-parts,chr(3))
+      376                   and not (entry(8,key-rec-parts,chr(3)) = entry (1, entry(9,key-rec-parts,chr(3))))
+      377                   then do:
+      378                   find first ub.gen-attr exclusive-lock where ub.gen-attr.table-name = 'excise-mark':U
+      379                       and ub.gen-attr.attr-code = inMark
+      380                       and num-entries (ub.gen-attr.p-key, chr(3)) >= 8
+      381                       and entry(8, ub.gen-attr.p-key, chr(3)) = 'free-zone':U
+      382                       no-error .
+      383                   if not available (ub.gen-attr) then
+      384                   do:
+      385                       buffer-copy buf_gen-attr except buf_gen-attr.p-key to ub.gen-attr .
+      386                       assign
+      387                           ub.gen-attr.p-key = key-rec-parts_free
+      388                           .
+      389                   end.
+      390                   end.
+      391                   find current buf_gen-attr exclusive-lock.
+      392                   delete buf_gen-attr .
+      393               end.
+      394               release ub.gen-attr.
+      395       end.
+      396       method public void CrMarkForInvDoc (buffer buf_trn-doc for ub.trn-doc, input inMark as char):
+      397           keyRecObj:GenKeyRec ("trn-doc", buffer buf_trn-doc:handle, output key-rec).
+      398           if error-status:error
+      399               then
+      400           do:
+      401               StatusErr = false .
+      402               ReturnMsg = substitute ("Ошибка формирования уникального ключа.") .
+      403               return .
+      404           end.
+      405           find first buf_gen-attr exclusive-lock where
+      406               buf_gen-attr.table-name = 'excise-mark':U
+      407               and buf_gen-attr.p-key = key-rec
+      408               and buf_gen-attr.attr-code = inMark no-error.
+      409           if available buf_gen-attr
+      410               then
+      411           do :
+      412               StatusErr = false .
+      413               ReturnMsg = substitute ("Уже есть запись с &2 маркой. &1Запись - &3", chr(10), inMark, key-rec) .
+      414               return .
+      415           end.
+      416           create buf_gen-attr.
+      417           assign
+      418               buf_gen-attr.table-name      = 'excise-mark':U
+      419               buf_gen-attr.p-key           = key-rec
+      420               buf_gen-attr.attr-code       = inMark
+      421               buf_gen-attr.whole-send-news = 0
+      422               .
+      423           release buf_gen-attr.
+      424       end.
+      425     method public void GetMarkForInvDoc (inKeyRec as char, input inAlcCode as char, input-output table tt-marks):
+      426       def var v-key-rec-doc as char no-undo.
+      427       def var v-doc-code as char no-undo.
+      428       empty temp-table tt-marks.
+      429       assign
+      430               v-doc-code = entry(8, inKeyRec, chr(3))
+      431               when num-entries (inKeyRec, chr(3)) >= 8.
+      432       find first ub.trn-doc no-lock where ub.trn-doc.doc-code = v-doc-code no-error.
+      433       if available (ub.trn-doc)
+      434          then keyRecObj:GenKeyRec("trn-doc", buffer ub.trn-doc:handle, v-key-rec-doc).
+      435       for each buf_gen-attr no-lock where
+      436         buf_gen-attr.table-name = 'excise-mark':U
+      437         and buf_gen-attr.p-key = v-key-rec-doc:
+      438         if GetAlcCode (entry (2, buf_gen-attr.attr-code)) = inAlcCode
+      439                   then
+      440               do:
+      441           create tt-marks.
+      442           assign
+      443             tt-marks.alc-code = inAlcCode
+      444             tt-marks.exciseMark = entry (2, buf_gen-attr.attr-code)
+      445             tt-marks.gds-code = integer (entry (1, buf_gen-attr.attr-code))
+      446           .
+      447         end.
+      448       end.
+      449     end.
+      450     method public void RestoreMarkToFreeZone (buffer buf_parts for ub.parts, input inMark as char):
+      451       keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      452       find first buf_gen-attr exclusive-lock where
+      453         buf_gen-attr.table-name = 'excise-mark':U
+      454         and buf_gen-attr.p-key = key-rec-parts
+      455         and buf_gen-attr.attr-code = inMark no-error.
+      456       find first buf_gen-attr exclusive-lock where buf_gen-attr.table-name = 'excise-mark':U
+      457         and buf_gen-attr.p-key = key-rec-parts no-error.
+      458       if not available (buf_gen-attr)
+      459               then
+      460           do:
+      461         StatusErr = true.
+      462         ReturnMsg = substitute ("Ошибка при восстановление марки в свободную зону. Не найденен атрибут для марки приходной партии &1", inMark).
+      463         return.
+      464       end.
+      465       entry(8, buf_gen-attr.p-key, chr(3)) = 'free-zone':U.
+      466       release buf_gen-attr.
+      467     end.
+      468       method public void RemoveMarkFromFreeZoneToInvMinus (input inKeyRec as char, input inMark as char, inDocCodeInv as char):
+      469       define buffer buf_invMinus for ub.parts.
+      470       find first buf_gen-attr exclusive-lock where
+      471         buf_gen-attr.table-name = 'excise-mark':U
+      472         and buf_gen-attr.p-key = inKeyRec
+      473         and buf_gen-attr.attr-code = inMark no-error.
+      474       find first buf_gen-attr exclusive-lock where buf_gen-attr.table-name = 'excise-mark':U
+      475         and buf_gen-attr.p-key = key-rec-parts no-error.
+      476       if not available (buf_gen-attr)
+      477               then
+      478           do:
+      479         StatusErr = true.
+      480         ReturnMsg = substitute ("Ошибка при удалении марки со свободной зоны. Не найденен атрибут для марки партии свободной зоны &1", inMark).
+      481         return.
+      482       end.
+      483       if num-entries ( inKeyRec, chr(3)) < 8
+      484               then
+      485           do:
+      486         StatusErr = true.
+      487         ReturnMsg = substitute ("Неверный ключ партии &1", inKeyRec).
+      488         return.
+      489       end.
+      490       find first buf_invMinus where
+      491               buf_invMinus.obj-type = ObjType
+      492           and buf_invMinus.obj-code = ObjCode
+      493           and buf_invMinus.artic = entry(8, inKeyRec, chr(3))
+      494           and buf_invMinus.prod-type = entry(8, inKeyRec, chr(3))
+      495           and buf_invMinus.prod-code = integer (entry(8, inKeyRec, chr(3)))
+      496           and buf_invMinus.out-code = inDocCodeInv
+      497           and buf_invMinus.in-code = entry(8, inKeyRec, chr(3)) no-lock no-error.
+      498       if not available (buf_invMinus)
+      499               then
+      500           do:
+      501         StatusErr = true.
+      502         ReturnMsg = substitute ("Не найдена партия инветаризации &1", inMark).
+      503         return.
+      504       end.
+      505       entry(8, buf_gen-attr.p-key, chr(3)) = buf_invMinus.out-code.
+      506       release buf_gen-attr.
+      507     end.
+      508       method public void RemoveMarkFromFreeZoneToInvMinus (buffer buf_parts for ub.parts, input inMark as char, inDocCodeInv as char):
+      509       keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      510           RemoveMarkFromFreeZoneToInvMinus (input key-rec-parts, inMark, inDocCodeInv).
+      511       end.
+      512       method public void RemoveMarkForParts (buffer buf_parts for ub.parts):
+      513           keyRecObj:GenKeyRec ("parts", buffer buf_parts:handle, output key-rec-parts).
+      514           RemoveMarkForParts (input key-rec-parts).
+      515       end.
+      516       method public void RemoveMarkForParts (input inkey-rec-parts as char):
+      517           define buffer del_gen-attr for ub.gen-attr.
+      518           for each buf_gen-attr no-lock where buf_gen-attr.p-key = inkey-rec-parts:
+      519             find first del_gen-attr exclusive-lock where recid (del_gen-attr) = recid (buf_gen-attr).
+      520             delete del_gen-attr.
+      521           end.
+      522     end.
+      523     method public character GetAlcCode (
+      524       input  inMarkAlc as character):
+      525       define variable v-kol      as integer   no-undo .
+      526       define variable v-alc-code as character no-undo .
+      527       define variable v-result   as character no-undo .
+      528       define variable ii         as integer   no-undo .
+      529       define variable v_list     as character no-undo initial '':U.
+      530       assign
+      531         v_list = '0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,':U .
+      532       v-alc-code = substring (inMarkAlc, 8, 12) .
+      533       do ii = 1 to length (v-alc-code):
+      534         if lookup( substring( v-alc-code, ii, 1 ), v_list )  < 1 then
+      535         do:
+      536           StatusErr = yes .
+      537           leave .
+      538         end.
+      539       end.
+      540       v-alc-code = string (Base2Int64 (v-alc-code, 36) ) no-error.
+      541       if (Base2Int64 (v-alc-code, 36) ) < 0 then
+      542       do:
+      543         StatusErr = yes.
+      544         return "".
+      545       end.
+      546       else
+      547       do:
+      548         if length(v-alc-code) < 20 then
+      549         do:
+      550           v-alc-code = fill('0', 19 - length(v-alc-code)) + v-alc-code.
+      551         end.
+      552         return v-alc-code.
+      553       end.
+      554     end.
+      555     method private int64 Base2Int64
+      556       (p-num as character,
+      557       p-base as integer
+      558       ):
+      559       define variable v_list as character no-undo initial '':U.
+      560       define variable jj     as integer   no-undo.
+      561       define variable j_sign as int64     no-undo.
+      562       define variable v-int  as int64     no-undo.
+      563       do on error undo, return error :
+      564         if p-base > 60 then
+      565         do:
+      566           assign
+      567             v-int = ?.
+      568           undo, return error.
+      569         end.
+      570         assign
+      571           v_list = '0,1,2,3,4,5,6,7,8,9,A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,':U +
+      572                         'Б,Г,Д,Ё,Ж,З,И,Й,Л,П,У,Ф,Ц,Ч,Ш,Щ,Ъ,Ы,Ь,Э,Ю,Я,@,$':U
+      573           v_list = substring( v_list, 1, p-base * 2 - 1 )
+      574           p-num  = trim( p-num ).
+      575         if substring( p-num, 1, 1 ) = "-" then
+      576         do:
+      577           assign
+      578             j_sign = -1
+      579             p-num  = substring( p-num, 2 ).
+      580         end.
+      581         else
+      582         do:
+      583           assign
+      584             j_sign = 1.
+      585         end.
+      586         do jj = 1 to length( p-num ) :
+      587           assign
+      588             v-int = v-int * p-base + LOOKUP( substring( p-num, jj, 1 ), v_list ) - 1.
+      589         end.
+      590         assign
+      591           v-int = j_sign * v-int.
+      592         return v-int.
+      593       end.
+      594     end method.
+      595     destructor public excisemarks ():
+      596       delete object keyRecObj.
+      597     end destructor.
+      598   end class.

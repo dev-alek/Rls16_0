@@ -1,0 +1,818 @@
+&ANALYZE-SUSPEND _VERSION-NUMBER UIB_v8r12 GUI
+&ANALYZE-RESUME
+/* Connected Databases 
+          ub               PROGRESS
+*/
+&Scoped-define WINDOW-NAME CURRENT-WINDOW
+&Scoped-define FRAME-NAME Dialog-Frame
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CUSTOM _DEFINITIONS Dialog-Frame 
+/*
+
+$Revision$
+$Author$
+$Date$
+$Workfile$
+$Archive$
+
+Редактирование атрибутов документа
+
+Автор: Чернова Светлана Александровна
+Дата создания: 10/10/06
+Author: Svetlana Chernova
+Creation date: 10/10/06
+
+create: Суслов Алексей Юрьевич
+*/
+
+define variable vss-revision    as character no-undo initial "$Revision$":U .
+define variable vss-author      as character no-undo initial "$Author$":U .
+define variable vss-date        as character no-undo initial "$Date$":U .
+define variable vss-workfile    as character no-undo initial "$Workfile$":U .
+define variable vss-archive     as character no-undo initial "$Archive$":U .
+define variable vss-description as character no-undo initial "Редактирование атрибутов документа":U .
+
+{ cmp/vssrevis.i }
+{ cmp/str-glbl.i }
+{ str/trdcalib.i }
+{ cmp/showinf.i  }
+{ str/attrlist.i }
+{ str/funcgrzp.i }
+{ gbl/getsect.i def }
+{ gbl/color.i    }
+{ str/lib-trn.i  }
+
+/* ***************************  Definitions  ************************** */
+
+/* Parameters Definitions ---                                           */
+define input  parameter parParentProc as handle no-undo .
+define input parameter parbtn as character no-undo.
+define input parameter pardoc-code like ub.trn-doc.doc-code no-undo.
+define input parameter table for tt-upd-attr .
+
+/* Local Variable Definitions ---                                       */
+define variable varrec-id as recid no-undo.
+define variable v-no-news as logical   no-undo init false .
+define variable v-attr-mandat-wayb as character  no-undo .
+
+define variable ii  as integer  no-undo .
+define variable bcol as handle extent no-undo.
+define variable hBrowse as handle no-undo.
+
+define variable varis-petrol                 as   logical                     no-undo.
+define variable varis-pieces                 as   logical                     no-undo.
+define buffer buf_trn-doc for ub.trn-doc .
+define buffer bf_doc-line for ub.doc-line .
+
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&ANALYZE-SUSPEND _UIB-PREPROCESSOR-BLOCK 
+
+/* ********************  Preprocessor Definitions  ******************** */
+
+&Scoped-define PROCEDURE-TYPE DIALOG-BOX
+&Scoped-define DB-AWARE no
+
+/* Name of designated FRAME-NAME and/or first browse and/or first query */
+&Scoped-define FRAME-NAME Dialog-Frame
+&Scoped-define BROWSE-NAME b-doc-attr
+
+/* Internal Tables (found by Frame, Query & Browse Queries)             */
+&Scoped-define INTERNAL-TABLES doc-attr tt-upd-attr
+
+/* Definitions for BROWSE b-doc-attr                                    */
+&Scoped-define FIELDS-IN-QUERY-b-doc-attr tt-upd-attr.label-attr trim(ub.doc-attr.attr-value) + " " + tt-upd-attr.full-screen-val   
+&Scoped-define ENABLED-FIELDS-IN-QUERY-b-doc-attr   
+&Scoped-define SELF-NAME b-doc-attr
+&Scoped-define QUERY-STRING-b-doc-attr FOR EACH ub.doc-attr NO-LOCK       WHERE ub.doc-attr.doc-code = pardoc-code, ~
+             first tt-upd-attr where tt-upd-attr.code = ub.doc-attr.attr-code and                                        tt-upd-attr.output-display = yes  by tt-upd-attr.sort
+&Scoped-define OPEN-QUERY-b-doc-attr OPEN QUERY {&SELF-NAME} FOR EACH ub.doc-attr NO-LOCK       WHERE ub.doc-attr.doc-code = pardoc-code, ~
+             first tt-upd-attr where tt-upd-attr.code = ub.doc-attr.attr-code and                                        tt-upd-attr.output-display = yes  by tt-upd-attr.sort                                         .
+&Scoped-define TABLES-IN-QUERY-b-doc-attr doc-attr tt-upd-attr
+&Scoped-define FIRST-TABLE-IN-QUERY-b-doc-attr doc-attr
+&Scoped-define SECOND-TABLE-IN-QUERY-b-doc-attr tt-upd-attr
+
+
+/* Definitions for DIALOG-BOX Dialog-Frame                              */
+&Scoped-define OPEN-BROWSERS-IN-QUERY-Dialog-Frame ~
+    ~{&OPEN-QUERY-b-doc-attr}
+
+/* Standard List Definitions                                            */
+&Scoped-Define ENABLED-OBJECTS b-exit b-help b-doc-attr 
+
+/* Custom List Definitions                                              */
+/* List-1,List-2,List-3,List-4,List-5,List-6                            */
+
+/* _UIB-PREPROCESSOR-BLOCK-END */
+&ANALYZE-RESUME
+
+
+
+/* ***********************  Control Definitions  ********************** */
+
+/* Define a dialog box                                                  */
+
+/* Definitions of the field level widgets                               */
+DEFINE BUTTON b-add 
+     LABEL "&Добавить" 
+     SIZE 10 BY 1
+     BGCOLOR 8 .
+
+DEFINE BUTTON b-chg 
+     LABEL "&Изменить" 
+     SIZE 10 BY 1
+     BGCOLOR 8 .
+
+DEFINE BUTTON b-del 
+     LABEL "&Удалить" 
+     SIZE 10 BY 1
+     BGCOLOR 8 .
+
+DEFINE BUTTON b-exit AUTO-END-KEY 
+     LABEL "&Выход" 
+     SIZE 10 BY 1
+     BGCOLOR 8 .
+
+DEFINE BUTTON b-help 
+     LABEL "&Помощь" 
+     SIZE 10 BY 1
+     BGCOLOR 8 .
+
+DEFINE BUTTON b-lkp 
+     LABEL "&Просмотр" 
+     SIZE 10 BY 1
+     BGCOLOR 8 .
+
+/* Query definitions                                                    */
+&ANALYZE-SUSPEND
+DEFINE QUERY b-doc-attr FOR 
+      doc-attr, 
+      tt-upd-attr SCROLLING.
+&ANALYZE-RESUME
+
+/* Browse definitions                                                   */
+DEFINE BROWSE b-doc-attr
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _DISPLAY-FIELDS b-doc-attr Dialog-Frame _FREEFORM
+  QUERY b-doc-attr NO-LOCK DISPLAY
+      tt-upd-attr.label-attr COLUMN-LABEL "Код" FORMAT "X(40)"
+      trim(ub.doc-attr.attr-value) + " " + tt-upd-attr.full-screen-val COLUMN-LABEL "Значение" FORMAT "X(60)"
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+    WITH NO-ROW-MARKERS SEPARATORS SIZE 97.63 BY 19.29.
+
+
+/* ************************  Frame Definitions  *********************** */
+
+DEFINE FRAME Dialog-Frame
+     b-exit AT ROW 1 COL 1
+     b-add AT ROW 1 COL 11
+     b-lkp AT ROW 1 COL 21
+     b-chg AT ROW 1 COL 31
+     b-del AT ROW 1 COL 41
+     b-help AT ROW 1 COL 51
+     b-doc-attr AT ROW 2.46 COL 1.75
+     SPACE(0.00) SKIP(0.07)
+    WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER 
+         SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE 
+         TITLE "Атрибуты документа"
+         DEFAULT-BUTTON b-exit.
+
+
+/* *********************** Procedure Settings ************************ */
+
+&ANALYZE-SUSPEND _PROCEDURE-SETTINGS
+/* Settings for THIS-PROCEDURE
+   Type: DIALOG-BOX
+   Allow: Basic,Browse,DB-Fields,Query
+ */
+&ANALYZE-RESUME _END-PROCEDURE-SETTINGS
+
+
+
+/* ***********  Runtime Attributes and AppBuilder Settings  *********** */
+
+&ANALYZE-SUSPEND _RUN-TIME-ATTRIBUTES
+/* SETTINGS FOR DIALOG-BOX Dialog-Frame
+   FRAME-NAME                                                           */
+/* BROWSE-TAB b-doc-attr b-help Dialog-Frame */
+ASSIGN 
+       FRAME Dialog-Frame:SCROLLABLE       = FALSE
+       FRAME Dialog-Frame:HIDDEN           = TRUE.
+
+/* SETTINGS FOR BUTTON b-add IN FRAME Dialog-Frame
+   NO-ENABLE                                                            */
+/* SETTINGS FOR BUTTON b-chg IN FRAME Dialog-Frame
+   NO-ENABLE                                                            */
+/* SETTINGS FOR BUTTON b-del IN FRAME Dialog-Frame
+   NO-ENABLE                                                            */
+/* SETTINGS FOR BUTTON b-lkp IN FRAME Dialog-Frame
+   NO-ENABLE                                                            */
+/* _RUN-TIME-ATTRIBUTES-END */
+&ANALYZE-RESUME
+
+
+/* Setting information for Queries and Browse Widgets fields            */
+
+&ANALYZE-SUSPEND _QUERY-BLOCK BROWSE b-doc-attr
+/* Query rebuild information for BROWSE b-doc-attr
+     _START_FREEFORM
+OPEN QUERY {&SELF-NAME} FOR EACH ub.doc-attr NO-LOCK
+      WHERE ub.doc-attr.doc-code = pardoc-code,
+      first tt-upd-attr where tt-upd-attr.code = ub.doc-attr.attr-code and
+                                       tt-upd-attr.output-display = yes  by tt-upd-attr.sort
+                                        .
+     _END_FREEFORM
+     _Options          = "NO-LOCK INDEXED-REPOSITION"
+     _Where[1]         = "doc-attr.doc-code = pardoc-code"
+     _Query            is OPENED
+*/  /* BROWSE b-doc-attr */
+&ANALYZE-RESUME
+
+ 
+
+
+
+/* ************************  Control Triggers  ************************ */
+
+&Scoped-define SELF-NAME Dialog-Frame
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CONTROL Dialog-Frame Dialog-Frame
+ON WINDOW-CLOSE OF FRAME Dialog-Frame /* Атрибуты документа */
+DO:
+  APPLY "END-ERROR":U TO SELF.
+END.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&Scoped-define SELF-NAME b-add
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CONTROL b-add Dialog-Frame
+ON CHOOSE OF b-add IN FRAME Dialog-Frame /* Добавить */
+DO:
+  assign
+    varrec-id = recid(ub.doc-attr).
+  run st-attr in this-procedure no-error.
+  {&OPEN-BROWSERS-IN-QUERY-Dialog-Frame}
+  if varrec-id <> ? then reposition {&browse-name} to recid varrec-id.
+end.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&Scoped-define SELF-NAME b-chg
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CONTROL b-chg Dialog-Frame
+ON CHOOSE OF b-chg IN FRAME Dialog-Frame /* Изменить */
+DO:
+define variable vartemp-char as character  no-undo.
+define variable p-anyfromproc as character no-undo .
+define variable p-start-h as integer no-undo.
+define variable p-start-m as integer no-undo.
+define variable p-end-h   as integer no-undo.
+define variable p-end-m   as integer no-undo.
+if available tt-upd-attr then do:
+  if tt-upd-attr.user-can-edit then do:
+    assign
+       vartemp-char = ub.doc-attr.attr-value
+    .
+    if tt-upd-attr.proc-win = "" then do:
+        run gbl/d-prompt.w (
+            'title=':u + 'Изменение атрибутов документа' + '\':u
+            + 'text1=':u + tt-upd-attr.label-attr + '\':u
+            + 'format=' + tt-upd-attr.format-attr + '\':u
+            + 'type=' + tt-upd-attr.type-attr + '\':u
+            + 'fillin_row=2\':u
+            + 'fillin_col=4\':u
+            + 'fillin_width=':u  + string(tt-upd-attr.fillin_width) + '\':u
+            + 'fillin_height=':u + string(tt-upd-attr.fillin_height) + '\':u
+            + 'max-chars=70\':u
+            + 'readonly=' + 'no':u + '\':u
+            , input-output vartemp-char
+            ) no-error.
+        if error-status:error then do:
+            message "Ошибка при изменении атрибута." skip
+                    return-value skip
+                    error-status:get-message(1) view-as alert-box error.
+            return no-apply.
+        end.
+        if return-value = 'false':u then do:
+          return no-apply.
+        end.
+                if tt-upd-attr.code = "delivery-time" then do:
+            p-start-h = integer(entry(1,entry(1,vartemp-char,"-"),":")).
+            p-start-m = integer(entry(2,entry(1,vartemp-char,"-"),":")).
+            p-end-h = integer(entry(1,entry(2,vartemp-char,"-"),":")).
+            p-end-m = integer(entry(2,entry(2,vartemp-char,"-"),":")).
+            
+            if p-start-h > 23 then p-start-h = 23.
+            if p-start-m > 59 then p-start-m = 59.
+            if p-end-h > 23 then do:
+                p-end-h = 23.
+                p-end-m = 59.
+            end.
+            if p-end-m > 59 then p-end-m = 59.
+            if p-start-h * 60 + p-start-m > p-end-h * 60 + p-end-m then do:
+                p-end-h = 23.
+                p-end-m = 59.
+            end.
+            vartemp-char = string(p-start-h,"99") + ":" + string(p-start-m,"99") + "-" + string(p-end-h,"99") + ":" + string(p-end-m,"99").
+        end.
+    end.
+    else do:
+        run value (tt-upd-attr.proc-win) ( input parparentproc , input this-procedure , input-output vartemp-char , input-output tt-upd-attr.full-screen-val ) .
+    end.
+     { str/tdat-wrt.i
+         ub.doc-attr.doc-code
+         ub.doc-attr.attr-code
+         vartemp-char
+         no-error
+     }
+     if error-status :error then do:
+       message "Ошибка при сохранении атрибута." view-as alert-box.
+       undo, return no-apply.
+     end.
+     assign
+       varrec-id = recid(ub.doc-attr).
+     if not v-no-news  then do:
+          { str/tdat-oth.i
+              ub.doc-attr.doc-code
+              ub.doc-attr.attr-code
+              vartemp-char
+              no-error
+          }
+          if error-status :error then do:
+            message "Ошибка при обработке атрибута." view-as alert-box.
+            undo, return no-apply.
+          end.
+     end.
+
+
+     {&OPEN-BROWSERS-IN-QUERY-Dialog-Frame}
+     reposition {&browse-name} to recid varrec-id.
+  end.
+  else do:
+     message "Атрибут " tt-upd-attr.label-attr " не редактируется в данном интерфейсе."
+     view-as alert-box.
+     return no-apply.
+  end.
+end.
+END.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&Scoped-define SELF-NAME b-del
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CONTROL b-del Dialog-Frame
+ON CHOOSE OF b-del IN FRAME Dialog-Frame /* Удалить */
+DO:
+define variable varg-log  as logical no-undo.
+define variable v-deleted as logical no-undo.
+do on error undo, return no-apply :
+if available tt-upd-attr then do:
+  message "Вы хотите удалить атрибут " tt-upd-attr.label-attr " ?" view-as alert-box
+  question buttons yes-no update varg-log.
+  if varg-log then do:
+    { str/tdat-del.i
+        ub.doc-attr.doc-code
+        ub.doc-attr.attr-code
+        v-deleted
+        no-error
+    }
+    if error-status :error then do:
+      message "Ошибка при удалении атрибута." view-as alert-box.
+      undo, return no-apply.
+    end.
+    {&OPEN-BROWSERS-IN-QUERY-Dialog-Frame}
+  end.
+end.
+end.
+END.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&Scoped-define BROWSE-NAME b-doc-attr
+&Scoped-define SELF-NAME b-doc-attr
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CONTROL b-doc-attr Dialog-Frame
+ON return OF b-doc-attr IN FRAME Dialog-Frame
+DO:
+      if  b-chg:sensitive THEN apply "CHOOSE":U to b-chg.
+      else apply "choose":U to b-lkp.
+      return no-apply.
+END.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CONTROL b-doc-attr Dialog-Frame
+ON ROW-DISPLAY OF b-doc-attr IN FRAME Dialog-Frame
+DO:
+  run rowdisp .
+END.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&Scoped-define SELF-NAME b-lkp
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CONTROL b-lkp Dialog-Frame
+ON CHOOSE OF b-lkp IN FRAME Dialog-Frame /* Просмотр */
+DO:
+
+define variable vartemp-char as character  no-undo.
+if available tt-upd-attr then do:
+  assign
+  vartemp-char = ub.doc-attr.attr-value.
+  run gbl/d-prompt.w (
+        'title=':u + 'Изменение атрибутов документа' + '\':u
+       + 'text1=':u + tt-upd-attr.label-attr + '\':u
+       + 'format=' + tt-upd-attr.format-attr + '\':u
+       + 'type=' + tt-upd-attr.type-attr + '\':u
+       + 'fillin_row=2\':u
+       + 'fillin_col=4\':u
+       + 'fillin_width=':u  + string(tt-upd-attr.fillin_width) + '\':u
+       + 'fillin_height=':u + string(tt-upd-attr.fillin_height) + '\':u
+       + 'max-chars=70\':u
+       + 'readonly=' + 'yes':u + '\':u
+       , input-output vartemp-char
+       ) no-error.
+end.
+end.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+&UNDEFINE SELF-NAME
+
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _CUSTOM _MAIN-BLOCK Dialog-Frame 
+
+
+/* ***************************  Main Block  *************************** */
+
+/* Parent the dialog-box to the ACTIVE-WINDOW, if there is no parent.   */
+IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME {&FRAME-NAME}:PARENT eq ?
+THEN FRAME {&FRAME-NAME}:PARENT = ACTIVE-WINDOW.
+
+{ gbl/app_help.i }
+
+{ gbl/hot-key.i b-lkp }
+{ gbl/hot-key.i b-add }
+{ gbl/hot-key.i b-chg }
+{ gbl/hot-key.i b-del }
+
+{ gbl/brwrefre.i }
+{ gbl/brwrepos.i &line-num=4 }
+
+/* Now enable the interface and wait for the exit condition.            */
+/* (NOTE: handle ERROR and END-KEY so cleanup code will always fire.    */
+MAIN-BLOCK:
+DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+   ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+  if lookup ("b-lkp", parbtn) > 0 then do:
+    enable b-lkp with frame {&frame-name}.
+  end.
+  if lookup ("b-add", parbtn) > 0 then do:
+    enable b-add with frame {&frame-name}.
+  end.
+  if lookup ("b-chg", parbtn) > 0 then do:
+    enable b-chg with frame {&frame-name}.
+  end.
+  if lookup ("b-del", parbtn) > 0 then do:
+    enable b-del with frame {&frame-name}.
+  end.
+  if lookup ("no-news", parbtn) > 0 then do:
+     v-no-news = true .
+  end.
+  /* Получим из секции Складские документы   нужные переменные */
+  find first buf_trn-doc no-lock where buf_trn-doc.doc-code = pardoc-code .
+  def var is-fuel as logical no-undo. /* для топлива и СУГ */
+  def var v-value as character no-undo.
+  def var v-type as logical no-undo.
+  { str/tdat-val.i                                    
+   buf_trn-doc.doc-code
+   {&trdcattr-is-fuel}
+   v-value 
+   v-type no-error}
+  assign
+    is-fuel = yes when v-value = "yes".
+  if not is-fuel then do:
+    { str/tdat-val.i                                    
+     buf_trn-doc.doc-code
+     {&trdcattr-is-lgas}
+     v-value 
+     v-type no-error}
+    assign
+      is-fuel = yes when v-value = "yes".
+  end.
+  if not is-fuel
+  then do:
+    { str/tdat-val.i                                    
+     buf_trn-doc.doc-code
+     {&trdcattr-is-lgas-corr}
+     v-value 
+     v-type no-error}
+    assign
+      is-fuel = yes when v-value = "yes".
+  end.
+  v-attr-mandat-wayb = "".
+  { gbl/getsect.i run buf_trn-doc.obj-type buf_trn-doc.obj-code {&attr-nakl_par} }  
+
+  if buf_trn-doc.ext-doc-type = {&TDEDT_Pri_Vnesh}
+  then do:
+    if is-fuel 
+    then
+      for each thbjattr_thbj-attr :
+        if thbjattr_thbj-attr.prop-code = 'attr-PN' then v-attr-mandat-wayb =  thbjattr_thbj-attr.property-value-character .
+      end.
+    else
+      for each thbjattr_thbj-attr :
+        if thbjattr_thbj-attr.prop-code = 'attr-mandatory-gds-in-wayb' then v-attr-mandat-wayb =  thbjattr_thbj-attr.property-value-character .
+      end.
+  end.
+    
+  
+  find first bf_doc-line no-lock where bf_doc-line.doc-code = buf_trn-doc.doc-code no-error.
+  if available (bf_doc-line)
+  then do:
+    { str/is-petrl.i
+      bf_doc-line.artic
+      bf_doc-line.prod-type
+      bf_doc-line.prod-code
+      varis-petrol
+      varis-pieces
+      no-error
+    }
+    if error-status :error
+    then do:
+      undo, return error return-value.
+    end.
+  end.
+  
+  if not (varis-petrol and
+    not varis-pieces) /*применяеться только если есть хотя бы один не топливный товар в накладной*/
+  then do:
+    case buf_trn-doc.ext-doc-type:
+    when {&TDEDT_Ras_Vnesh_VP} then
+      for each thbjattr_thbj-attr :
+        if thbjattr_thbj-attr.prop-code = 'attr-mandatory-gds-ret-wayb' then v-attr-mandat-wayb =  thbjattr_thbj-attr.property-value-character .
+      end.  
+    when {&TDEDT_Ras_Vnesh} then
+      for each thbjattr_thbj-attr :
+        if thbjattr_thbj-attr.prop-code = 'attr-mandatory-gds-exp-wayb' then v-attr-mandat-wayb =  thbjattr_thbj-attr.property-value-character .
+      end.  
+    end case.
+  end.
+  
+        
+  run init-proc in this-procedure .
+  hbrowse = browse b-doc-attr:handle.
+  extent (bcol) = hbrowse:num-columns.
+  bcol[1] = hbrowse:first-column.
+  do ii = 1 to extent (bcol).  
+  bcol[ii] = hbrowse:get-browse-column (ii).
+end.
+  RUN enable_UI.
+  apply 'entry':u to browse {&browse-name} .
+  wait-for go of frame {&frame-name}.
+END.
+RUN disable_UI.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+/* **********************  Internal Procedures  *********************** */
+
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _PROCEDURE disable_UI Dialog-Frame  _DEFAULT-DISABLE
+PROCEDURE disable_UI :
+/*------------------------------------------------------------------------------
+  Purpose:     DISABLE the User Interface
+  Parameters:  <none>
+  Notes:       Here we clean-up the user-interface by deleting
+               dynamic widgets we have created and/or hide 
+               frames.  This procedure is usually called when
+               we are ready to "clean-up" after running.
+------------------------------------------------------------------------------*/
+  /* Hide all frames. */
+  HIDE FRAME Dialog-Frame.
+END PROCEDURE.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _PROCEDURE enable_UI Dialog-Frame  _DEFAULT-ENABLE
+PROCEDURE enable_UI :
+/*------------------------------------------------------------------------------
+  Purpose:     ENABLE the User Interface
+  Parameters:  <none>
+  Notes:       Here we display/view/enable the widgets in the
+               user-interface.  In addition, OPEN all queries
+               associated with each FRAME and BROWSE.
+               These statements here are based on the "Other 
+               Settings" section of the widget Property Sheets.
+------------------------------------------------------------------------------*/
+  ENABLE b-exit b-help b-doc-attr 
+      WITH FRAME Dialog-Frame.
+  VIEW FRAME Dialog-Frame.
+  {&OPEN-BROWSERS-IN-QUERY-Dialog-Frame}
+END PROCEDURE.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _PROCEDURE init-proc Dialog-Frame 
+PROCEDURE init-proc :
+/* -----------------------------------------------------------
+  Purpose:
+  Parameters:  <none>
+  Notes:
+-------------------------------------------------------------*/
+define variable v-func-name as character no-undo .
+define variable v-proc-name as character no-undo .
+define variable tt as character no-undo .
+define variable i as integer   no-undo .
+
+ for each ub.doc-attr no-lock      where
+          ub.doc-attr.doc-code = pardoc-code,
+          first tt-upd-attr where tt-upd-attr.code = ub.doc-attr.attr-code and
+                tt-upd-attr.output-display = yes  :
+      repeat i = 1 to 2 :
+        tt = entry(1,entry(i,tt-upd-attr.proc-attr) ,"=") no-error .
+        if error-status :error then tt = '' .
+       if  tt  = 'win'  then v-proc-name = entry(2,entry(i,tt-upd-attr.proc-attr) ,"=") no-error  .
+       if  tt  = 'func' then v-func-name = entry(2,entry(i,tt-upd-attr.proc-attr) ,"=") no-error .
+       if  tt  = ''     then assign
+                              v-func-name = ''
+                              v-proc-name = ''
+                              tt-upd-attr.proc-attr = ''
+                              .
+      end.
+
+      if v-proc-name = ? then v-proc-name = '' .
+      if v-func-name = ? then v-func-name = '' .
+      tt-upd-attr.proc-win   = v-proc-name .
+      tt-upd-attr.proc-func  = v-func-name .
+
+      if v-func-name <> "" then tt-upd-attr.full-screen-val  = dynamic-function ( tt-upd-attr.proc-func , ub.doc-attr.attr-code , ub.doc-attr.attr-value ) .
+                           else tt-upd-attr.full-screen-val  = "" .
+
+  end.
+
+END PROCEDURE.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _PROCEDURE rowdisp Dialog-Frame 
+PROCEDURE rowdisp :
+  
+do ii = 1 to extent (bcol).  
+    if valid-handle (bcol[ii]) 
+    then do:
+      assign
+        bcol[ii]:fgcolor = RED_COLOR when lookup (ub.doc-attr.attr-code, v-attr-mandat-wayb) > 0.
+    end.
+  end.  
+
+END PROCEDURE.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+&ANALYZE-SUSPEND _UIB-CODE-BLOCK _PROCEDURE st-attr Dialog-Frame 
+PROCEDURE st-attr :
+/* -----------------------------------------------------------
+  Purpose:
+  Parameters:  <none>
+  Notes:
+-------------------------------------------------------------*/
+  define variable varattr-code like ub.doc-attr.attr-code no-undo.
+  define buffer bf_doc-attr for ub.doc-attr.
+  define variable vartemp-char as character no-undo.
+
+  define buffer buf_doc-attr for ub.doc-attr .
+  define buffer buf_tt-upd-attr for tt-upd-attr .
+
+  do
+  transaction on error undo, return error return-value
+  :
+    /* устанавливаем признаки на атрибутах, которые можно выбрать */
+    for each buf_tt-upd-attr
+    on error undo, return error return-value
+    :
+      find first buf_doc-attr no-lock
+        where buf_doc-attr.doc-code  = pardoc-code
+          and buf_doc-attr.attr-code = buf_tt-upd-attr.code
+        no-error .
+      if available buf_doc-attr
+      then do:
+        assign
+          buf_tt-upd-attr.can-select = false
+        .
+      end.
+      else do:
+        assign
+          buf_tt-upd-attr.can-select = true
+        .
+      end.
+    end.
+
+    run str/b-attr.w
+      (input table tt-upd-attr
+      ,output varattr-code
+      ) no-error .
+    if error-status :error
+    then do:
+      if return-value <> ""
+      then do:
+        message
+          "Ошибка при выборе добавляемого атрибута."
+          view-as alert-box error.
+      end.
+      undo, return error.
+    end.
+    find first tt-upd-attr where tt-upd-attr.code = varattr-code no-error.
+    if not available tt-upd-attr then do:
+      message "Не верно выбран атрибут для добавления." view-as alert-box error.
+      undo, return error.
+    end.
+    if tt-upd-attr.user-can-edit <> yes then do:
+      message "Атрибут нельзя добавить в данном интерфейсе." view-as alert-box.
+      undo, return error.
+    end.
+    find first bf_doc-attr where bf_doc-attr.doc-code   = pardoc-code and
+                                bf_doc-attr.attr-code = varattr-code no-lock no-error.
+    if available bf_doc-attr then  do:
+      message "Атрибут " tt-upd-attr.label-attr " уже есть в документе " pardoc-code " ."
+      view-as alert-box error.
+      undo, return error.
+    end.
+    create ub.doc-attr.
+    assign
+      ub.doc-attr.doc-code   = pardoc-code
+      ub.doc-attr.attr-code = varattr-code.
+    run gbl/d-prompt.w (
+          'title=':u + 'Изменение атрибутов документа' + '\':u
+          + 'text1=':u + tt-upd-attr.label-attr + '\':u
+          + 'format=' + tt-upd-attr.format-attr + '\':u
+          + 'type=' + tt-upd-attr.type-attr + '\':u
+          + 'fillin_row=2\':u
+          + 'fillin_col=4\':u
+          + 'fillin_width=':u  + string(tt-upd-attr.fillin_width) + '\':u
+          + 'fillin_height=':u + string(tt-upd-attr.fillin_height) + '\':u
+          + 'max-chars=70\':u
+          + 'readonly=' + 'no':u + '\':u
+          , input-output vartemp-char
+          ) no-error.
+    if error-status:error then do:
+      message "Ошибка при изменении атрибута." skip
+              return-value skip
+              error-status:get-message(1) view-as alert-box error.
+      undo, return error.
+    end.
+    if return-value = 'false':u then do:
+      undo, return error.
+    end.
+    { str/tdat-wrt.i
+        ub.doc-attr.doc-code
+        ub.doc-attr.attr-code
+        vartemp-char
+        no-error
+    }
+    if error-status :error then do:
+        message "Ошибка при сохранении атрибута." view-as alert-box.
+        undo, return error.
+      end.
+
+    assign
+      varrec-id = recid(ub.doc-attr)
+      .
+
+     if not v-no-news  then do:
+          { str/tdat-oth.i
+              ub.doc-attr.doc-code
+              ub.doc-attr.attr-code
+              vartemp-char
+              no-error
+          }
+          if error-status :error then do:
+            message "Ошибка при обработке атрибута." view-as alert-box.
+            undo, return no-apply.
+          end.
+     end.
+
+  end.
+
+END PROCEDURE.
+
+/* _UIB-CODE-BLOCK-END */
+&ANALYZE-RESUME
+
+
+

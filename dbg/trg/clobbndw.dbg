@@ -1,0 +1,244 @@
+        1   block-level on error undo, throw.
+        2   TRIGGER PROCEDURE FOR WRITE OF ub.clob-bind.
+        3   define variable vss-revision    as character no-undo init "$Revision$":U .
+        4   define variable vss-author      as character no-undo init "$Author$":U .
+        5   define variable vss-date        as character no-undo init "$Date$":U .
+        6   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        7   define variable vss-archive     as character no-undo init "$Archive$":U .
+        8   define variable vss-description as character no-undo init "Триггер на запись clob-bind".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27   end procedure.
+       28   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       29   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       30   define variable v-vssrevis-logger                   as handle    no-undo .
+       31   procedure vss-logevent :
+       32     define input  parameter p-extra-paramters as character no-undo .
+       33     define variable v-vssrevis-parameters as character no-undo .
+       34     do
+       35     on error undo, return error return-value
+       36     :
+       37       if  valid-handle(v-vssrevis-logger)
+       38       and v-vssrevis-logger :get-signature("logevent") <> ""
+       39       then do:
+       40         run vss-get-parameters in this-procedure
+       41           (output v-vssrevis-parameters
+       42           ).
+       43         run logevent in v-vssrevis-logger
+       44           (input vss-workfile
+       45           ,input vss-revision
+       46           ,input v-vssrevis-parameters
+       47           ,input p-extra-paramters
+       48           ).
+       49       end.
+       50     end.
+       51   end procedure.
+       52   assign
+       53     v-vssrevis-logger = g#vssrevis-logger
+       54   .
+       55   if  valid-handle(v-vssrevis-logger)
+       56   and v-vssrevis-logger :get-signature("logevent") <> ""
+       57   then do:
+       58     assign
+       59       v-vssrevis-logevent = true
+       60     .
+       61     run vss-logevent in this-procedure (input vss-description) .
+       62   end.
+       63   define new global shared variable g#language as character no-undo .
+       64   if g#language <> '' and g#language <> 'rus':U then do:
+       65     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       66   end.
+       67   define new global shared variable g#library  as handle no-undo .
+       68   define new global shared variable g#library2 as handle no-undo .
+       69   define   shared variable g#auto as logical no-undo.
+       70   define   shared variable g#news as logical no-undo.
+       71   define   shared variable g#oxml as logical no-undo.
+       72   define   shared variable g#esys as logical no-undo.
+       73   define   shared variable g#news-source-db as integer no-undo.
+       74   define   shared variable g#esys-source-esys as integer no-undo.
+       75   define   shared variable g#db-num as integer   no-undo .
+       76   define   shared variable g#userid as character no-undo .
+       77   define   shared variable g#passwd as character no-undo .
+       78   define variable v-send as logical   no-undo .
+       79   define variable v-call-handle as handle no-undo .
+       80   define buffer buf_clob-bind for ub.clob-bind.
+       81   output to delclob.txt append.
+       82   main-block:
+       83   do
+       84   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+       85   on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+       86   on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+       87   :
+       88       if lookup(ub.clob-bind.resource-type, 'data,gate,upgrade,report,report-xml,list,list-macro,ref,egais-wb,egais-ref-b,egais-ab,egais-awo,egais-wb-act,egais-ticket,egais-wb-ticket,egais-ab_shop,egais-awo_shop,egais-tts,egais-tfs,egais-qb':U) = 0 then do:
+       89         message
+       90         substitute("Неизвестный resource-type = &1 для clob-bind", ub.clob-bind.resource-type)
+       91         view-as alert-box error .
+       92         undo main-block, return error .
+       93       end.
+       94       if ub.clob-bind.resource-type = 'gate':U
+       95       and g#db-num > 0
+       96       and not g#news then do:
+       97         message
+       98         substitute("Не разрешено менять gate в УБД")
+       99         view-as alert-box error .
+      100         undo main-block, return error .
+      101       end.
+      102       if ub.clob-bind.resource-type = 'gate':U
+      103       or new(ub.clob-bind) then do:
+      104   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      105   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curdburt in g#library
+      106     (output ub.clob-bind.user-db-num
+      107     ,output ub.clob-bind.user-name
+      108     ,output ub.clob-bind.sys-date
+      109     ,output ub.clob-bind.sys-time
+      110     ,output ub.clob-bind.sys-time-int
+      111     )  .
+      112       end.
+      113      if g#db-num = 0
+      114      and
+      115       (ub.clob-bind.resource-type = 'egais-wb':U
+      116           or ub.clob-bind.resource-type = 'egais-ref-b':U
+      117           or ub.clob-bind.resource-type = 'egais-wb-act':U
+      118           or ub.clob-bind.resource-type = 'egais-ticket':U
+      119           or ub.clob-bind.resource-type = 'egais-wb-ticket':U
+      120           or ub.clob-bind.resource-type = 'egais-ab':U
+      121           or ub.clob-bind.resource-type = 'egais-awo':U
+      122           or ub.clob-bind.resource-type = 'egais-ab_shop':U
+      123           or ub.clob-bind.resource-type = 'egais-awo_shop':U
+      124           or ub.clob-bind.resource-type = 'egais-tts':U
+      125           or ub.clob-bind.resource-type = 'egais-tfs':U
+      126           or ub.clob-bind.resource-type = 'egais-qb':U)
+      127      and not g#news
+      128      then do:
+      129        if ub.clob-bind.db-num = 0
+      130          then
+      131        do:
+      132          find first buf_clob-bind no-lock
+      133            where buf_clob-bind.db-num <> 0 and  buf_clob-bind.resource-type = ub.clob-bind.resource-type and  buf_clob-bind.uniq-key-rec = ub.clob-bind.uniq-key-rec and recid (buf_clob-bind) <> recid (ub.clob-bind) no-error.
+      134          if available (buf_clob-bind)
+      135            then
+      136          do:
+      137            undo main-block,  return error
+      138              vss-workfile + vss-revision + vss-description + chr(10) +
+      139              "Ошибка при вызове при сохранении записи clob-bind" + chr(10) +
+      140              "Уже есть запись для " + ub.clob-bind.resource-type + chr(10) +
+      141              "С индетификатором " + ub.clob-bind.uniq-key-rec + chr(10) +
+      142              "полученная из БД " + string (buf_clob-bind.db-num) + chr(10)
+      143              .
+      144          end.
+      145        end.
+      146      end.
+      147       if not g#news then do:
+      148         v-call-handle = this-procedure:instantiating-procedure.
+      149         if valid-handle (v-call-handle) and lookup("cb_set-send-nws", v-call-handle:internal-entries) > 0 then do:
+      150           run cb_set-send-nws in v-call-handle ( output v-send) .
+      151         end.
+      152         else do:
+      153           v-send = yes.
+      154         end.
+      155         if (g#db-num = 0
+      156            and
+      157             (ub.clob-bind.resource-type = 'egais-wb':U
+      158                 or ub.clob-bind.resource-type = 'egais-ref-b':U
+      159                 or ub.clob-bind.resource-type = 'egais-wb-act':U
+      160                 or ub.clob-bind.resource-type = 'egais-ticket':U
+      161                 or ub.clob-bind.resource-type = 'egais-wb-ticket':U
+      162                 or ub.clob-bind.resource-type = 'egais-ab':U
+      163                 or ub.clob-bind.resource-type = 'egais-awo':U
+      164                 or ub.clob-bind.resource-type = 'egais-ab_shop':U
+      165                 or ub.clob-bind.resource-type = 'egais-awo_shop':U
+      166                 or ub.clob-bind.resource-type = 'egais-tts':U
+      167                 or ub.clob-bind.resource-type = 'egais-tfs':U
+      168                 or ub.clob-bind.resource-type = 'egais-qb':U))
+      169           then v-send = false.
+      170         if v-send then do:
+      171           run str/callnews.p
+      172             (input 'clob-bind':U
+      173             ,input (buffer ub.clob-bind:handle)
+      174             ) no-error .
+      175           if error-status:error then do:
+      176             if error-status :get-message(1) <> ""
+      177             then do:
+      178               message
+      179                 vss-workfile vss-revision vss-description skip
+      180                 "Ошибка при вызове процедуры callnews.p" skip
+      181                 error-status :get-message(1) skip
+      182                 return-value skip
+      183                 view-as alert-box error .
+      184             end.
+      185             undo main-block,  return error return-value .
+      186           end.
+      187         end.
+      188      end.
+      189      else do:
+      190        if g#db-num = 0
+      191        and not
+      192         (ub.clob-bind.resource-type = 'egais-wb':U
+      193             or ub.clob-bind.resource-type = 'egais-ref-b':U
+      194             or ub.clob-bind.resource-type = 'egais-wb-act':U
+      195             or ub.clob-bind.resource-type = 'egais-ticket':U
+      196             or ub.clob-bind.resource-type = 'egais-wb-ticket':U
+      197             or ub.clob-bind.resource-type = 'egais-ab':U
+      198             or ub.clob-bind.resource-type = 'egais-awo':U
+      199             or ub.clob-bind.resource-type = 'egais-ab_shop':U
+      200             or ub.clob-bind.resource-type = 'egais-awo_shop':U
+      201             or ub.clob-bind.resource-type = 'egais-tts':U
+      202             or ub.clob-bind.resource-type = 'egais-tfs':U
+      203             or ub.clob-bind.resource-type = 'egais-qb':U)
+      204        then do:
+      205         define buffer buf_clob-data for ub.clob-data.
+      206         find first buf_clob-data no-lock where
+      207                   buf_clob-data.db-num = ub.clob-bind.db-num
+      208               and buf_clob-data.int64-id = ub.clob-bind.int64-id no-error.
+      209         if available buf_clob-data
+      210         and buf_clob-data.is-cs = yes then do:
+      211           run str/callnews.p ( input 'clob-bind':U
+      212                             ,input (buffer ub.clob-bind:handle)
+      213                             ) no-error .
+      214           if error-status:error then do:
+      215             if error-status :get-message(1) <> ""
+      216             then do:
+      217               message
+      218                 vss-workfile vss-revision vss-description skip
+      219                 "Ошибка при вызове callnews.p" skip
+      220                 error-status :get-message(1) skip
+      221                 return-value skip
+      222                 view-as alert-box error .
+      223             end.
+      224             undo main-block,  return error return-value .
+      225           end.
+      226         end.
+      227        end.
+      228        if g#db-num = 0
+      229        and
+      230         (ub.clob-bind.resource-type = 'egais-wb':U
+      231             or ub.clob-bind.resource-type = 'egais-ref-b':U
+      232             or ub.clob-bind.resource-type = 'egais-wb-act':U
+      233             or ub.clob-bind.resource-type = 'egais-ticket':U
+      234             or ub.clob-bind.resource-type = 'egais-wb-ticket':U)
+      235        then do:
+      236          for each buf_clob-bind where
+      237            buf_clob-bind.uniq-key-rec = ub.clob-bind.uniq-key-rec and recid (buf_clob-bind) <> recid (ub.clob-bind)
+      238            and buf_clob-bind.resource-type = ub.clob-bind.resource-type and buf_clob-bind.db-num = 0:
+      239             export buf_clob-bind.
+      240             delete buf_clob-bind.
+      241          end.
+      242        end.
+      243      end.
+      244   end.

@@ -1,0 +1,310 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00001000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cut/00001000.p $".
+        7   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 1.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define input parameter vartype-cut            as integer   no-undo.
+       13   define input parameter varlist-db             as character no-undo.
+       14   define input parameter vardate-actual-goods   as date      no-undo.
+       15   define input parameter vardate-actual-docs    as date      no-undo.
+       16   define input parameter vardate-actual-findoc  as date      no-undo.
+       17   define input parameter vardate-output-zone    as date      no-undo.
+       18   define input parameter varstay-recipe-goods   as logical   no-undo.
+       19   define input parameter varstay-weight-goods   as logical   no-undo.
+       20   define input parameter varnot-copy-del-goods  as logical   no-undo.
+       21   define input parameter varstay-history        as logical   no-undo.
+       22   define input parameter vargen-file            as character no-undo.
+       23   define stream str-gen.
+       24   output stream str-gen to vargen-file append.
+       25   if not connected("src") then do:
+       26      return error "Нет коннекта с базой 'src'.".
+       27   end.
+       28   if not connected("dst") then do:
+       29      return error "Нет коннекта с базой 'dst'.".
+       30   end.
+       31   find src.sys-ctrl no-lock.
+       32   if not available src.sys-ctrl then do:
+       33      return error "В базе данных src не найдена уникальная запись sys-ctrl.".
+       34   end.
+       35   if src.sys-ctrl.db-num <> 0 then do:
+       36      return error "Пакет обрезания работает только в главной базе данных. В данной версии удаленные БД создаются выгрузкой из главных.".
+       37   end.
+       38   if vardate-actual-docs <> ? and
+       39      (vardate-actual-goods   > vardate-actual-docs or
+       40       vardate-actual-goods   = ? )   then do:
+       41         return error SUBSTITUTE("Ошибка при задании дат актуальности." +
+       42                                 "Дата актуальности товаров &1."        +
+       43                                 "Дата актуальности документов &2."     +
+       44                                 "Дата актуальности документов должна быть больше или равна дат актуальностей товаров.",
+       45                                 vardate-actual-goods,
+       46                                 vardate-actual-docs).
+       47   end.
+       48   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       49   define new global shared variable g#attr-lib  as handle no-undo .
+       50   define variable v-attr-lib-variable as handle no-undo .
+       51   procedure db-attr-code :
+       52     define input  parameter p-code           as character no-undo .
+       53     define output parameter p-type           as character no-undo .
+       54     define output parameter p-format         as character no-undo .
+       55     define output parameter p-label          as character no-undo .
+       56     define output parameter p-user-can-edit  as logical   no-undo .
+       57     define output parameter p-output-display as logical   no-undo .
+       58     define output parameter p-other          as character no-undo .
+       59     do
+       60     on error undo, return error
+       61     :
+       62           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-code in g#attr-lib
+       63         (input  p-code
+       64         ,output p-type
+       65         ,output p-format
+       66         ,output p-label
+       67         ,output p-user-can-edit
+       68         ,output p-output-display
+       69         ,output p-other
+       70         ) no-error .
+       71       if error-status :error
+       72       then do:
+       73         undo, return error return-value .
+       74       end.
+       75     end.
+       76   end procedure.
+       77   procedure db-attr-tooltip :
+       78     define input  parameter p-code    as character no-undo .
+       79     define output parameter p-tooltip as character no-undo .
+       80     define output parameter p-label   as character no-undo .
+       81     do
+       82     on error undo, return error
+       83     :
+       84           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-tooltip in g#attr-lib
+       85         (input  p-code
+       86         ,output p-tooltip
+       87         ,output p-label
+       88         ) no-error .
+       89       if error-status :error
+       90       then do:
+       91         undo, return error return-value .
+       92       end.
+       93     end.
+       94   end procedure.
+       95   procedure db-attr-value :
+       96     define input  parameter p-db-num    like ub.db-attr.db-num     no-undo .
+       97     define input  parameter p-code      like ub.db-attr.attr-code  no-undo .
+       98     define output parameter p-value     like ub.db-attr.attr-value no-undo .
+       99     define output parameter p-type      as character no-undo .
+      100     do
+      101     on error undo, return error
+      102     :
+      103           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-value in g#attr-lib
+      104         (input  p-db-num
+      105         ,input  p-code
+      106         ,output p-value
+      107         ,output p-type
+      108         ) no-error .
+      109       if error-status :error
+      110       then do:
+      111         undo, return error return-value .
+      112       end.
+      113     end.
+      114   end procedure.
+      115   procedure db-attr-write :
+      116     define input parameter p-db-num    like ub.db-attr.db-num     no-undo .
+      117     define input parameter p-code      like ub.db-attr.attr-code  no-undo .
+      118     define input parameter p-value     like ub.db-attr.attr-value no-undo .
+      119     do
+      120     on error undo, return error
+      121     :
+      122           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-write in g#attr-lib
+      123         (input p-db-num
+      124         ,input p-code
+      125         ,input p-value
+      126         ) no-error .
+      127       if error-status :error
+      128       then do:
+      129         undo, return error return-value .
+      130       end.
+      131     end.
+      132   end procedure.
+      133   procedure db-attr-exist :
+      134     define input  parameter p-db-num    like ub.db-attr.db-num     no-undo .
+      135     define input  parameter p-code      like ub.db-attr.attr-code  no-undo .
+      136     define output parameter p-exist    as logical  no-undo .
+      137     do
+      138     on error undo, return error
+      139     :
+      140           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-exist in g#attr-lib
+      141         (input  p-db-num
+      142         ,input  p-code
+      143         ,output p-exist
+      144         ) no-error .
+      145       if error-status :error
+      146       then do:
+      147         undo, return error return-value .
+      148       end.
+      149     end.
+      150   end procedure.
+      151   procedure db-attr-delete :
+      152     define input  parameter p-db-num   like ub.db-attr.db-num     no-undo .
+      153     define input  parameter p-code     like ub.db-attr.attr-code  no-undo .
+      154     define output parameter p-deleted  as logical no-undo.
+      155     do
+      156     on error undo, return error
+      157     :
+      158           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-delete in g#attr-lib
+      159         (input  p-db-num
+      160         ,input  p-code
+      161         ,output p-deleted
+      162         ) no-error .
+      163       if error-status :error
+      164       then do:
+      165         undo, return error return-value .
+      166       end.
+      167     end.
+      168   end procedure.
+      169   procedure db-attr-news :
+      170     define input  parameter p-code           as character no-undo .
+      171     define output parameter p-news           as logical   no-undo .
+      172     do
+      173     on error undo, return error
+      174     :
+      175           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-news in g#attr-lib
+      176         (input  p-code
+      177         ,output p-news
+      178         ) no-error .
+      179       if error-status :error
+      180       then do:
+      181         undo, return error return-value .
+      182       end.
+      183     end.
+      184   end procedure.
+      185   procedure db-attr-manual-edit :
+      186     define input  parameter p-code           as character no-undo .
+      187     define output parameter p-section-num    as integer no-undo .
+      188     do
+      189     on error undo, return error
+      190     :
+      191           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-manual-edit in g#attr-lib
+      192         (input  p-code
+      193         ,output p-section-num
+      194         ) no-error .
+      195       if error-status :error
+      196       then do:
+      197         undo, return error return-value .
+      198       end.
+      199     end.
+      200   end procedure.
+      201   procedure db-attr-batch-edit :
+      202     define input  parameter p-code           as character no-undo .
+      203     define output parameter p-section-num    as integer no-undo .
+      204     do
+      205     on error undo, return error
+      206     :
+      207           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run db-attr-batch-edit in g#attr-lib
+      208         (input  p-code
+      209         ,output p-section-num
+      210         ) no-error .
+      211       if error-status :error
+      212       then do:
+      213         undo, return error return-value .
+      214       end.
+      215     end.
+      216   end procedure.
+      217   define buffer old-config    for src.config .
+      218   define buffer new-config    for dst.config .
+      219   define buffer old-c-config    for src.c-config .
+      220   define buffer new-c-config    for dst.c-config .
+      221   define buffer old-sysconf   for src.sysconf .
+      222   define buffer new-sysconf   for dst.sysconf .
+      223   define buffer old-c-sysconf for src.c-sysconf .
+      224   define buffer new-c-sysconf for dst.c-sysconf .
+      225   define buffer old-sys-ctrl  for src.sys-ctrl .
+      226   define buffer new-sys-ctrl  for dst.sys-ctrl .
+      227   define buffer old-sys-ctrl-attr  for src.sys-ctrl-attr .
+      228   define buffer new-sys-ctrl-attr  for dst.sys-ctrl-attr .
+      229   define buffer new-db-attr   for dst.db-attr .
+      230   define buffer old-db        for src.db .
+      231   do
+      232   on error undo, return error
+      233   :
+      234     disable triggers for load of dst.config.
+      235     on write of dst.sysconf   override do: end.
+      236     on write of dst.c-sysconf override do: end.
+      237     on write of dst.sys-ctrl  override do: end.
+      238     on write of dst.sys-ctrl-attr  override do: end.
+      239     on write of dst.db-attr     override do: end.
+      240     on write of dst.c-config override do: end.
+      241     define variable v-new-cut-date as date      no-undo .
+      242   for each old-config  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      243      create new-config.
+      244      buffer-copy old-config to new-config.
+      245   end.
+      246     if varstay-history then do:
+      247   for each old-c-config  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      248      create new-c-config.
+      249      buffer-copy old-c-config to new-c-config.
+      250   end.
+      251     end.
+      252     for each old-sysconf no-lock
+      253     on error undo, return error substitute("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      254     :
+      255       create new-sysconf .
+      256       buffer-copy old-sysconf to new-sysconf .
+      257       if varstay-history then do:
+      258         for each old-c-sysconf no-lock
+      259           where old-c-sysconf.host-code = old-sysconf.host-code
+      260         on error undo, return error substitute("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      261         :
+      262           create new-c-sysconf .
+      263           buffer-copy old-c-sysconf to new-c-sysconf .
+      264         end.
+      265       end.
+      266     end.
+      267     find src.sys-ctrl .
+      268     create dst.sys-ctrl .
+      269     buffer-copy src.sys-ctrl to dst.sys-ctrl.
+      270     if vartype-cut = 0 then do:
+      271       if vardate-actual-docs <> ?
+      272       then do:
+      273         assign
+      274           v-new-cut-date = vardate-actual-docs
+      275         .
+      276       end.
+      277       else do:
+      278         assign
+      279           v-new-cut-date = today
+      280         .
+      281       end.
+      282       assign
+      283         dst.sys-ctrl.cut-date = v-new-cut-date
+      284       .
+      285       for each old-db
+      286       on error undo, return no-apply
+      287       :
+      288         find first new-db-attr exclusive-lock
+      289           where new-db-attr.db-num    = old-db.db-num
+      290             and new-db-attr.attr-code = 'cut-fin-date':U
+      291           no-error .
+      292         if not available new-db-attr then do:
+      293           create new-db-attr .
+      294           assign
+      295             new-db-attr.db-num    = old-db.db-num
+      296             new-db-attr.attr-code = 'cut-fin-date':U
+      297           .
+      298         end.
+      299         assign
+      300           new-db-attr.attr-value = string( vardate-actual-findoc, "99/99/9999" )
+      301         .
+      302       end.
+      303     end.
+      304   for each old-sys-ctrl-attr  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      305      create new-sys-ctrl-attr.
+      306      buffer-copy old-sys-ctrl-attr to new-sys-ctrl-attr.
+      307   end.
+      308     output stream str-gen close.
+      309     return "Произведен экспорт таблиц: config c-config sysconf c-sysconf sys-ctrl sys-ctrl-attr.".
+      310   end.

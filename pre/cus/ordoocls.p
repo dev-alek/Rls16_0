@@ -1,0 +1,1031 @@
+block-level on error undo, throw.
+define input  parameter parParentProc  as widget-handle no-undo.
+define input  parameter p-rec as recid no-undo .
+define input  parameter p-ask as logical no-undo .
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":u .
+define variable vss-author      as character no-undo init "$Author: expertek $":u .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":u .
+define variable vss-workfile    as character no-undo init "$Workfile: ordoocls.p $":u .
+define variable vss-archive     as character no-undo init "$Archive: cus/ordoocls.p $":u .
+define variable vss-description as character no-undo init  "Переход по графу статусов" .
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable to-day       as date no-undo .
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define  shared variable PrintCopiesCounter as integer   no-undo initial 1 .
+define  shared variable RepPathName        as character no-undo .
+define  shared variable PrintRubl          as logical   no-undo .
+define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+procedure cur-time :
+   define output parameter p-today as date      no-undo .
+   define output parameter p-time  as integer   no-undo .
+  do
+  on error undo, return error
+  :
+    define variable v-date1 as date      no-undo .
+    define variable v-date2 as date      no-undo .
+    define variable v-time  as integer   no-undo .
+    assign
+      v-date1 = today
+      v-time  = time
+      v-date2 = today
+    .
+    if v-date1 <> v-date2
+    then do:
+      assign
+        v-date1 = today
+        v-time  = v-time
+      .
+    end.
+    assign
+      p-today = v-date1
+      p-time  = v-time
+    .
+  end.
+end.
+function cur-time-date returns character
+:
+  return string(today, '99/99/9999':U) .
+end.
+function cur-time-mjd returns decimal
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return integer(v-date) - 2400002 + (v-time / 86400) .
+end.
+function cur-time-get-ending-index returns integer
+(input p-number as integer
+)
+:
+  if p-number < 0
+  or p-number = ?
+  then do:
+    return 1 .
+  end.
+  define variable v-rest as integer   no-undo .
+  assign
+    p-number = p-number modulo 100
+  .
+  if p-number < 20
+  then do:
+    assign
+      v-rest = p-number
+    .
+  end.
+  else do:
+    assign
+      v-rest = p-number modulo 10
+    .
+  end.
+  case v-rest :
+    when 1
+    then do:
+      return 2 .
+    end.
+    when 2 or
+    when 3 or
+    when 4
+    then do:
+      return 3 .
+    end.
+    otherwise do:
+      return 1 .
+    end.
+  end case .
+end.
+procedure cur-time-mjd-to-date :
+   define input  parameter i-mjd-diff as decimal no-undo.
+   define output parameter o-Date     as date    no-undo.
+   define output parameter o-Time     as integer no-undo.
+   define variable v-day-number as integer   no-undo .
+   if    i-mjd-diff < 0
+      or i-mjd-diff = ?
+   then do:
+      return "?" .
+   end.
+   assign
+      v-day-number = truncate(i-mjd-diff,0).
+      o-Date = date(v-day-number + 2400002).
+      o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+  .
+end.
+function cur-time-mjd-to-string returns character
+(input p-mjd-diff as decimal
+)
+:
+  define variable v-day-number as integer   no-undo .
+  define variable v-seconds    as integer   no-undo .
+  define variable v-hour       as integer   no-undo .
+  define variable v-min        as integer   no-undo .
+  define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+  define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+  define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+  define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+  if p-mjd-diff < 0
+  or p-mjd-diff = ?
+  then do:
+    return "?" .
+  end.
+  assign
+    v-day-number = integer(truncate(p-mjd-diff,0))
+    v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+  .
+  if v-seconds > 86400
+  then do:
+    assign
+      v-seconds = 86400 - 1
+    .
+  end.
+  if v-seconds < 0
+  then do:
+    assign
+      v-seconds = 0
+    .
+  end.
+  assign
+    v-hour = truncate(v-seconds / 3600, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 3600
+  .
+  assign
+    v-min = truncate(v-seconds / 60, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 60
+  .
+  return
+      (if v-day-number <> 0
+        then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0
+        then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+        then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+        else ""
+      )
+    + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+    .
+end.
+function cur-time-string returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-string-sec returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+end.
+function cur-time-custom  returns character
+(input p-prefix as character
+,input p-date-format as character
+,input p-delimiter as character
+,input p-time-format as character
+,input p-suffix as character
+)
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return
+    p-prefix
+    + string(v-date, p-date-format)
+    + p-delimiter
+    + string(v-time, p-time-format)
+    + p-suffix
+    .
+end.
+function cur-time-print  returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-datetime returns datetime
+:
+  define variable v-char as character no-undo .
+  define variable v-datetime as datetime no-undo .
+  v-char = cur-time-string().
+  v-datetime = datetime(v-char).
+  return  v-datetime.
+end.
+function cur-time-string-msec returns character
+:
+  define variable v-date as datetime  no-undo .
+  v-date = now.
+  return string(v-date) .
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+procedure proc-alt-shift-f2:
+  if not ibs.th.gbl.gbl-var:rcode
+then
+  run gbl\inidebug.p .
+end.
+procedure proc-alt-shift-f3:
+  run gbl/prvssinf.p
+    ( input this-procedure
+    ) .
+end.
+define variable v-inform-launched as logical no-undo initial false .
+procedure proc-alt-shift-f4:
+  define variable v-action as character no-undo .
+  if v-inform-launched = false then do:
+    assign
+      v-inform-launched = true
+    .
+    run gbl/d-inform.w
+      (  input self
+      ,  input this-procedure
+      , output v-action
+      ) no-error .
+    run gbl/infrmact.p (input self, input this-procedure, input v-action) no-error .
+    assign
+      v-inform-launched = false
+    .
+  end.
+end.
+procedure proc-alt-f1:
+  run gbl/corrhelp.p
+    (input this-procedure
+    ) .
+end .
+on alt-shift-f2 anywhere do:
+  run proc-alt-shift-f2.
+end.
+on alt-shift-f3 anywhere do:
+  run proc-alt-shift-f3 in this-procedure .
+end.
+on alt-shift-f4 anywhere do:
+  run proc-alt-shift-f4 in this-procedure.
+end.
+on alt-f1 anywhere do:
+  run proc-alt-f1 in this-procedure .
+end.
+define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  define variable v-cntxt-db-num        as integer   no-undo .
+  define variable v-cntxt-userid        as character no-undo .
+  define variable v-cntxt-level         as character no-undo .
+  define variable v-cntxt-host-code-obj as integer   no-undo .
+  define variable v-cntxt-obj-type      as character no-undo .
+  define variable v-cntxt-obj-code      as integer   no-undo .
+  define variable v-cntxt-db-num-obj    as integer   no-undo .
+  define variable v-cntxt-is-admin      as logical   no-undo .
+define temp-table temp-err no-undo  LIKE ub.rep-line
+  field str as character
+  field gds-code as integer
+index pi is primary unique  gds-code
+.
+procedure view-exept-gds :
+define input  parameter p-str as character no-undo .
+define variable loc-ok as logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+  message p-str
+           view-as alert-box question
+           buttons yes-no
+           update loc-ok
+            .
+if loc-ok then
+    run gbl/tt-view.w
+    ( input table  temp-err ).
+  end.
+end procedure.
+procedure creat-tt :
+  do
+  on error undo, return error return-value
+  :
+    define input  parameter p-gds-code as integer   no-undo .
+    define input  parameter p-str as character no-undo .
+    find first temp-err where
+               temp-err.gds-code = p-gds-code no-error .
+               if available temp-err then return .
+    if p-str  <> "" then do:
+       create temp-err.
+       assign
+         temp-err.gds-code = p-gds-code
+         temp-err.str = p-str
+     .
+    end.
+  end.
+end procedure.
+define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  run mainmenu_getcntxt in parparentproc
+    (output v-cntxt-db-num
+    ,output v-cntxt-userid
+    ,output v-cntxt-level
+    ,output v-cntxt-host-code-obj
+    ,output v-cntxt-obj-type
+    ,output v-cntxt-obj-code
+    ,output v-cntxt-db-num-obj
+    ,output v-cntxt-is-admin
+    ) .
+define variable g#report-num as integer   no-undo .
+run get-report-num in parParentProc ( output g#report-num ).
+define  buffer buf_ord-doc    for ub.ord-doc.
+define  buffer t-doc-rcv      for ub.ord-doc-rcv .
+define  buffer t-ord-doc-rcv  for ub.ord-doc-rcv.
+define  buffer t-doc-line     for ub.ord-line.
+define  buffer t-doc-line-rcv for ub.ord-line-rcv.
+define  buffer t-trn-line     for ub.doc-line.
+define  buffer t-trn-doc      for ub.trn-doc.
+define temp-table temp-obj-list no-undo
+field obj-type like ub.clients.obj-type
+field obj-code like ub.clients.obj-code
+.
+define variable v-num-chip as character no-undo .
+define variable  sum-ord like ub.ord-line.qnty no-undo .
+define variable  sum-rcv like ub.ord-line.qnty no-undo .
+define variable  sum-trn like ub.ord-line.qnty no-undo .
+define variable old-state like ub.ord-doc.status_ no-undo .
+define variable old-flag like ub.ord-doc.flag_ no-undo .
+define stream  errStream  .
+define variable v-log as logical   no-undo .
+define variable v-Ok as logical   no-undo .
+define variable v-mess as character no-undo .
+define variable g#log as logical   no-undo .
+define variable sum-trn1 as decimal   no-undo .
+define variable f-TBAGN  as logical   no-undo init false .
+define variable v-erase  as logical   no-undo .
+define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curobjdt in g#library
+  (input  v-cntxt-obj-type
+  ,input  v-cntxt-obj-code
+  ,output to-day
+  )  .
+ find first buf_ord-doc where recid (buf_ord-doc) = p-rec exclusive-lock no-error.
+ assign
+  old-state = buf_ord-doc.status_
+  old-flag  = buf_ord-doc.flag_
+  .
+  if buf_ord-doc.ship-date = ? then do:
+      if p-ask then
+      Message "Не задана дата заказа ! "
+      skip
+      "Документ" buf_ord-doc.doc-code skip
+      view-as alert-box error .
+      return.
+  end.
+  define variable t-date  as date      no-undo .
+  define variable t-time  as integer   no-undo .
+  run cur-time in this-procedure ( output  t-date , output  t-time ).
+  if buf_ord-doc.date-sale-1 > buf_ord-doc.date-sale-2 then do:
+      if p-ask then
+      Message "Не верно задан интервал продаж !  "
+      skip
+      "Документ" buf_ord-doc.doc-code skip
+      view-as alert-box error .
+      return.
+  end.
+  for each t-doc-line no-lock
+     where t-doc-line.doc-code  = buf_ord-doc.doc-code
+       and ( t-doc-line.qnty  =  0 or t-doc-line.qnty  = ?)
+       :
+          run creat-tt (t-doc-line.gds-code , substitute("В заказе есть строки с количеством равным 0 или ? ! Документ &1", buf_ord-doc.doc-code )) .
+          v-erase = true.
+  end.
+  if v-erase then do:
+      if p-ask then do:
+        run view-exept-gds ( substitute("В заказе есть строки с количеством равным 0 или ? ! !&1Просмотреть список ?", chr(10))) .
+        return.
+      end.
+      else do:
+        return.
+      end.
+  end.
+    if  buf_ord-doc.status_ = 'запрос':U and
+        buf_ord-doc.status_ = 'новый':U then do:
+      for each ub.ord-line no-lock where
+              ub.ord-line.doc-code = buf_ord-doc.doc-code :
+define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+if (valid-handle(g#library2) <> true) then do:   run gbl/library2.p persistent no-error .   if error-status :error or (valid-handle(g#library2) <> true) then do:     message       "Error starting library2.p" skip       g#library2 skip       g#library2 :type skip       g#library2 :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run goassizt in g#library2
+  (input  buf_ord-doc.doc-type
+  ,input  ub.ord-line.gds-code
+  ,input  buf_ord-doc.obj-type
+  ,input  buf_ord-doc.obj-code
+  ,input  false
+  ,output v-Ok
+  ,output v-mess
+  ) no-error.
+            if v-Ok = false then do:
+                run creat-tt (ub.ord-line.gds-code , v-mess ) .
+                v-erase = true.
+            end.
+      end.
+      if v-erase then do:
+          if p-ask then do:
+            run view-exept-gds ( substitute("В заказе есть некорректные линии !&1Просмотреть список ?", chr(10))) .
+            return.
+          end.
+          else do:
+                return.
+            end.
+      end.
+    end.
+ case buf_ord-doc.status_ :
+      when 'отказ':U then do :
+        if p-ask then
+        Message
+          "Нельзя закрыть заказ"
+          "в статусе " caps(buf_ord-doc.status_)
+          skip
+          "Документ" buf_ord-doc.doc-code view-as alert-box information
+          .
+        return.
+      end.
+      when 'новый':U then do :
+        if buf_ord-doc.flag_ = false  then do:
+            for each ub.ord-line no-lock where
+                    ub.ord-line.doc-code = buf_ord-doc.doc-code :
+                if (ub.ord-line.cli-qnty * ub.ord-line.cli-base-rate <> ub.ord-line.qnty) then do:
+                  run creat-tt (ub.ord-line.gds-code ,
+                      substitute (
+                      " Документ &1, По товару неправильное соотношение количеств в единицах поставщика &2 &8 (коэфф.&3)  и в базовых единицах измерения &4 ! Товар &5 &6&7",
+                      buf_ord-doc.doc-code ,
+                      ub.ord-line.cli-qnty ,
+                      ub.ord-line.cli-base-rate ,
+                      ub.ord-line.qnty  ,
+                      ub.ord-line.artic ,
+                      ub.ord-line.prod-type ,
+                      ub.ord-line.prod-code ,
+                      ub.ord-line.unit-cli )) .
+                  v-erase = true.
+                end.
+            end.
+            if v-erase then do:
+                if p-ask then do:
+                  run view-exept-gds ( substitute("В заказе есть некорректные линии !&1Просмотреть список ?", chr(10))) .
+                  return.
+                end.
+                else do:
+                   return .
+                end.
+            end.
+              if buf_ord-doc.ship-date < t-date then do:
+                  g#log  = false .
+                  if p-ask then
+                      Message "Дата заказа меньше текущей даты ! " skip
+                          string(buf_ord-doc.ship-date, "99/99/9999" ) skip
+                          "Сегодня" string(t-date, "99/99/9999" )
+                          skip
+                          "Документ" buf_ord-doc.doc-code skip
+                        " Будем закрывать ? "
+                          view-as alert-box question
+                          buttons yes-no
+                          title "Закрыть заказ "
+                          update g#log
+                        .
+                  if not g#log then return.
+               end.
+              find first  t-doc-line where t-doc-line.doc-code  = buf_ord-doc.doc-code no-lock no-error .
+              if not available t-doc-line then do:
+                  if p-ask then
+                  message   "Заказ"  buf_ord-doc.doc-code  "  не содержит ни одной записи ! "
+                  view-as alert-box information
+                  title "Внимание!!! "
+                .
+                  return.
+               end.
+              for each t-doc-line no-lock
+                 where t-doc-line.doc-code  = buf_ord-doc.doc-code
+                 and ( t-doc-line.price-rubl <= 0 or t-doc-line.price-rubl = ? )
+                 :
+                    run creat-tt (t-doc-line.gds-code , substitute("В заказе &1 цена (руб) на товар &2 не определена ! ", buf_ord-doc.doc-code, t-doc-line.gds-code) ) .
+                    v-erase = true.
+              end.
+              if v-erase then do:
+                 if p-ask then do:
+                    run view-exept-gds ( substitute("В заказе &2 есть товары с неопределенной ценой (руб) !&1Просмотреть список ?", chr(10), buf_ord-doc.doc-code)) .
+                    return.
+                 end.
+                 else do:
+                    return.
+                 end.
+              end.
+              define variable v_ok as logical no-undo .
+              run verif_1 in this-procedure ( output v_ok ) no-error .
+              if not v_ok then do:
+                  v-log = false .
+                  if p-ask then
+                  message "В "  (if buf_ord-doc.doc-type  =  'ОФ':U then " Заявке " else " Заказе" ) buf_ord-doc.doc-code " есть  повторный заказ на товары в пути ! Закрывать такой документ ? "
+                    view-as alert-box question
+                    buttons yes-no
+                    title "Закрыть "  + (if buf_ord-doc.doc-type  =  'ОФ':U then " заявку " else "заказ" )
+                    update v-log
+                  .
+                  if not v-log then return.
+              end.
+          define buffer buf_clients for ub.clients .
+          find first buf_clients no-lock where
+                     buf_clients.obj-code = buf_ord-doc.obj-code and
+                     buf_clients.obj-type = buf_ord-doc.obj-type no-error .
+          if v-cntxt-db-num = 0 and
+             buf_ord-doc.order-type = 3  and
+             buf_clients.db-num = 0
+          then do:
+                  if p-ask then
+                  message "В Заказе"  buf_ord-doc.doc-code
+                  "Указано распределение по запросам в УБД. "
+                  "После закрытия , Заказ будет направлен по СПН и "
+                  "дальнейшее закрытие и распределение "
+                  "становится невозможным в текущей БД ." skip
+                  "Но объект принадлежит главной базе !!!  "
+                  "Перенаправьте распределение в ГБД ."
+                    view-as alert-box error
+                    title "Закрыть заказ "
+                  .
+                  return.
+          end.
+          if v-cntxt-db-num = 0 and buf_ord-doc.order-type = 3 then do:
+                  v-log = false .
+                  if p-ask then
+                  message "В Заказе"  buf_ord-doc.doc-code
+                  "Указано распределение по запросам в УБД. "
+                  "После закрытия , Заказ будет направлен по СПН и "
+                  "дальнейшее закрытие и распределение "
+                  "становится невозможным в текущей БД " skip
+                  "Закрывать заказ ? "
+                    view-as alert-box question
+                    buttons yes-no
+                    title "Закрыть заказ "
+                    update v-log
+                  .
+                  if not v-log then return.
+          end.
+          if v-cntxt-db-num <> 0 and buf_ord-doc.order-type = 2 then do:
+                  v-log = false .
+                  if p-ask then
+                  message "В Заказе"  buf_ord-doc.doc-code
+                  "Указано распределение по запросам в ГБД. "
+                  "После закрытия , Заказ будет направлен по СПН и "
+                  "дальнейшее закрытие и распределение "
+                  "становится невозможным в текущей БД " skip
+                  "Закрывать заказ ? "
+                    view-as alert-box question
+                    buttons yes-no
+                    title "Закрыть заказ "
+                    update v-log
+                  .
+                  if not v-log then return.
+          end.
+          assign
+              buf_ord-doc.status_ = 'новый':U
+              buf_ord-doc.flag_ = true
+              .
+              return.
+        end.
+        if buf_ord-doc.flag_ = true  then do:
+          if v-cntxt-db-num = 0  and buf_ord-doc.order-type = 3 or
+             v-cntxt-db-num <> 0 and buf_ord-doc.order-type = 2
+          then do:
+                  if p-ask then
+                  message "В Заказе"  buf_ord-doc.doc-code
+                      "Указано распределение по запросам в "  entry ( buf_ord-doc.order-type , " ,ГБД,УБД")
+                      "Нельзя перейти в следующий статус в текущей БД !"
+                      view-as alert-box information
+                      .
+                  return .
+          end.
+          assign
+              buf_ord-doc.status_ = 'запрос':U
+              buf_ord-doc.flag_ = false
+           .
+        end.
+       end.
+       when 'запрос':U then do :
+        if buf_ord-doc.flag_ = false   then do:
+           if not can-find(first t-ord-doc-rcv no-lock where t-ord-doc-rcv.doc-code = buf_ord-doc.doc-code ) = true
+           then do:
+            if p-ask then
+              message "Закрыть до статуса ЗАПР+ нельзя ! Нет созданных запросов ." skip
+                skip
+                "Заказ " buf_ord-doc.doc-code skip
+                view-as alert-box error .
+              return.
+           end.
+            assign
+                buf_ord-doc.status_ = 'запрос':U
+                buf_ord-doc.flag_ = true
+                .
+           run cus/ord-shoo.p
+              ( parParentProc ,
+                recid(buf_ord-doc) ,
+                output v-num-chip )
+                no-error .
+           if error-status :error then
+           message vss-workfile vss-revision vss-description skip
+                  "Ошибка ord-shoo.p " skip
+                   skip
+                   error-status :get-message(1) skip
+                   return-value skip
+                   view-as alert-box error
+           .
+           buf_ord-doc.out-code = v-num-chip .
+          return .
+        end.
+        if buf_ord-doc.flag_ = true  then do:
+            for each t-ord-doc-rcv where  t-ord-doc-rcv.doc-code     = buf_ord-doc.doc-code no-lock :
+            for each ub.ord-chain no-lock where
+                      ub.ord-chain.doc-code = t-ord-doc-rcv.rcv-code and
+                      ub.ord-chain.doc-type = 'rcv'                  and
+                      ub.ord-chain.rel-doc-type = 'trn'
+                      :
+                 for each t-trn-doc no-lock where
+                          t-trn-doc.doc-code  = ub.ord-chain.rel-doc-code and
+                          t-trn-doc.doc-type  = 'рас':U and
+                          t-trn-doc.status_  <> 'факт':U  :
+                  if p-ask then
+                  message "Документ РН" t-trn-doc.doc-code " имеет статус " CAPS(t-trn-doc.status_)
+                          "Закройте РН до статуса ФАКТ " view-as alert-box error
+                          title "Закрыть заказ "
+                          .
+                  return.
+                 end.
+                 end.
+            end.
+         assign
+           sum-ord = 0
+           sum-rcv = 0
+           sum-trn = 0
+           sum-trn1 = 0
+           f-TBAGN = false
+          .
+           for each t-doc-line     where t-doc-line.doc-code     = buf_ord-doc.doc-code  no-lock :
+               for each  t-doc-line-rcv where t-doc-line-rcv.doc-code = t-doc-line.doc-code and
+                                         t-doc-line-rcv.artic      = t-doc-line.artic         and
+                                         t-doc-line-rcv.prod-type  = t-doc-line.prod-type   and
+                                         t-doc-line-rcv.prod-code  = t-doc-line.prod-code no-lock ,
+                 first t-doc-rcv where t-doc-line-rcv.doc-code = t-doc-rcv.doc-code  and
+                                       t-doc-line-rcv.rcv-code = t-doc-rcv.rcv-code  no-lock :
+                for each ub.ord-chain no-lock where
+                          ub.ord-chain.doc-code = t-doc-rcv.rcv-code and
+                          ub.ord-chain.doc-type = 'rcv'                  and
+                          ub.ord-chain.rel-doc-type = 'trn'
+                          :
+                 find first t-trn-doc no-lock where
+                            t-trn-doc.doc-code  = ub.ord-chain.rel-doc-code and
+                            t-trn-doc.obj-type  = t-doc-rcv.obj-type and
+                            t-trn-doc.obj-code  = t-doc-rcv.obj-code and
+                            t-trn-doc.status_     = 'факт':U   and
+                            ( t-trn-doc.doc-type  = 'рас':U or
+                              t-trn-doc.doc-type  = 'при':U) and
+                              t-trn-doc.internal  = true
+                              no-error .
+                   if not available  t-trn-doc then next .
+                   for each  t-trn-line where
+                             t-trn-line.doc-code  = t-trn-doc.doc-code          and
+                             t-trn-line.obj-code  = buf_ord-doc.obj-code        and
+                             t-trn-line.obj-type  = buf_ord-doc.obj-type        and
+                             t-trn-line.artic     = t-doc-line-rcv.artic        and
+                             t-trn-line.prod-type = t-doc-line-rcv.prod-type    and
+                             t-trn-line.prod-code = t-doc-line-rcv.prod-code    no-lock :
+                      sum-trn = sum-trn + t-trn-line.fact-qnty.
+                      sum-trn1 = sum-trn1 + t-trn-line.fact-qnty.
+                   end.
+                   end.
+                  sum-rcv = sum-rcv + t-doc-line-rcv.qnty.
+                end.
+                sum-ord = sum-ord + t-doc-line.qnty.
+                if t-doc-line.qnty <>  sum-trn1 then  f-TBAGN = true .
+                sum-trn1 = 0 .
+           end.
+            if  sum-trn = 0  then do:
+                  v-log = false .
+                  if p-ask then
+                    message  "Заказ "  buf_ord-doc.doc-code " не имеет внутренних РН/ПН !" skip
+                    "Закрыть в статус (ФАКТ-) ? " skip
+                      view-as alert-box question
+                      buttons yes-no
+                      title "Закрыть заказ"
+                      update v-log
+                    .
+                if not v-log then return.
+                buf_ord-doc.flag_ = false .
+            end.
+            if  sum-ord > sum-trn then do:
+                  v-log = false .
+                  if p-ask then
+                message  "Заказ "  buf_ord-doc.doc-code " не покрыт внутренними РН/ПН полностью !" skip
+                  "Закрыть в статус (ФАКТ-) ? " skip
+                  "Сумма заказа               " sum-ord skip
+                  "Сумма накл. перемещения    " sum-trn
+                  view-as alert-box question
+                  buttons yes-no
+                  title "Закрыть заказ"
+                  update v-log
+                .
+                if not v-log then return.
+                buf_ord-doc.flag_ = false .
+            end.
+            if  sum-ord =  sum-trn  and f-TBAGN = false then do:
+                buf_ord-doc.flag_ = true  .
+            end.
+            if  sum-ord = sum-trn  and f-TBAGN = true then do:
+                  v-log = false .
+                  if p-ask then
+                message "На  Заказ"  buf_ord-doc.doc-code " расходится количество по заказу и накладной по строкам !" skip
+                  "Закрыть в статус (ФАКТ-) ? " skip
+                  view-as alert-box question
+                  buttons yes-no
+                  title "Закрыть заказ"
+                  update v-log
+                .
+                if not v-log then return.
+                buf_ord-doc.flag_ = false  .
+            end.
+            if  sum-ord <  sum-trn then do:
+                  v-log = false .
+                  if p-ask then
+                message "На  Заказ"  buf_ord-doc.doc-code " превышено количество по РН/ПН !" skip
+                  "Закрыть в статус (ФАКТ-) ? " skip
+                  sum-ord skip
+                  sum-trn
+                  view-as alert-box question
+                  buttons yes-no
+                  title "Закрыть заказ"
+                  update v-log
+                .
+                if not v-log then return.
+                buf_ord-doc.flag_ = false  .
+            end.
+            assign
+                   buf_ord-doc.status_ = 'факт':U
+                   buf_ord-doc.fact-date = to-day.
+              .
+            for each t-ord-doc-rcv   exclusive-lock  where  t-ord-doc-rcv.doc-code     = buf_ord-doc.doc-code :
+                for each ub.ord-chain no-lock where
+                          ub.ord-chain.doc-code = t-ord-doc-rcv.rcv-code and
+                          ub.ord-chain.doc-type = 'rcv'                  and
+                          ub.ord-chain.rel-doc-type = 'trn'
+                          :
+                 for each t-trn-doc no-lock where
+                          t-trn-doc.doc-code  = ub.ord-chain.rel-doc-code and
+                          (t-trn-doc.doc-type  = 'рас':U or
+                          t-trn-doc.doc-type  = 'при':U  )and
+                          t-trn-doc.status_   = 'факт':U  :
+                        assign
+                              t-ord-doc-rcv.status_   = 'факт':U
+                              t-ord-doc-rcv.fact-date = to-day.
+                          .
+                 end.
+                 end.
+            end.
+       end.
+      end.
+ end case.
+procedure verif_1 :
+do
+on error undo, return error return-value
+:
+define output parameter v-ret as logical no-undo .
+ v-ret = true .
+define buffer later-ord-doc  for  ub.ord-doc  .
+define buffer later-ord-line for  ub.ord-line .
+define buffer today-ord-line for  ub.ord-line .
+define variable v-qnty as decimal no-undo .
+define variable v-exis as logical no-undo .
+define variable v-txt as character no-undo .
+output stream errStream to value( string( session:temp-directory +
+                                     "rpt" + string( g#report-num ) ) )
+                                     page-size 62 .
+v-exis = false .
+ for each  temp-obj-list : delete temp-obj-list . end.
+define variable str-pos as integer no-undo .
+define variable str-pos2 as integer no-undo .
+define variable str-1 as character no-undo .
+define variable i as integer no-undo .
+define variable e1 as character no-undo .
+define variable e2 as integer no-undo .
+define variable k1 as integer no-undo .
+if buf_ord-doc.doc-type = 'ФП':U then do:
+    k1 = 0 .
+    str-pos = index (  buf_ord-doc.e-method , "&" ) .
+    str-pos2 = LENGTH ( buf_ord-doc.e-method ) - str-pos .
+    str-1 = substring (buf_ord-doc.e-method , str-pos + 1 , str-pos2 ).
+    define variable v-nn as integer   no-undo .
+    v-nn = num-entries (str-1).
+    do i = 1 to v-nn :
+        assign
+          e1 = entry(1, (entry( i , str-1, "," )) , " ")
+          e2 = integer(entry(2, (entry( i , str-1, "," )), " " ))
+          no-error .
+          if error-status :error then next.
+          k1 = k1 + 1.
+          create temp-obj-list.
+          assign
+            temp-obj-list.obj-type = e1
+            temp-obj-list.obj-code = e2
+          .
+    end .
+    if k1 < 1 then do :
+       run sss in this-procedure .
+    end.
+end.
+else do:
+   create temp-obj-list.
+   assign
+     temp-obj-list.obj-type = buf_ord-doc.obj-type
+     temp-obj-list.obj-code = buf_ord-doc.obj-code
+   .
+end.
+for each today-ord-line where today-ord-line.doc-code = buf_ord-doc.doc-code and today-ord-line.qnty > 0 no-lock :
+      v-qnty = 0.
+      v-txt  = "" .
+        for each later-ord-line where
+                                later-ord-line.artic     = today-ord-line.artic     and
+                                later-ord-line.prod-type = today-ord-line.prod-type and
+                                later-ord-line.prod-code = today-ord-line.prod-code no-lock ,
+            each  later-ord-doc where  later-ord-line.doc-code = later-ord-doc.doc-code and
+                              ( later-ord-doc.status_ = 'согласование':U or
+                                later-ord-doc.status_ = 'поставка':U or
+                                later-ord-doc.status_ = 'закрыто':U
+                                ) and
+                                later-ord-doc.doc-code <> today-ord-line.doc-code and
+                                ( if buf_ord-doc.cons-code <> "" then
+                                   later-ord-doc.cons-code <> buf_ord-doc.cons-code
+                                   else
+                                   true = true )
+                                 and
+                                later-ord-doc.date-sale-1 <= buf_ord-doc.date-sale-2  and
+                                later-ord-doc.date-sale-2 >= buf_ord-doc.date-sale-1   and
+                                later-ord-doc.host-code = buf_ord-doc.host-code   no-lock ,
+             each temp-obj-list where temp-obj-list.obj-code = later-ord-doc.obj-code and
+                                      temp-obj-list.obj-type = later-ord-doc.obj-type no-lock :
+          v-qnty = v-qnty +  later-ord-line.qnty .
+          v-txt  = v-txt  + trim( later-ord-line.doc-code) + ";" .
+        end.
+        if v-qnty > 0 then do:
+          find first ub.goods where
+                today-ord-line.artic     = ub.goods.artic      and
+                today-ord-line.prod-type = ub.goods.prod-type  and
+                today-ord-line.prod-code = ub.goods.prod-code  no-lock no-error.
+          Put  stream  errStream unformatted
+          "По объекту :"  buf_ord-doc.obj-type buf_ord-doc.obj-code  skip
+          "По товару :"  today-ord-line.artic       today-ord-line.prod-type       today-ord-line.prod-code skip
+          ub.goods.gds-name skip
+          "По документам :"    v-txt skip
+          "Уже заказано (в пути) :" v-qnty    " "    ub.goods.unit-base   skip
+          skip
+          "По текущему документу № " buf_ord-doc.doc-code  " кол-во заказа : " today-ord-line.qnty " " ub.goods.unit-base skip
+          "Анализируемый период продаж с " buf_ord-doc.date-sale-1 " по " buf_ord-doc.date-sale-2 skip
+          "Итого :"  ( v-qnty  + today-ord-line.qnty )   skip
+          "--------------------------------------------------------------------"
+          skip.
+          v-exis = true.
+        end.
+end.
+if v-exis = true then do:
+    define variable v-user-action   as character no-undo .
+    define variable v-printed       as logical no-undo .
+     if p-ask then do:
+      message
+       "При проверке товаров по периоду продаж были обнаружены повторы ! " skip
+       "Вы можете просмотреть и распечатать их список . "
+        skip
+        "Документ" buf_ord-doc.doc-code skip
+       view-as alert-box error .
+   Output stream errStream   close .
+    run gbl/prnfilen.w
+      (input  "Повторы, обнаруженные при проверке товаров по периоду продаж"
+      ,input  0
+      ,input  string(session :temp-directory) + "rpt" + string( g#report-num )
+      ,input  7
+      ,output v-user-action
+      ,output v-printed
+      ) .
+       if not ( lookup( ' экран':L, v-user-action ,";")  > 0 or
+                lookup( ' принтер':L, v-user-action ,";")  > 0  ) then do:
+                   message "Внимание вы не просмотрели список повторных заказов ! "  .
+                end.
+      v-ret = false .
+      return.
+end.
+end.
+v-ret = true .
+return.
+end.
+end procedure.
+procedure sss :
+  define variable v-object-available as logical   no-undo .
+  define buffer buf_clients for ub.clients .
+  do
+  on error undo, return error return-value
+  :
+    for each buf_clients no-lock
+      where buf_clients.host-code = v-cntxt-host-code-obj
+        and ( ( buf_clients.db-num = v-cntxt-db-num ) or v-cntxt-db-num = 0 )
+    on error undo, return error return-value
+    :
+define variable vss-include-info7 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+if (valid-handle(g#library2) <> true) then do:   run gbl/library2.p persistent no-error .   if error-status :error or (valid-handle(g#library2) <> true) then do:     message       "Error starting library2.p" skip       g#library2 skip       g#library2 :type skip       g#library2 :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run usobjava in g#library2
+  (input  v-cntxt-db-num
+  ,input  0
+  ,input  v-cntxt-userid
+  ,input  buf_clients.obj-type
+  ,input  buf_clients.obj-code
+  ,output v-object-available
+  ) no-error .
+      if error-status :error
+      then do:
+        message
+          vss-workfile vss-revision vss-description skip
+          "Ошибка при вызове процедуры gbl/usobjava.i" skip
+          error-status :get-message(1) skip
+          return-value skip
+          view-as alert-box error .
+        undo, return no-apply .
+      end.
+      if v-object-available = true
+      then do:
+        create temp-obj-list.
+        assign
+          temp-obj-list.obj-type = buf_clients.obj-type
+          temp-obj-list.obj-code = buf_clients.obj-code
+        .
+      end.
+    end.
+  end.
+end procedure.

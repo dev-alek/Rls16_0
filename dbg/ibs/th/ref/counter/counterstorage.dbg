@@ -1,0 +1,219 @@
+        1   using Progress.Lang.*.
+        2   block-level on error undo, throw.
+        3   class ibs.th.ref.counter.counterstorage final:
+        4      define temp-table tt-counter like ub.counter
+        5      field oldname       as character
+        6      field oldCountValue as int64
+        7      field oldRule       as character
+        8      field frecid        as int64 .
+        9      define variable mQuery as handle no-undo.
+       10      constructor public counterstorage (  ):
+       11         super ().
+       12         find first sys-ctrl no-lock .
+       13      end constructor.
+       14      destructor public counterstorage ( ):
+       15      end destructor.
+       16      method public handle getquery():
+       17         empty temp-table tt-counter.
+       18         if valid-handle(mQuery) then delete object mQuery.
+       19         for each counter no-lock:
+       20            create tt-counter.
+       21            buffer-copy counter to tt-counter.
+       22            assign
+       23               tt-counter.oldCountValue = tt-counter.CountValue
+       24               tt-counter.oldname       = tt-counter.name
+       25               tt-counter.oldRule       = tt-counter.Rule
+       26               tt-counter.frecid        = recid(counter)
+       27            .
+       28         end.
+       29         create query mQuery.
+       30         mQuery:set-buffers(buffer tt-counter:HANDLE).
+       31         mQuery:query-prepare("FOR EACH tt-counter").
+       32         mQuery:query-open ().
+       33         return mQuery.
+       34      end method.
+       35      method public void saveChange():
+       36         for each tt-counter where tt-counter.oldCountValue <> tt-counter.CountValue
+       37                                or tt-counter.oldname       <> tt-counter.name
+       38                                or tt-counter.oldRule       <> tt-counter.Rule
+       39         no-lock:
+       40            find first counter where recid(counter) eq tt-counter.frecid
+       41               no-lock no-error.
+       42            if     available counter
+       43               and tt-counter.oldCountValue = counter.CountValue
+       44               and tt-counter.oldname       = counter.name
+       45               and tt-counter.oldRule       = counter.Rule
+       46            then do:
+       47               find current counter
+       48                  exclusive-lock no-error.
+       49               if available counter
+       50               then
+       51                  assign
+       52                     counter.CountValue = tt-counter.CountValue
+       53                     counter.name       = tt-counter.name
+       54                     counter.Rule       = tt-counter.Rule
+       55                  .
+       56            end.
+       57            else
+       58               message substitute("Запись '&1' кто-то уже изменил.",tt-counter.oldname)
+       59               view-as alert-box.
+       60         end.
+       61      end method.
+       62      define stream sReadfile.
+       63   method public int64 GetAsuncNextcount (iFileName as character , iKey as character,icode as character, iParam as character   ):
+       64   define variable oCount   as int64 no-undo init ?.
+       65         define variable vAsyncHelper as class ibs.th.file.AsyncHelperth no-undo.
+       66         define variable vText as character no-undo.
+       67         define variable vlogfile as character no-undo.
+       68         define variable vError as logical no-undo.
+       69         if trans
+       70         then do:
+       71            vAsyncHelper = new ibs.th.file.AsyncHelperth().
+       72            vAsyncHelper:setCurrentUserPasswd().
+       73            vAsyncHelper:myTimeOut = 300.
+       74            vAsyncHelper:AsyncProc("utl/proc-getnextcount", substitute("&1":U  +  chr(4)  + "&2":U + chr(4) + "&3":U , iFileName ,ikey, icode ),1).
+       75            run ibs\th\file\waithelper.p (vAsyncHelper,"proc-getnextcount", 1,"Получаем значение счетчика.").
+       76            vlogfile = vAsyncHelper:getlog(?).
+       77            if vAsyncHelper:FileExists(vlogfile)
+       78            then do:
+       79               input stream sReadfile FROM  VALUE(vlogfile).
+       80               repeat:
+       81                  import stream sReadfile unformatted vText.
+       82                  if vtext begins "error" then vError = yes.
+       83                  else do:
+       84                     Ocount = int64(vText) no-error.
+       85                     if error-status:error
+       86                     then
+       87                        vError = yes.
+       88                  end.
+       89               end.
+       90               input stream sReadfile close  .
+       91               os-delete value(vlogfile).
+       92             end.
+       93             else
+       94                vError = yes.
+       95             vAsyncHelper:delworkdir().
+       96             delete object vAsyncHelper.
+       97          end.
+       98          else
+       99             vError = yes.
+      100          if    vError
+      101             or Ocount eq ?
+      102             then do:
+      103                define variable vCounterStor as class ibs.th.ref.counter.counterstorage.
+      104                vCounterStor = new ibs.th.ref.counter.counterstorage().
+      105                Ocount = vCounterStor:GetNextcount(iFileName , iKey,icode, iparam ).
+      106                delete object vCounterStor.
+      107             end.
+      108        return Ocount.
+      109      end.
+      110      method public int64 GetNextcount(iFileName as character , iKey as character,icode as character, iParam as character   ):
+      111         return GetNextcount(sys-ctrl.db-num,iFileName , iKey ,icode,iParam   ).
+      112      end.
+      113      method public int64 GetNextcount(idb as integer,iFileName as character , iKey as character,icode as character,iParam as character  ):
+      114         define variable vValue     as character no-undo.
+      115         define variable vNumPar    as integer   no-undo.
+      116         define variable vInt       as integer   no-undo init ?.
+      117         define variable vNextCount as integer   no-undo.
+      118         define variable vYear      as integer   no-undo init ?.
+      119         find first counter where counter.db        eq idb
+      120                              and counter.file-name eq iFileName
+      121                              and counter.key       eq iKey
+      122                              and counter.code      eq iCode
+      123            no-lock no-error.
+      124         if available counter
+      125         then do:
+      126            if can-do(counter.Rule,"year")
+      127            then do:
+      128               vNumPar = lookup("year",counter.sysInfo).
+      129               if vNumPar ne 0
+      130               then do:
+      131                  assign
+      132                     vValue = entry(vNumPar + 1,counter.sysInfo)
+      133                     vInt = int(vValue)
+      134                  no-error.
+      135                  vNumPar = lookup("year",iParam).
+      136                  if vNumPar ne 0
+      137                  then do:
+      138                     assign
+      139                        vValue = entry(vNumPar + 1,counter.sysInfo)
+      140                        vYear = int(vValue)
+      141                     no-error.
+      142                  end.
+      143                  if vYear eq ?
+      144                  then
+      145                     vYear = year(today).
+      146                  if     vint ne ?
+      147                     and vint ne vYear
+      148                  then
+      149                     vNextCount = 1.
+      150                  else
+      151                     vNextCount = counter.CountValue + 1.
+      152               end.
+      153               else
+      154                  vNextCount = counter.CountValue + 1.
+      155            end.
+      156            else
+      157               vNextCount = counter.CountValue + 1.
+      158            find current counter exclusive-lock no-error no-wait.
+      159            if not available counter
+      160            then return ?.
+      161         end.
+      162         else do:
+      163            create counter.
+      164            assign
+      165               vNextCount = 1
+      166               counter.db        = idb
+      167               counter.file-name = ifilename
+      168               counter.key       = ikey
+      169               counter.code      = icode
+      170               counter.name = substitute("Счетчик для '&1' с ключем '&2' и кодом '&3'",ifilename,ikey,icode).
+      171            .
+      172            if ifilename eq "cashbookrule"
+      173            then
+      174               assign
+      175                  counter.Rule = "year".
+      176         end.
+      177         assign
+      178            counter.CountValue = vNextCount
+      179            counter.sysInfo    = substitute("year,&1",string(year(today)))
+      180         .
+      181         return counter.CountValue.
+      182      end method.
+      183      method public int64 GetCountValue(idb as integer , iFileName as character , iKey as character,icode as character  ):
+      184         find first counter where counter.db        = idb
+      185                              and counter.file-name eq iFileName
+      186                              and counter.key       eq iKey
+      187                              and counter.code      eq iCode
+      188            no-lock no-error.
+      189         return if available counter then counter.CountValue else 0 .
+      190      end.
+      191      method public int64 SetCountValue(iFileName as character , iKey as character,icode as character, iValue as int64  ):
+      192         SetCountValue(sys-ctrl.db-num, iFileName , iKey ,icode , iValue ).
+      193      end.
+      194      method public void SetCountValue(iDB as integer, iFileName as character , iKey as character,icode as character, iValue as int64  ):
+      195         find first counter where counter.db        = idb
+      196                              and counter.file-name eq iFileName
+      197                              and counter.key       eq iKey
+      198                              and counter.code      eq iCode
+      199            exclusive-lock no-error.
+      200         if not available counter
+      201         then do:
+      202            create counter.
+      203            assign
+      204               counter.db        = idb
+      205               counter.file-name = ifilename
+      206               counter.key       = ikey
+      207               counter.code      = icode
+      208               counter.name = substitute("Счетчик для '&1' с ключем '&2' и кодом '&3'",ifilename,ikey,icode).
+      209            .
+      210            if ifilename eq "cashbookrule"
+      211            then
+      212               assign
+      213                  counter.Rule = "year".
+      214         end.
+      215         assign
+      216         counter.CountValue = iValue
+      217         counter.sysInfo    = substitute("year,&1",string(year(today))).
+      218      end.
+      219   end class.

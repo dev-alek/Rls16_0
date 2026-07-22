@@ -1,0 +1,639 @@
+        1   def input param parparentproc as Widget-handle no-undo .
+        2   def input param p-mode as char no-undo.
+        3   def output param p-result as logical no-undo.
+        4   def input-output param p-recid as recid no-undo.
+        5   define variable vss-revision    as character no-undo init "$Revision$":U .
+        6   define variable vss-author      as character no-undo init "$Author$":U .
+        7   define variable vss-date        as character no-undo init "$Date$":U .
+        8   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        9   define variable vss-archive     as character no-undo init "$Archive$":U .
+       10   define variable vss-description as character no-undo init "Редактирование Путевого листа. Документы->Путевые листы".
+       11   define new global shared variable g#language as character no-undo .
+       12   if g#language <> '' and g#language <> 'rus':U then do:
+       13     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       14   end.
+       15   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       16     define variable v-cntxt-db-num        as integer   no-undo .
+       17     define variable v-cntxt-userid        as character no-undo .
+       18     define variable v-cntxt-level         as character no-undo .
+       19     define variable v-cntxt-host-code-obj as integer   no-undo .
+       20     define variable v-cntxt-obj-type      as character no-undo .
+       21     define variable v-cntxt-obj-code      as integer   no-undo .
+       22     define variable v-cntxt-db-num-obj    as integer   no-undo .
+       23     define variable v-cntxt-is-admin      as logical   no-undo .
+       24   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       25     run mainmenu_getcntxt in parparentproc
+       26       (output v-cntxt-db-num
+       27       ,output v-cntxt-userid
+       28       ,output v-cntxt-level
+       29       ,output v-cntxt-host-code-obj
+       30       ,output v-cntxt-obj-type
+       31       ,output v-cntxt-obj-code
+       32       ,output v-cntxt-db-num-obj
+       33       ,output v-cntxt-is-admin
+       34       ) .
+       35   procedure update-or-create-travel-sheet:
+       36       def input-output param p-rec-id      as recid    no-undo.
+       37       def input param p-ts-num      as char     no-undo.
+       38       def input param p-ts-date     as date     no-undo.
+       39       def input param p-pf          as decimal  no-undo.
+       40       def input param p-fuel-code   as int      no-undo.
+       41       def input param p-card-code   as char     no-undo.
+       42       def input param p-stat        as logical  no-undo.
+       43       def buffer buf_cd-doc   for ub.cd-doc.
+       44       def buffer buf_goods    for ub.goods.
+       45       def buffer buf_dis-card for ub.dis-card.
+       46       if p-fuel-code = 0 then
+       47           return error "Топлево не указано".
+       48       if trim(p-card-code) = "" then
+       49           return error "Дисконтная карта не указана".
+       50       if p-pf = 0 then
+       51           return error "Разрешенный налив должен быть больше 0".
+       52       if trim(p-ts-num) = "" then
+       53           return error "Номер ПЛ не должен быть пустым".
+       54       for each buf_cd-doc no-lock
+       55           where buf_cd-doc.CharKey_One = p-ts-num
+       56           and buf_cd-doc.doc-type = 'путевой-лист':U
+       57           and buf_cd-doc.obj-code = v-cntxt-obj-code
+       58           and buf_cd-doc.obj-type = v-cntxt-obj-type
+       59           and recid(buf_cd-doc) <> p-rec-id:
+       60               return error "уже есть ПЛ с номером " + p-ts-num.
+       61       end.
+       62       find first buf_goods no-lock
+       63           where buf_goods.gds-code = p-fuel-code
+       64           no-error.
+       65       if not avail buf_goods then
+       66           return error "не удалось найти топливо по gds коду = " + string(p-fuel-code).
+       67       find first buf_dis-card no-lock
+       68           where buf_dis-card.d-card = p-card-code
+       69           no-error.
+       70       if not avail buf_dis-card then
+       71           return error "не удалось найти дисконтную карту".
+       72       if p-rec-id = 0 then do:
+       73           create buf_cd-doc.
+       74           assign
+       75               buf_cd-doc.Key#_One = 0
+       76           .
+       77       end.
+       78       else do:
+       79           find first buf_cd-doc
+       80               where recid(buf_cd-doc) = p-rec-id
+       81               no-error.
+       82           if not avail buf_cd-doc then
+       83               return error "Не найдена запись с recid = " + string(p-rec-id).
+       84           if buf_cd-doc.doc-type <> 'путевой-лист':U then
+       85               return error "Запись с recid = " + string(p-rec-id) + " не является ПЛ".
+       86           if buf_cd-doc.Key#_One = 1 then
+       87               return error "Документ с recid = " + string(p-rec-id) + " переведен в статус Закрыт, изменение не возможно".
+       88       end.
+       89       assign
+       90           buf_cd-doc.obj-type     = v-cntxt-obj-type      when p-rec-id = 0
+       91           buf_cd-doc.obj-code     = v-cntxt-obj-code      when p-rec-id = 0
+       92           buf_cd-doc.pos-type     = ""                    when p-rec-id = 0
+       93           buf_cd-doc.doc-type     = 'путевой-лист':U       when p-rec-id = 0
+       94           buf_cd-doc.doc-code     = string(next-value(s-file-num-2)) when p-rec-id = 0
+       95           buf_cd-doc.datekey_one  = p-ts-date       when p-ts-date <> ?
+       96           buf_cd-doc.CharKey_One  = p-ts-num        when p-ts-num <> ?
+       97           buf_cd-doc.CharKey_Two  = p-card-code     when p-card-code <> ?
+       98           buf_cd-doc.Key#_Two     = p-fuel-code     when p-fuel-code <> ?
+       99           buf_cd-doc.DecKey_One   = p-pf            when p-pf <> ?
+      100           buf_cd-doc.Key#_One     = integer(p-stat) when p-stat <> ?
+      101       .
+      102       p-rec-id = recid(buf_cd-doc).
+      103   end.
+      104   procedure delete-travel-sheet:
+      105       def input param p-rid as recid no-undo.
+      106       def buffer buf_cd-doc for       ub.cd-doc.
+      107       def buffer buf_cd-doc-line for  ub.cd-doc-line.
+      108       find first buf_cd-doc share-lock
+      109           where recid(buf_cd-doc) = p-rid
+      110           no-error.
+      111       if not avail buf_cd-doc then
+      112           return error "Запись для удаления не найдена, recid = " + string(p-rid).
+      113       for each buf_cd-doc-line no-lock
+      114           where buf_cd-doc-line.doc-type = 'путевой-лист':U
+      115           and buf_cd-doc-line.doc-code = buf_cd-doc.doc-code
+      116           and buf_cd-doc-line.obj-code = buf_cd-doc.obj-code
+      117           and buf_cd-doc-line.obj-type = buf_cd-doc.obj-type
+      118           :
+      119               return error "Нельзя удалять путевые листы, для которых есть данные о заправках".
+      120       end.
+      121       delete buf_cd-doc.
+      122   end.
+      123   procedure vss-get-info :
+      124     define output parameter p-vss-revision    like vss-revision    no-undo .
+      125     define output parameter p-vss-author      like vss-author      no-undo .
+      126     define output parameter p-vss-date        like vss-date        no-undo .
+      127     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+      128     define output parameter p-vss-archive     like vss-archive     no-undo .
+      129     define output parameter p-vss-description like vss-description no-undo .
+      130     assign
+      131       p-vss-revision    = vss-revision
+      132       p-vss-author      = vss-author
+      133       p-vss-date        = vss-date
+      134       p-vss-workfile    = vss-workfile
+      135       p-vss-archive     = vss-archive
+      136       p-vss-description = vss-description
+      137     .
+      138   end procedure.
+      139   procedure vss-get-parameters :
+      140     define output parameter p-vss-parameters as character no-undo .
+      141   end procedure.
+      142   define new global shared variable g#vssrevis-logger as handle    no-undo .
+      143   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+      144   define variable v-vssrevis-logger                   as handle    no-undo .
+      145   procedure vss-logevent :
+      146     define input  parameter p-extra-paramters as character no-undo .
+      147     define variable v-vssrevis-parameters as character no-undo .
+      148     do
+      149     on error undo, return error return-value
+      150     :
+      151       if  valid-handle(v-vssrevis-logger)
+      152       and v-vssrevis-logger :get-signature("logevent") <> ""
+      153       then do:
+      154         run vss-get-parameters in this-procedure
+      155           (output v-vssrevis-parameters
+      156           ).
+      157         run logevent in v-vssrevis-logger
+      158           (input vss-workfile
+      159           ,input vss-revision
+      160           ,input v-vssrevis-parameters
+      161           ,input p-extra-paramters
+      162           ).
+      163       end.
+      164     end.
+      165   end procedure.
+      166   assign
+      167     v-vssrevis-logger = g#vssrevis-logger
+      168   .
+      169   if  valid-handle(v-vssrevis-logger)
+      170   and v-vssrevis-logger :get-signature("logevent") <> ""
+      171   then do:
+      172     assign
+      173       v-vssrevis-logevent = true
+      174     .
+      175     run vss-logevent in this-procedure (input vss-description) .
+      176   end.
+      177   procedure proc-alt-shift-f2:
+      178     if not ibs.th.gbl.gbl-var:rcode
+      179   then
+      180     run gbl\inidebug.p .
+      181   end.
+      182   procedure proc-alt-shift-f3:
+      183     run gbl/prvssinf.p
+      184       ( input this-procedure
+      185       ) .
+      186   end.
+      187   define variable v-inform-launched as logical no-undo initial false .
+      188   procedure proc-alt-shift-f4:
+      189     define variable v-action as character no-undo .
+      190     if v-inform-launched = false then do:
+      191       assign
+      192         v-inform-launched = true
+      193       .
+      194       run gbl/d-inform.w
+      195         (  input self
+      196         ,  input this-procedure
+      197         , output v-action
+      198         ) no-error .
+      199       run gbl/infrmact.p (input self, input this-procedure, input v-action) no-error .
+      200       assign
+      201         v-inform-launched = false
+      202       .
+      203     end.
+      204   end.
+      205   procedure proc-alt-f1:
+      206     run gbl/corrhelp.p
+      207       (input this-procedure
+      208       ) .
+      209   end .
+      210   on alt-shift-f2 anywhere do:
+      211     run proc-alt-shift-f2.
+      212   end.
+      213   on alt-shift-f3 anywhere do:
+      214     run proc-alt-shift-f3 in this-procedure .
+      215   end.
+      216   on alt-shift-f4 anywhere do:
+      217     run proc-alt-shift-f4 in this-procedure.
+      218   end.
+      219   on alt-f1 anywhere do:
+      220     run proc-alt-f1 in this-procedure .
+      221   end.
+      222   DEFINE BUTTON Btn_Cancel AUTO-END-KEY
+      223        LABEL "Отмена"
+      224        SIZE 10 BY 1
+      225        BGCOLOR 8 .
+      226   DEFINE BUTTON Btn_OK AUTO-GO
+      227        LABEL "Ввод"
+      228        SIZE 10 BY 1
+      229        BGCOLOR 8 .
+      230   DEFINE BUTTON BUTTON-sel-car
+      231        IMAGE-UP FILE "btn-down-arrow":U
+      232        IMAGE-DOWN FILE "btn-down-arrow":U
+      233        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+      234        LABEL ""
+      235        SIZE 3 BY 1.
+      236   DEFINE BUTTON BUTTON-sel-fuel
+      237        IMAGE-UP FILE "btn-down-arrow":U
+      238        IMAGE-DOWN FILE "btn-down-arrow":U
+      239        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+      240        LABEL ""
+      241        SIZE 3 BY 1.
+      242   DEFINE VARIABLE card-code-str AS CHARACTER FORMAT "X(256)":U
+      243        LABEL "Номер карты"
+      244        VIEW-AS FILL-IN
+      245        SIZE 20 BY 1 NO-UNDO.
+      246   DEFINE VARIABLE fuel-code-str AS CHARACTER FORMAT "X(256)":U
+      247        LABEL "Топливо"
+      248        VIEW-AS FILL-IN
+      249        SIZE 15 BY 1 NO-UNDO.
+      250   DEFINE VARIABLE num AS CHARACTER FORMAT "X(20)"
+      251        LABEL "Номер ПЛ"
+      252        VIEW-AS FILL-IN
+      253        SIZE 27 BY 1 NO-UNDO.
+      254   DEFINE VARIABLE permitted-filling AS DECIMAL FORMAT "->>,>>9.99":U INITIAL 0
+      255        LABEL "Разрешенный налив"
+      256        VIEW-AS FILL-IN
+      257        SIZE 20 BY 1 NO-UNDO.
+      258   DEFINE VARIABLE ts-date AS DATE FORMAT "99/99/9999":U
+      259        LABEL "Дата"
+      260        VIEW-AS FILL-IN
+      261        SIZE 15 BY 1 NO-UNDO.
+      262   DEFINE QUERY Dialog-Frame FOR
+      263         cd-doc SCROLLING.
+      264   DEFINE FRAME Dialog-Frame
+      265        Btn_OK AT ROW 1 COL 2
+      266        Btn_Cancel AT ROW 1 COL 12
+      267        num AT ROW 2.91 COL 12 COLON-ALIGNED WIDGET-ID 2
+      268        ts-date AT ROW 4.33 COL 12 COLON-ALIGNED WIDGET-ID 8
+      269        permitted-filling AT ROW 4.33 COL 51 COLON-ALIGNED WIDGET-ID 10
+      270        fuel-code-str AT ROW 7.67 COL 12 COLON-ALIGNED WIDGET-ID 16
+      271        BUTTON-sel-fuel AT ROW 7.67 COL 30 WIDGET-ID 18
+      272        card-code-str AT ROW 7.67 COL 49 COLON-ALIGNED WIDGET-ID 4
+      273        BUTTON-sel-car AT ROW 7.67 COL 72 WIDGET-ID 6
+      274        SPACE(2.19) SKIP(0.89)
+      275       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+      276            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+      277            TITLE "<insert dialog title>"
+      278            DEFAULT-BUTTON Btn_OK CANCEL-BUTTON Btn_Cancel WIDGET-ID 100.
+      279   ASSIGN
+      280          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+      281          FRAME Dialog-Frame:HIDDEN           = TRUE.
+      282   ASSIGN
+      283          card-code-str:READ-ONLY IN FRAME Dialog-Frame        = TRUE.
+      284   ASSIGN
+      285          fuel-code-str:READ-ONLY IN FRAME Dialog-Frame        = TRUE.
+      286   ON CHOOSE OF Btn_OK IN FRAME Dialog-Frame
+      287   DO:
+      288       assign frame Dialog-Frame
+      289           num
+      290           ts-date
+      291           fuel-code-str
+      292           card-code-str
+      293           permitted-filling
+      294       .
+      295       if ts-date = ? then do:
+      296           message "Дата не указана" view-as alert-box.
+      297           return no-apply.
+      298       end.
+      299       run update-or-create-travel-sheet(
+      300             input-output p-recid
+      301           , num
+      302           , ts-date
+      303           , permitted-filling
+      304           , integer(fuel-code-str)
+      305           , card-code-str
+      306           , ?
+      307       ) no-error.
+      308       if error-status:ERROR then do:
+      309           message return-value view-as alert-box.
+      310           return no-apply.
+      311       end.
+      312       else do:
+      313           p-result = true.
+      314       end.
+      315   END.
+      316   ON CHOOSE OF BUTTON-sel-car IN FRAME Dialog-Frame
+      317   DO:
+      318       def var rid-list as char no-undo.
+      319   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      320     run mainmenu_getcntxt in parparentproc
+      321       (output v-cntxt-db-num
+      322       ,output v-cntxt-userid
+      323       ,output v-cntxt-level
+      324       ,output v-cntxt-host-code-obj
+      325       ,output v-cntxt-obj-type
+      326       ,output v-cntxt-obj-code
+      327       ,output v-cntxt-db-num-obj
+      328       ,output v-cntxt-is-admin
+      329       ) .
+      330       run ref/discards.w (
+      331                    input parparentproc
+      332                   ,input "b-sel":U
+      333                   ,input 'все':U
+      334                   ,input v-cntxt-host-code-obj
+      335                   ,input v-cntxt-obj-type
+      336                   ,input v-cntxt-obj-code
+      337                   ,input '':U
+      338                   ,input ?
+      339                   ,output rid-list ) no-error.
+      340       if num-entries(rid-list) <> 1 then return.
+      341       find first ub.dis-card no-lock
+      342           where recid(ub.dis-card) = integer(rid-list).
+      343       card-code-str = string(ub.dis-card.d-card).
+      344       disp card-code-str
+      345           with frame Dialog-Frame.
+      346   END.
+      347   ON CHOOSE OF BUTTON-sel-fuel IN FRAME Dialog-Frame
+      348   DO:
+      349     def var rid-list as char no-undo.
+      350     run ref/petrlref.p ( parParentProc, "b-sel", output rid-list) no-error.
+      351     if num-entries(rid-list) <> 1 then return.
+      352     find first ub.goods no-lock
+      353       where recid(ub.goods) = integer(rid-list).
+      354     fuel-code-str = string(ub.goods.gds-code).
+      355     disp fuel-code-str
+      356       with frame Dialog-Frame.
+      357   END.
+      358   IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+      359   THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+      360   MAIN-BLOCK:
+      361   DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+      362      ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+      363   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      364   on ' ' of ts-date in frame Dialog-Frame
+      365   do:
+      366     if (can-query (self, "sensitive")
+      367        and
+      368        self :sensitive = true
+      369        )
+      370     or (can-query (self, "read-only")
+      371        and
+      372        self :read-only = false
+      373        )
+      374     then do:
+      375       assign
+      376         self :screen-value = ?
+      377       .
+      378     end.
+      379     return no-apply.
+      380   end.
+      381   on delete-character of ts-date in frame Dialog-Frame
+      382   do:
+      383     if (can-query (self, "sensitive")
+      384        and
+      385        self :sensitive = true
+      386        )
+      387     or (can-query (self, "read-only")
+      388        and
+      389        self :read-only = false
+      390        )
+      391     then do:
+      392       assign
+      393         self :screen-value = ?
+      394       .
+      395     end.
+      396     return no-apply.
+      397   end.
+      398   on ctrl-d of ts-date in frame Dialog-Frame
+      399   do:
+      400     define variable v-curr-sv-date as date no-undo .
+      401     if (can-query (self, "sensitive")
+      402        and
+      403        self :sensitive = true
+      404        )
+      405     or (can-query (self, "read-only")
+      406        and
+      407        self :read-only = false
+      408        )
+      409     then do:
+      410       if self :handle <> focus :handle
+      411       then do:
+      412         apply "entry":u to self .
+      413       end.
+      414       run gbl/getcurdt.p
+      415         (output v-curr-sv-date
+      416         ) .
+      417       assign
+      418         self :screen-value = string(v-curr-sv-date) .
+      419       .
+      420     end.
+      421     return no-apply.
+      422   end.
+      423   on ctrl-b of ts-date in frame Dialog-Frame
+      424   do:
+      425     if (can-query (self, "sensitive")
+      426        and
+      427        self :sensitive = true
+      428        )
+      429     or (can-query (self, "read-only")
+      430        and
+      431        self :read-only = false
+      432        )
+      433     then do:
+      434       if self :handle <> focus :handle
+      435       then do:
+      436         apply "entry":u to self .
+      437       end.
+      438       define variable v-curr-sv-date as date no-undo .
+      439       define variable v-new-sv-date  as date no-undo .
+      440       assign
+      441         v-curr-sv-date = date(self :screen-value) no-error
+      442       .
+      443       if v-curr-sv-date = ?
+      444       then do:
+      445         run gbl/getcurdt.p
+      446           (output v-curr-sv-date
+      447           ) .
+      448       end.
+      449       if v-curr-sv-date <> ?
+      450       then do:
+      451         assign
+      452           v-new-sv-date = date( month(v-curr-sv-date), 1, year(v-curr-sv-date))
+      453         .
+      454         assign
+      455           self :screen-value = string(v-new-sv-date) .
+      456         .
+      457       end.
+      458     end.
+      459     return no-apply .
+      460   end.
+      461   on ctrl-e of ts-date in frame Dialog-Frame
+      462   do:
+      463     if (can-query (self, "sensitive")
+      464        and
+      465        self :sensitive = true
+      466        )
+      467     or (can-query (self, "read-only")
+      468        and
+      469        self :read-only = false
+      470        )
+      471     then do:
+      472       if self :handle <> focus :handle
+      473       then do:
+      474         apply "entry":u to self .
+      475       end.
+      476       define variable v-curr-sv-date as date no-undo .
+      477       define variable v-new-sv-date  as date no-undo .
+      478       assign
+      479         v-curr-sv-date = date(self :screen-value) no-error
+      480       .
+      481       if v-curr-sv-date = ?
+      482       then do:
+      483         run gbl/getcurdt.p
+      484           (output v-curr-sv-date
+      485           ) .
+      486       end.
+      487       if v-curr-sv-date <> ?
+      488       then do:
+      489         run gbl/lastdate.p
+      490           (input  v-curr-sv-date
+      491           ,output v-new-sv-date
+      492           ).
+      493         assign
+      494           self :screen-value = string(v-new-sv-date) .
+      495         .
+      496       end.
+      497     end.
+      498     return no-apply .
+      499   end.
+      500   on ctrl-f of ts-date in frame Dialog-Frame
+      501   do:
+      502     if (can-query (self, "sensitive")
+      503        and
+      504        self :sensitive = true
+      505        )
+      506     or (can-query (self, "read-only")
+      507        and
+      508        self :read-only = false
+      509        )
+      510     then do:
+      511       if self :handle <> focus :handle
+      512       then do:
+      513         apply "entry":u to self .
+      514       end.
+      515       define variable v-ok            as logical   no-undo .
+      516       define variable v-curr-sv-date  as date      no-undo .
+      517       define variable v-description   as character no-undo .
+      518       assign
+      519         v-curr-sv-date = date(self :screen-value) no-error
+      520       .
+      521       if v-curr-sv-date = ?
+      522       then do:
+      523         run gbl/getcurdt.p
+      524           (output v-curr-sv-date
+      525           ) .
+      526       end.
+      527       if v-curr-sv-date <> ?
+      528       then do:
+      529         run gbl/d-inpday.w
+      530           (input ?
+      531           ,input "Выбор даты"
+      532           ,input v-description
+      533           ,input ""
+      534           ,input-output v-curr-sv-date
+      535           ,output v-ok
+      536           ).
+      537         if v-ok = true
+      538         then do:
+      539           assign
+      540             self :screen-value = string(v-curr-sv-date) .
+      541           .
+      542         end.
+      543       end.
+      544     end.
+      545     return no-apply .
+      546   end.
+      547     define MENU m-ed-date4
+      548       MENU-ITEM m-ed-date4-1 LABEL "Начало месяца" ACCELERATOR "ALT-1"
+      549       MENU-ITEM m-ed-date4-2 LABEL "Сегодня"       ACCELERATOR "ALT-2"
+      550       MENU-ITEM m-ed-date4-3 LABEL "Конец месяца"  ACCELERATOR "ALT-3"
+      551       MENU-ITEM m-ed-date4-4 LABEL "Календарь"     ACCELERATOR "ALT-4"
+      552       .
+      553     if ts-date :POPUP-MENU in frame Dialog-Frame = ?
+      554     then do:
+      555       ASSIGN
+      556         ts-date :POPUP-MENU in frame Dialog-Frame = MENU m-ed-date4 :HANDLE
+      557         ts-date :MENU-MOUSE in frame Dialog-Frame = 3
+      558       .
+      559     end.
+      560     define variable v-label-handle4 as handle no-undo .
+      561     assign
+      562       v-label-handle4 = ts-date :side-label-handle in frame Dialog-Frame
+      563     .
+      564     if valid-handle (v-label-handle4)
+      565     then do:
+      566       if v-label-handle4 :tooltip = ""
+      567       or v-label-handle4 :tooltip = ?
+      568       then do:
+      569         assign
+      570           v-label-handle4 :tooltip = "Ctrl-D - текущая, Ctrl-B - начало, Ctrl-E - конец, Ctrl-F - календарь, Прав.Клавиша Мыши - Popup Menu"
+      571         .
+      572       end.
+      573     end.
+      574     ON CHOOSE OF MENU-ITEM m-ed-date4-1 in menu m-ed-date4 DO:
+      575       apply "ctrl-b":U to ts-date in frame Dialog-Frame .
+      576     END.
+      577     ON CHOOSE OF MENU-ITEM m-ed-date4-2 in menu m-ed-date4 DO:
+      578       apply "ctrl-d":U to ts-date in frame Dialog-Frame .
+      579     END.
+      580     ON CHOOSE OF MENU-ITEM m-ed-date4-3 in menu m-ed-date4 DO:
+      581       apply "ctrl-e":U to ts-date in frame Dialog-Frame .
+      582     END.
+      583     ON CHOOSE OF MENU-ITEM m-ed-date4-4 in menu m-ed-date4 DO:
+      584       apply "ctrl-f":U to ts-date in frame Dialog-Frame .
+      585     END.
+      586     run my-init no-error.
+      587     if error-status:ERROR then do:
+      588         message return-value view-as alert-box.
+      589         p-result = false.
+      590     end.
+      591     else do:
+      592         RUN enable_UI.
+      593         WAIT-FOR GO OF FRAME Dialog-Frame FOCUS num.
+      594     end.
+      595   END.
+      596   RUN disable_UI.
+      597   PROCEDURE disable_UI :
+      598     HIDE FRAME Dialog-Frame.
+      599   END PROCEDURE.
+      600   PROCEDURE enable_UI :
+      601     OPEN QUERY Dialog-Frame FOR EACH cd-doc SHARE-LOCK.
+      602     GET FIRST Dialog-Frame.
+      603     DISPLAY num ts-date permitted-filling fuel-code-str card-code-str
+      604         WITH FRAME Dialog-Frame.
+      605     ENABLE Btn_OK Btn_Cancel num ts-date permitted-filling fuel-code-str
+      606            BUTTON-sel-fuel card-code-str BUTTON-sel-car
+      607         WITH FRAME Dialog-Frame.
+      608     VIEW FRAME Dialog-Frame.
+      609   END PROCEDURE.
+      610   PROCEDURE my-init :
+      611   frame Dialog-Frame:TITLE = (if p-mode = 'ДОБАВЛЕНИЕ':U then "Добавить" else "Изменить") + " ПЛ".
+      612       if p-mode <> 'ДОБАВЛЕНИЕ':U and p-mode <> 'ИЗМЕНЕНИЕ':U then
+      613           return error "Параметр p-mode может быть только одним из &add-def или &update".
+      614       if p-mode = 'ИЗМЕНЕНИЕ':U then do:
+      615           find first ub.cd-doc no-lock
+      616               where recid(ub.cd-doc) = p-recid no-error.
+      617           if not avail ub.cd-doc then
+      618               return error "Запись с recid = " + string(p-recid) + " не найдена".
+      619           if ub.cd-doc.doc-type <> 'путевой-лист':U then
+      620               return error "Запись с recid = " + string(p-recid) + " ; № ПЛ = " + ub.cd-doc.CharKey_One + " не является путевым листом".
+      621           if ub.cd-doc.Key#_One = 1 then
+      622               return error "Нельзя редактировать закрытый документ".
+      623           assign
+      624               num                 = ub.cd-doc.CharKey_One
+      625               ts-date             = ub.cd-doc.datekey_one
+      626               permitted-filling   = ub.cd-doc.DecKey_One
+      627               fuel-code-str       = string(ub.cd-doc.Key#_Two)
+      628               card-code-str       = ub.cd-doc.CharKey_Two
+      629           .
+      630           disp
+      631               num
+      632               ts-date
+      633               permitted-filling
+      634               fuel-code-str
+      635               card-code-str
+      636               with frame Dialog-Frame.
+      637       end.
+      638       num:SENSITIVE = true.
+      639   END PROCEDURE.

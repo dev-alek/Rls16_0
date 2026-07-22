@@ -1,0 +1,1658 @@
+        1   block-level on error undo, throw.
+        2   define temp-table tt-imp-parts-ptrl no-undo // скопировано из utl/imp-doc4.p
+        3      field artic         as character
+        4              field f02           as character
+        5      field part-code     as character
+        6      field in-code       like ub.parts.in-code
+        7      field gds-code      as integer
+        8      field price-rubl    like ub.parts.price-rubl
+        9      field fact-qnty     like ub.parts.fact-qnty
+       10              field f08           as character
+       11              field f09           as character
+       12              field f10           as character
+       13      field vat-tax-value as decimal
+       14              field f12           as character
+       15              field f13           as character
+       16      field name-gtd      as character
+       17              field f15           as character
+       18              field f16           as character
+       19      field srok-god      as character
+       20              field f18           as character
+       21              field f19           as character
+       22      field supp-code     as integer
+       23      field supp-type     as character
+       24      field cont-prn-code like ub.contract.contract-prn-code
+       25      field pl-loc1       as character
+       26      field cli-qnty      as decimal
+       27              field imp-row       as character // исходая строка из файла импорта
+       28   .
+       29   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       30   define new global shared variable g#trdcalib as handle no-undo.
+       31   define input  parameter parparentproc    as handle no-undo .
+       32   // define input parameter p-parent-handle  as handle no-undo . 24/IX-2018 - не используется
+       33   define input  parameter p-log-handle     as handle no-undo .
+       34   define input  parameter p-log-filename   as character no-undo .
+       35   define input  parameter p-obj-code       as integer no-undo .
+       36   define input  parameter p-obj-type       as character no-undo .
+       37   define input  parameter p-is-close       as logical no-undo . // true - закрывать созданные документы; ещё не работает: всегда false
+       38   define input  parameter p-osn-fname      as character no-undo .
+       39   define input  parameter p-art-fname      as character no-undo .
+       40   define input  parameter p-retry-fname    as character no-undo .
+       41   define input  parameter table for tt-imp-parts-ptrl.
+       42   define output parameter p-count-err      as integer no-undo .
+       43   define output parameter p-count-err1     as integer no-undo .
+       44   define output parameter p-count-err2     as integer no-undo .
+       45   define variable vss-revision    as character no-undo init "$Revision: 022d9db987b8, 3255, rls $":U .
+       46   define variable vss-author      as character no-undo init "$Author: EShklyar $":U .
+       47   define variable vss-date        as character no-undo init "$Date: 2023/01/27 13:45:26 $":U .
+       48   define variable vss-workfile    as character no-undo init "$Workfile: imp-doc4cr-ptrl.p $":U .
+       49   define variable vss-archive     as character no-undo init "$Archive: utl/imp-doc4cr-ptrl.p $":U .
+       50   define variable vss-description as character no-undo init "Импорт накладных. Создание документов.".
+       51   procedure vss-get-info :
+       52     define output parameter p-vss-revision    like vss-revision    no-undo .
+       53     define output parameter p-vss-author      like vss-author      no-undo .
+       54     define output parameter p-vss-date        like vss-date        no-undo .
+       55     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       56     define output parameter p-vss-archive     like vss-archive     no-undo .
+       57     define output parameter p-vss-description like vss-description no-undo .
+       58     assign
+       59       p-vss-revision    = vss-revision
+       60       p-vss-author      = vss-author
+       61       p-vss-date        = vss-date
+       62       p-vss-workfile    = vss-workfile
+       63       p-vss-archive     = vss-archive
+       64       p-vss-description = vss-description
+       65     .
+       66   end procedure.
+       67   procedure vss-get-parameters :
+       68     define output parameter p-vss-parameters as character no-undo .
+       69   end procedure.
+       70   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       71   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       72   define variable v-vssrevis-logger                   as handle    no-undo .
+       73   procedure vss-logevent :
+       74     define input  parameter p-extra-paramters as character no-undo .
+       75     define variable v-vssrevis-parameters as character no-undo .
+       76     do
+       77     on error undo, return error return-value
+       78     :
+       79       if  valid-handle(v-vssrevis-logger)
+       80       and v-vssrevis-logger :get-signature("logevent") <> ""
+       81       then do:
+       82         run vss-get-parameters in this-procedure
+       83           (output v-vssrevis-parameters
+       84           ).
+       85         run logevent in v-vssrevis-logger
+       86           (input vss-workfile
+       87           ,input vss-revision
+       88           ,input v-vssrevis-parameters
+       89           ,input p-extra-paramters
+       90           ).
+       91       end.
+       92     end.
+       93   end procedure.
+       94   assign
+       95     v-vssrevis-logger = g#vssrevis-logger
+       96   .
+       97   if  valid-handle(v-vssrevis-logger)
+       98   and v-vssrevis-logger :get-signature("logevent") <> ""
+       99   then do:
+      100     assign
+      101       v-vssrevis-logevent = true
+      102     .
+      103     run vss-logevent in this-procedure (input vss-description) .
+      104   end.
+      105   define new global shared variable g#language as character no-undo .
+      106   if g#language <> '' and g#language <> 'rus':U then do:
+      107     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+      108   end.
+      109   define new global shared variable g#library  as handle no-undo .
+      110   define new global shared variable g#library2 as handle no-undo .
+      111   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      112   define new global shared variable g#lib-trn  as handle no-undo .
+      113   define new global shared variable g#lib-trn2 as handle no-undo .
+      114   define new global shared variable g#lib-trn3 as handle no-undo .
+      115   define new global shared variable g#lib-trn4 as handle no-undo .
+      116   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      117     define variable v-cntxt-db-num        as integer   no-undo .
+      118     define variable v-cntxt-userid        as character no-undo .
+      119     define variable v-cntxt-level         as character no-undo .
+      120     define variable v-cntxt-host-code-obj as integer   no-undo .
+      121     define variable v-cntxt-obj-type      as character no-undo .
+      122     define variable v-cntxt-obj-code      as integer   no-undo .
+      123     define variable v-cntxt-db-num-obj    as integer   no-undo .
+      124     define variable v-cntxt-is-admin      as logical   no-undo .
+      125   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      126     run mainmenu_getcntxt in parparentproc
+      127       (output v-cntxt-db-num
+      128       ,output v-cntxt-userid
+      129       ,output v-cntxt-level
+      130       ,output v-cntxt-host-code-obj
+      131       ,output v-cntxt-obj-type
+      132       ,output v-cntxt-obj-code
+      133       ,output v-cntxt-db-num-obj
+      134       ,output v-cntxt-is-admin
+      135       ) .
+      136   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      137     define variable v-cntxp-doc-prt         like ub.store.doc-prt         no-undo.
+      138     define variable v-cntxp-price-calc      like ub.store.price-calc      no-undo.
+      139     define variable v-cntxp-inout-price     like ub.store.inout-price     no-undo.
+      140     define variable v-cntxp-unit-cli-perm   like ub.store.unit-cli-perm   no-undo.
+      141     define variable v-cntxp-out-rate        like ub.store.out-rate        no-undo.
+      142     define variable v-cntxp-out-line-discnt like ub.store.out-line-discnt no-undo.
+      143     define variable v-cntxp-in-ov           like ub.store.in-ov           no-undo.
+      144     define variable v-cntxp-in-perm         like ub.store.in-perm         no-undo.
+      145     define variable v-cntxp-no-eq           like ub.store.no-eq           no-undo.
+      146     define variable v-cntxp-rsrv-time       like ub.store.rsrv-time       no-undo.
+      147     define variable v-cntxp-load-time       like ub.store.load-time       no-undo.
+      148     define variable v-cntxp-holidays        like ub.store.holidays        no-undo.
+      149     define variable v-cntxp-in-pay          like ub.store.in-pay          no-undo.
+      150     define variable v-cntxp-out-pay         like ub.store.out-pay         no-undo.
+      151     define variable v-cntxp-ret-pay         like ub.store.ret-pay         no-undo.
+      152     define variable v-cntxp-ret-sup-pay     like ub.store.ret-sup-pay     no-undo.
+      153     define variable v-cntxp-down-pay        like ub.store.down-pay        no-undo.
+      154     define variable v-cntxp-inv-pay         like ub.store.inv-pay         no-undo.
+      155     define variable v-cntxp-chk-pay         like ub.store.chk-pay         no-undo.
+      156     define variable v-cntxp-retail          like ub.sysconf.ord-prt       no-undo.
+      157     define variable v-cntxp-osn-base        like ub.sysconf.osn-base      no-undo.
+      158     define variable v-cntxp-conf-par        as   character                no-undo.
+      159     define variable v-cntxp-par-type        as   character                no-undo.
+      160     define variable v-cntxp-curr-host-code  like ub.store.host-code       no-undo.
+      161     define variable v-cntxp-obj-type        like ub.clients.obj-type      no-undo.
+      162     define variable v-cntxp-obj-code        like ub.clients.obj-code      no-undo.
+      163     define variable v-cntxp-db-num          as integer   no-undo .
+      164     define variable v-cntxp-userid          as character no-undo .
+      165     define variable v-cntxp-level           as character no-undo .
+      166     define variable v-cntxp-db-num-obj      as integer   no-undo .
+      167     define variable v-cntxp-is-admin        as logical   no-undo .
+      168     define buffer bf-cntxp_store for ub.store.
+      169     define buffer bf-cntxp_shop  for ub.shop.
+      170     define buffer bf-cntxp_sysconf for ub.sysconf.
+      171   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      172     run mainmenu_getcntxt in parparentproc
+      173       (output v-cntxp-db-num
+      174       ,output v-cntxp-userid
+      175       ,output v-cntxp-level
+      176       ,output v-cntxp-curr-host-code
+      177       ,output v-cntxp-obj-type
+      178       ,output v-cntxp-obj-code
+      179       ,output v-cntxp-db-num-obj
+      180       ,output v-cntxp-is-admin
+      181       ) .
+      182     if (v-cntxp-obj-type = 'маг':U or v-cntxp-obj-type = 'скл':U) and
+      183        v-cntxp-obj-code <> 0 then do:
+      184   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run conf-rd in g#library
+      185     (input  'is-prt'
+      186     ,input  0
+      187     ,input  ''
+      188     ,input  0
+      189     ,input  ''
+      190     ,input  ''
+      191     ,input  ''
+      192     ,input  yes
+      193     ,output v-cntxp-conf-par
+      194     ,output v-cntxp-par-type
+      195     ) no-error .
+      196       case v-cntxp-obj-type :
+      197         when 'скл':U then do:
+      198           find first bf-cntxp_store where bf-cntxp_store.obj-code = v-cntxp-obj-code no-lock.
+      199           find first bf-cntxp_sysconf where bf-cntxp_sysconf.host-code = bf-cntxp_store.host-code no-lock.
+      200           assign
+      201             v-cntxp-doc-prt         = (v-cntxp-conf-par = "yes") and bf-cntxp_store.doc-prt
+      202             v-cntxp-price-calc      = bf-cntxp_store.price-calc
+      203             v-cntxp-inout-price     = bf-cntxp_store.inout-price
+      204             v-cntxp-unit-cli-perm   = bf-cntxp_store.unit-cli-perm
+      205             v-cntxp-out-rate        = bf-cntxp_store.out-rate
+      206             v-cntxp-out-line-discnt = bf-cntxp_store.out-line-discnt
+      207             v-cntxp-in-ov           = bf-cntxp_store.in-ov
+      208             v-cntxp-in-perm         = bf-cntxp_store.in-perm
+      209             v-cntxp-no-eq           = bf-cntxp_store.no-eq
+      210             v-cntxp-rsrv-time       = bf-cntxp_store.rsrv-time
+      211             v-cntxp-load-time       = bf-cntxp_store.load-time
+      212             v-cntxp-holidays        = bf-cntxp_store.holidays
+      213             v-cntxp-in-pay          = bf-cntxp_store.in-pay
+      214             v-cntxp-out-pay         = bf-cntxp_store.out-pay
+      215             v-cntxp-ret-pay         = bf-cntxp_store.ret-pay
+      216             v-cntxp-ret-sup-pay     = bf-cntxp_store.ret-sup-pay
+      217             v-cntxp-down-pay        = bf-cntxp_store.down-pay
+      218             v-cntxp-inv-pay         = bf-cntxp_store.inv-pay
+      219             v-cntxp-chk-pay         = bf-cntxp_store.chk-pay
+      220             v-cntxp-retail          = bf-cntxp_sysconf.ord-prt
+      221             v-cntxp-osn-base        = bf-cntxp_sysconf.osn-base
+      222             .
+      223         end.
+      224         when 'маг':U then do:
+      225           find first bf-cntxp_shop where bf-cntxp_shop.obj-code = v-cntxp-obj-code no-lock.
+      226           find first bf-cntxp_sysconf where bf-cntxp_sysconf.host-code = bf-cntxp_shop.host-code no-lock.
+      227           assign
+      228             v-cntxp-doc-prt         = (v-cntxp-conf-par = "yes") and bf-cntxp_shop.doc-prt
+      229             v-cntxp-price-calc      = bf-cntxp_shop.price-calc
+      230             v-cntxp-inout-price     = bf-cntxp_shop.inout-price
+      231             v-cntxp-unit-cli-perm   = bf-cntxp_shop.unit-cli-perm
+      232             v-cntxp-out-rate        = bf-cntxp_shop.out-rate
+      233             v-cntxp-out-line-discnt = bf-cntxp_shop.out-line-discnt
+      234             v-cntxp-in-ov           = bf-cntxp_shop.in-ov
+      235             v-cntxp-in-perm         = bf-cntxp_shop.in-perm
+      236             v-cntxp-no-eq           = bf-cntxp_shop.no-eq
+      237             v-cntxp-rsrv-time       = bf-cntxp_shop.rsrv-time
+      238             v-cntxp-load-time       = bf-cntxp_shop.load-time
+      239             v-cntxp-holidays        = bf-cntxp_shop.holidays
+      240             v-cntxp-in-pay          = bf-cntxp_shop.in-pay
+      241             v-cntxp-out-pay         = bf-cntxp_shop.out-pay
+      242             v-cntxp-ret-pay         = bf-cntxp_shop.ret-pay
+      243             v-cntxp-ret-sup-pay     = bf-cntxp_shop.ret-sup-pay
+      244             v-cntxp-down-pay        = bf-cntxp_shop.down-pay
+      245             v-cntxp-inv-pay         = bf-cntxp_shop.inv-pay
+      246             v-cntxp-chk-pay         = bf-cntxp_shop.chk-pay
+      247             v-cntxp-retail          = bf-cntxp_sysconf.ord-prt
+      248             v-cntxp-osn-base        = bf-cntxp_sysconf.osn-base
+      249             .
+      250         end.
+      251       end case.
+      252     end.
+      253   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      254   define  temp-table gds-list no-undo like ub.goods
+      255     field qnty   as decimal
+      256     field to-del as logical
+      257     field order-num as integer
+      258     field to-sel as logical
+      259     field promo-code as character
+      260     field ActionId  as int64
+      261     field db-num as integer
+      262     index art  is primary unique artic prod-type prod-code
+      263     index code is         unique gds-code
+      264     index oi order-num
+      265     index isel to-sel
+      266     .
+      267   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      268   define    temp-table gds-list-hist no-undo
+      269   field list-table as character
+      270   field id as integer
+      271   field line as integer
+      272   field hist-mode as character
+      273   field des as character
+      274   field num-recs as integer
+      275   field option_ as character
+      276   field item_ as character
+      277   field status_ as character
+      278   field num-add as integer
+      279   field num-ignored as integer
+      280   field done as logical
+      281   field err_ as logical
+      282   field err-mes as character
+      283   index pi is primary
+      284   id
+      285   line
+      286   index isdone
+      287   done
+      288   .
+      289   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      290   procedure doc-code:
+      291   define input  parameter parmode          as   character           no-undo.
+      292   define input  parameter parobj-type      like ub.clients.obj-type no-undo.
+      293   define input  parameter parobj-code      like ub.clients.obj-code no-undo.
+      294   define input  parameter parroot-doc-code like ub.trn-doc.doc-code no-undo.
+      295   define output parameter pardoc-code      like ub.trn-doc.doc-code no-undo.
+      296   define buffer buf_sys-ctrl for ub.sys-ctrl  .
+      297   define variable vardb-remote     as   logical             no-undo.
+      298   define variable vartemp-doc-code like ub.trn-doc.doc-code no-undo.
+      299   define variable v-delimiter as character no-undo .
+      300   do
+      301   on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      302   :
+      303   find first buf_sys-ctrl no-lock .
+      304   vardb-remote = buf_sys-ctrl.db-num <> 0 .
+      305     CASE parmode:
+      306       when "main":u then do:
+      307         if vardb-remote then do:
+      308           assign
+      309             pardoc-code = trim (string (next-value (s-trn-doc, ub), ">>>>>>>>>9")) + "-" + trim (string (parobj-code, ">>>>9")) + substring (parobj-type, (if g#language = "RUS" then 1 else 2), 1).
+      310         end.
+      311         else do:
+      312           assign
+      313             pardoc-code = trim (string (next-value (s-trn-doc, ub), ">>>>>>>>>9")) + "-".
+      314         end.
+      315       end.
+      316       when "trio" then do:
+      317         assign
+      318           pardoc-code = replace (parroot-doc-code, "=", "*").
+      319       end.
+      320       otherwise do:
+      321         assign
+      322         v-delimiter = entry(lookup(entry(1, parmode), "main,chip,pair,flora,trio-m,quadro,stock-up,stock-down,stock-fix," +                          "main_s,chip_s,pair_s,trio-m_s,quadro_s,stock-up_s,stock-down_s,stock-fix_s":U), ("-,-,=,#,*,^,+,`,":U + chr(126) + ",у-,у-,у=,у*,у^,у+,у`,у" + chr(126)))
+      323         no-error
+      324         .
+      325         if error-status:error  then do:
+      326           undo, return error substitute("Ошибка при генерации номера документа&1Неверное значение параметра parmode &2"
+      327                                         ,chr(10)
+      328                                         ,parmode
+      329                                         ).
+      330         end.
+      331         if num-entries(parmode) = 1
+      332         and parmode <> "chip":U
+      333         and parmode <> "chip_s":U
+      334         then do:
+      335           assign
+      336           pardoc-code = replace (parroot-doc-code, "-", v-delimiter).
+      337         end.
+      338         else if (lookup("chip":U, parmode) > 0
+      339                  or
+      340                  lookup("chip_s":U, parmode) > 0) then do:
+      341           assign
+      342             vartemp-doc-code = parroot-doc-code.
+      343           do while true:
+      344             if index (vartemp-doc-code , ".") = 0 then
+      345               vartemp-doc-code  = replace (vartemp-doc-code , v-delimiter, v-delimiter + "1.").
+      346             else
+      347               vartemp-doc-code  =
+      348               substring (vartemp-doc-code , 1, index (vartemp-doc-code, v-delimiter)) +
+      349               string (integer (substring (vartemp-doc-code, index (vartemp-doc-code, v-delimiter) + 1, index (vartemp-doc-code, ".") - index (vartemp-doc-code, v-delimiter) - 1)) + 1) +
+      350               substring (vartemp-doc-code, index (vartemp-doc-code, ".")).
+      351             if not can-find (ub.trn-doc where ub.trn-doc.doc-code = vartemp-doc-code no-lock) then leave.
+      352           end.
+      353           assign
+      354             pardoc-code = vartemp-doc-code.
+      355         end.
+      356       end.
+      357     end CASE.
+      358     if pardoc-code = '':U
+      359     or (parroot-doc-code <> '':U
+      360     and pardoc-code = parroot-doc-code) then do:
+      361       undo, return error substitute("Ошибка при генерации номера документа&1"
+      362                                     ,chr(10)).
+      363     end.
+      364   end.
+      365   end. // procedure/method
+      366   function get-doc-code-int64 returns int64
+      367     ( input p-doc-code as character ) :
+      368     define variable v-ind              as integer   no-undo .
+      369     define variable v-num-entries      as integer   no-undo .
+      370     define variable v-doc-code-int64   as int64     no-undo .
+      371     define variable v-canonic-doc-code as character no-undo .
+      372     assign
+      373       v-num-entries      = num-entries( ("-,-,=,#,*,^,+,`,":U + chr(126) + ",у-,у-,у=,у*,у^,у+,у`,у" + chr(126)) )
+      374       v-canonic-doc-code = p-doc-code
+      375     .
+      376     do v-ind = 1 to v-num-entries
+      377     :
+      378       assign
+      379         v-canonic-doc-code = entry(1, v-canonic-doc-code, entry( v-ind, ("-,-,=,#,*,^,+,`,":U + chr(126) + ",у-,у-,у=,у*,у^,у+,у`,у" + chr(126)) ) )
+      380       .
+      381     end.
+      382     assign
+      383       v-doc-code-int64 = int64(v-canonic-doc-code) no-error
+      384     .
+      385     return v-doc-code-int64 .
+      386   end. // function/method
+      387   define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      388   define temp-table lib-trn_ret-doc       no-undo like ub.trn-doc.
+      389   define temp-table lib-trn_ret-line      no-undo like ub.doc-line
+      390     field cst-code                like ub.trn-doc.cst-code
+      391     field part-code               like ub.parts.part-code
+      392     .
+      393   define temp-table lib-trn_ret-line-attr no-undo like ub.doc-line-attr.
+      394   define temp-table lib-trn_ret-dtl       no-undo like ub.gds-dtl.
+      395   define temp-table lib-trn_ret-parts     no-undo like ub.parts.
+      396   define variable vss-include-info10 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      397   define variable to-day       as date no-undo .
+      398   define variable vss-include-info11 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      399   procedure thth150-db-attr-code :
+      400     do
+      401     on error undo, return error
+      402     :
+      403       define input  parameter p-code           as character no-undo .
+      404       define output parameter p-type           as character no-undo .
+      405       define output parameter p-format         as character no-undo .
+      406       define output parameter p-label          as character no-undo .
+      407       define output parameter p-user-can-edit  as logical   no-undo .
+      408       define output parameter p-output-display as logical   no-undo .
+      409       define output parameter p-other          as character no-undo .
+      410       case p-code :
+      411               when 'thth150-cli-grp':U then do:     assign     p-label = "УСТАНОВЛЕНО соответствие групп клиентов"     p-type = 'L':U      p-format = "+/-"     p-label = "УСТАНОВЛЕНО соответствие групп клиентов"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      412               when 'thth150-gds-grp':U then do:     assign     p-label = "УСТАНОВЛЕНО соответствие групп товаров"     p-type = 'L':U      p-format = "+/-"     p-label = "УСТАНОВЛЕНО соответствие групп товаров"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      413               when 'thth150-clients':U then do:     assign     p-label = "УСТАНОВЛЕНО соответствие клиентов"     p-type = 'L':U      p-format = "+/-"     p-label = "УСТАНОВЛЕНО соответствие клиентов"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      414               when 'thth150-goods':U then do:     assign     p-label = "УСТАНОВЛЕНО соответствие товаров"     p-type = 'L':U      p-format = "+/-"     p-label = "УСТАНОВЛЕНО соответствие товаров"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      415               when 'thth150-dis-card':U then do:     assign     p-label = "ИМПОРТИРОВАНЫ ДК"     p-type = 'L':U      p-format = "+/-"     p-label = "ИМПОРТИРОВАНЫ ДК"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      416               when 'thth150-qnty-dis-card':U then do:     assign     p-label = "Ожидаемое кол-во ДК"     p-type = 'I':U      p-format = "999,999,999"     p-label = "Ожидаемое кол-во ДК"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      417               when 'thth150-shop':U then do:     assign     p-label = "УСТАНОВЛЕНО соответствие объeктов TH"     p-type = 'L':U      p-format = "+/-"     p-label = "УСТАНОВЛЕНО соответствие объeктов TH"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      418               when 'thth150-contract':U then do:     assign     p-label = "ИМПОРТИРОВАНЫ договора и спецификации"     p-type = 'L':U      p-format = "+/-"     p-label = "ИМПОРТИРОВАНЫ договора и спецификации"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      419               when 'thth150-price-doc':U then do:     assign     p-label = "ИМПОРТИРОВАНЫ переоценки"     p-type = 'L':U      p-format = "+/-"     p-label = "ИМПОРТИРОВАНЫ переоценки"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      420               when 'thth150-trn-doc':U then do:     assign     p-label = "ИМПОРТИРОВАНЫ приходные накладные"     p-type = 'L':U      p-format = "+/-"     p-label = "ИМПОРТИРОВАНЫ приходные накладные"     p-user-can-edit  = false     p-output-display = true     p-other = '':u      .   end.
+      421         otherwise do:
+      422           undo, return error substitute("неизвестный атрибут БД &1", p-code) .
+      423         end.
+      424       end.
+      425     end.
+      426   end procedure.
+      427   procedure thth150-db-attr-tooltip :
+      428     do
+      429     on error undo, return error
+      430     :
+      431       define input  parameter p-code    as character no-undo .
+      432       define output parameter p-tooltip as character no-undo .
+      433       define output parameter p-label   as character no-undo .
+      434       case p-code :
+      435               when 'thth150-cli-grp':U then do:     assign     p-tooltip = "УСТАНОВЛЕНО соответствие групп клиентов для двух систем IBS TH"     p-label = "УСТАНОВЛЕНО соответствие групп клиентов" .   end.
+      436               when 'thth150-gds-grp':U then do:     assign     p-tooltip = "УСТАНОВЛЕНО соответствие групп товаров для двух систем IBS TH"     p-label = "УСТАНОВЛЕНО соответствие групп товаров" .   end.
+      437               when 'thth150-clients':U then do:     assign     p-tooltip = "УСТАНОВЛЕНО соответствие клиентов для двух систем IBS TH"     p-label = "УСТАНОВЛЕНО соответствие клиентов" .   end.
+      438               when 'thth150-goods':U then do:     assign     p-tooltip = "УСТАНОВЛЕНО соответствие товаров для двух систем IBS TH"     p-label = "УСТАНОВЛЕНО соответствие товаров" .   end.
+      439               when 'thth150-dis-card':U then do:     assign     p-tooltip = "ИМПОРТИРОВАНЫ ДК"     p-label = "ИМПОРТИРОВАНЫ ДК" .   end.
+      440               when 'thth150-qnty-dis-card':U then do:     assign     p-tooltip = "Ожидаемое кол-во ДК"     p-label = "Ожидаемое кол-во ДК" .   end.
+      441               when 'thth150-shop':U then do:     assign     p-tooltip = "УСТАНОВЛЕНО соответствие объeктов TH для двух систем IBS TH"     p-label = "УСТАНОВЛЕНО соответствие объeктов TH" .   end.
+      442               when 'thth150-contract':U then do:     assign     p-tooltip = "ИМПОРТИРОВАНЫ договора и спецификации для двух систем IBS TH"     p-label = "ИМПОРТИРОВАНЫ договора и спецификации" .   end.
+      443               when 'thth150-price-doc':U then do:     assign     p-tooltip = "ИМПОРТИРОВАНЫ переоценки"     p-label = "ИМПОРТИРОВАНЫ переоценки" .   end.
+      444               when 'thth150-trn-doc':U then do:     assign     p-tooltip = "ИМПОРТИРОВАНЫ приходные накладные"     p-label = "ИМПОРТИРОВАНЫ приходные накладные" .   end.
+      445         otherwise do:
+      446           undo, return error substitute("неизвестный атрибут БД &1", p-code) .
+      447         end.
+      448       end.
+      449     end.
+      450   end procedure.
+      451   procedure thth150-db-attr-value :
+      452     do
+      453     on error undo, return error
+      454     :
+      455       define input  parameter p-db-num    like ub.db-attr.db-num     no-undo .
+      456       define input  parameter p-code      like ub.db-attr.attr-code  no-undo .
+      457       define output parameter p-value     like ub.db-attr.attr-value no-undo .
+      458       define output parameter p-type      as character no-undo .
+      459       define buffer buf_db-attr for ub.db-attr .
+      460       define variable v-format         as character no-undo .
+      461       define variable v-label          as character no-undo .
+      462       define variable v-user-can-edit  as logical   no-undo .
+      463       define variable v-output-display as logical   no-undo .
+      464       define variable v-other          as character no-undo .
+      465       run thth150-db-attr-code in this-procedure
+      466         (input  p-code
+      467         ,output p-type
+      468         ,output v-format
+      469         ,output v-label
+      470         ,output v-user-can-edit
+      471         ,output v-output-display
+      472         ,output v-other
+      473         ) no-error .
+      474       if error-status :error then do:
+      475         undo, return error return-value .
+      476       end.
+      477       find first buf_db-attr no-lock
+      478         where buf_db-attr.db-num    = p-db-num
+      479           and buf_db-attr.attr-code = p-code
+      480         no-error .
+      481       if avail buf_db-attr then do:
+      482         assign
+      483           p-value =  buf_db-attr.attr-value
+      484         .
+      485       end.
+      486       else do:
+      487         assign
+      488           p-value = if p-type = 'L':U then "no":U else ""
+      489         .
+      490       end.
+      491     end.
+      492   end procedure.
+      493   procedure thth150-db-attr-write :
+      494     do
+      495     on error undo, return error
+      496     :
+      497       define input parameter p-db-num    like ub.db-attr.db-num     no-undo .
+      498       define input parameter p-code      like ub.db-attr.attr-code  no-undo .
+      499       define input parameter p-value     like ub.db-attr.attr-value no-undo .
+      500       define buffer buf_db-attr for ub.db-attr .
+      501       define variable v-type           as character no-undo .
+      502       define variable v-format         as character no-undo .
+      503       define variable v-label          as character no-undo .
+      504       define variable v-user-can-edit  as logical   no-undo .
+      505       define variable v-output-display as logical   no-undo .
+      506       define variable v-other          as character no-undo .
+      507       run thth150-db-attr-code in this-procedure
+      508         (input  p-code
+      509         ,output v-type
+      510         ,output v-format
+      511         ,output v-label
+      512         ,output v-user-can-edit
+      513         ,output v-output-display
+      514         ,output v-other
+      515         ) no-error .
+      516       if error-status :error then do:
+      517         undo, return error return-value .
+      518       end.
+      519       find first buf_db-attr exclusive-lock
+      520         where buf_db-attr.db-num    = p-db-num
+      521           and buf_db-attr.attr-code = p-code
+      522         no-error .
+      523       if not available buf_db-attr then do:
+      524         create buf_db-attr .
+      525         assign
+      526           buf_db-attr.db-num    = p-db-num
+      527           buf_db-attr.attr-code = p-code
+      528         .
+      529       end.
+      530       assign
+      531         buf_db-attr.attr-value = p-value
+      532       .
+      533     end.
+      534   end procedure.
+      535   procedure thth150-db-attr-exist :
+      536     do
+      537     on error undo, return error
+      538     :
+      539       define input parameter p-db-num    like ub.db-attr.db-num     no-undo .
+      540       define input parameter p-code      like ub.db-attr.attr-code  no-undo .
+      541       define output parameter p-exist    as logical  no-undo .
+      542       define buffer buf_db-attr for ub.db-attr .
+      543       define variable v-type           as character no-undo .
+      544       define variable v-format         as character no-undo .
+      545       define variable v-label          as character no-undo .
+      546       define variable v-user-can-edit  as logical   no-undo .
+      547       define variable v-output-display as logical   no-undo .
+      548       define variable v-other          as character no-undo .
+      549       run thth150-db-attr-code in this-procedure
+      550         (input  p-code
+      551         ,output v-type
+      552         ,output v-format
+      553         ,output v-label
+      554         ,output v-user-can-edit
+      555         ,output v-output-display
+      556         ,output v-other
+      557         ) no-error .
+      558       if error-status :error then do:
+      559         undo, return error return-value .
+      560       end.
+      561       find first buf_db-attr no-lock
+      562         where buf_db-attr.db-num    = p-db-num
+      563           and buf_db-attr.attr-code = p-code
+      564         no-error .
+      565       if  available buf_db-attr then do:
+      566         p-exist = yes.
+      567       end.
+      568     end.
+      569   end procedure.
+      570   procedure thth150-db-attr-delete :
+      571     do
+      572     on error undo, return error
+      573     :
+      574       define input parameter p-db-num   like ub.db-attr.db-num     no-undo .
+      575       define input parameter p-code     like ub.db-attr.attr-code  no-undo .
+      576       define output parameter p-deleted  as logical no-undo.
+      577       define buffer buf_db-attr for ub.db-attr .
+      578       define variable v-type           as character no-undo .
+      579       define variable v-format         as character no-undo .
+      580       define variable v-label          as character no-undo .
+      581       define variable v-user-can-edit  as logical   no-undo .
+      582       define variable v-output-display as logical   no-undo .
+      583       define variable v-other          as character no-undo .
+      584       run thth150-db-attr-code in this-procedure
+      585         (input  p-code
+      586         ,output v-type
+      587         ,output v-format
+      588         ,output v-label
+      589         ,output v-user-can-edit
+      590         ,output v-output-display
+      591         ,output v-other
+      592         ) no-error .
+      593       if error-status :error then do:
+      594         undo, return error return-value .
+      595       end.
+      596       find first buf_db-attr exclusive-lock
+      597         where buf_db-attr.db-num    = p-db-num
+      598           and buf_db-attr.attr-code = p-code
+      599         no-error NO-WAIT.
+      600       if not available buf_db-attr then do:
+      601         p-deleted = no.
+      602       end.
+      603       else do:
+      604         delete buf_db-attr.
+      605         p-deleted = yes.
+      606       end.
+      607     end.
+      608   end procedure.
+      609   procedure thth150-db-attr-news :
+      610     do
+      611     on error undo, return error
+      612     :
+      613       define input  parameter p-code           as character no-undo .
+      614       define output parameter p-news           as logical   no-undo .
+      615       case p-code :
+      616               when 'thth150-cli-grp':U then do:     assign     p-news = no.   end.
+      617               when 'thth150-gds-grp':U then do:     assign     p-news = no.   end.
+      618               when 'thth150-clients':U then do:     assign     p-news = no.   end.
+      619               when 'thth150-goods':U then do:     assign     p-news = no.   end.
+      620               when 'thth150-dis-card':U then do:     assign     p-news = no.   end.
+      621               when 'thth150-qnty-dis-card':U then do:     assign     p-news = no.   end.
+      622               when 'thth150-shop':U then do:     assign     p-news = no.   end.
+      623               when 'thth150-contract':U then do:     assign     p-news = no.   end.
+      624               when 'thth150-price-doc':U then do:     assign     p-news = no.   end.
+      625               when 'thth150-trn-doc':U then do:     assign     p-news = no.   end.
+      626         otherwise do:
+      627           undo, return error substitute("неизвестный атрибут БД &1", p-code) .
+      628         end.
+      629       end.
+      630     end.
+      631   end procedure.
+      632   define temp-table temp_parts no-undo like ub.parts
+      633     field cli-qnty1     as decimal
+      634     field fact-qnty1    as decimal
+      635     field qnty1         as decimal
+      636     field new-cli-type  as character
+      637     field new-cli-code  as integer
+      638     index pi is primary
+      639   supp-type
+      640   supp-code
+      641   host-code
+      642   contract-code
+      643   VAT-type
+      644   VAT-PC
+      645   prod-type
+      646   prod-code
+      647   artic
+      648   price-cli
+      649   part-code
+      650   fact-date
+      651   .
+      652   define temp-table temp-line no-undo
+      653     field num           as integer
+      654     field supp-type     as character
+      655     field supp-code     as integer
+      656     field host-code     as integer
+      657     field contract-code as integer
+      658     field artic         as character
+      659     field prod-type     as character
+      660     field prod-code     as integer
+      661     field part-code     as character
+      662     field vat-type      as character
+      663     field vat-pc        as decimal
+      664     field price-rubl    as decimal
+      665     field fact-qnty     as decimal
+      666     field cli-qnty      as decimal
+      667     field new-cli-type  as character
+      668     field new-cli-code  as integer
+      669     field pl-code       as integer
+      670     index pi is primary
+      671     supp-type
+      672     supp-code
+      673     host-code
+      674     contract-code
+      675     vat-type
+      676     vat-pc
+      677     artic
+      678     prod-type
+      679     prod-code
+      680     part-code
+      681     price-rubl
+      682     num
+      683   .
+      684   define temp-table temp-2exists no-undo
+      685     field artic     as character
+      686     field prod-type as character
+      687     field prod-code as integer
+      688     field doc-code  as character
+      689     index pi is unique primary
+      690     doc-code
+      691     artic
+      692     prod-type
+      693     prod-code
+      694   .
+      695   define temp-table tt-trn-close no-undo
+      696     field trn-code as character
+      697   .
+      698   define temp-table tt-gds no-undo
+      699     field gds-code as integer
+      700   .
+      701   define temp-table tt-trn-doc   no-undo like ub.trn-doc .
+      702   define temp-table tt2-doc-line no-undo like lib-trn_ret-line .
+      703   define temp-table tt-doc-line  no-undo like ub.doc-line
+      704     field pl-code as integer
+      705   .
+      706   define temp-table tt-gds-dtl   no-undo like ub.gds-dtl .
+      707   define temp-table tt-parts     no-undo like ub.parts.
+      708   define temp-table tt-doc-line-attr no-undo like ub.doc-line-attr .
+      709   define temp-table gds-list1    no-undo like gds-list .
+      710   define variable v-f-cli-code as integer   no-undo .
+      711   define variable new_obj-code   as integer   no-undo .
+      712   define variable new_obj-type   as character no-undo .
+      713   define variable new_host-code  as integer   no-undo .
+      714   define variable new_purch-code as integer no-undo .
+      715   define variable v-tti as integer   no-undo .
+      716   define variable v-print-rubl as logical   no-undo .
+      717   define variable v-ii          as integer   no-undo .
+      718   define buffer new_ext-classif for ub.ext-classif  .
+      719   define buffer new_line        for temp-line  .
+      720   define buffer buf2_temp_parts for temp_parts  .
+      721   define buffer old_contract-specif for ub.contract-specif  .
+      722   define buffer buf_shop        for ub.shop .
+      723   define variable local-trace-on as logical no-undo .
+      724   local-trace-on = false .
+      725   define variable p-from-version as character initial 'v15_0000':U no-undo .
+      726   run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Перенос партий свободной зоны из &1 в 16.0 ...", p-from-version) ).
+      727     define variable v-db-num as integer   no-undo .
+      728   define variable vss-include-info12 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      729   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objdbnum in g#library
+      730     (input  p-obj-type
+      731     ,input  p-obj-code
+      732     ,output v-db-num
+      733     )  .
+      734     if v-db-num <> ibs.th.gbl.gbl-var:g#db-num then do :
+      735           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Накладные разрешается вкачивать только в объект текущей БД. Номер текущей базы данных &1, номер базы данных выбранного объекта &2", ibs.th.gbl.gbl-var:g#db-num, v-db-num) ).
+      736       undo, throw new Progress.Lang.AppError (substitute("Накладные разрешается вкачивать только в объект текущей БД. Номер текущей базы данных &1, номер базы данных выбранного объекта &2", ibs.th.gbl.gbl-var:g#db-num, v-db-num)) .
+      737     end .
+      738     if p-is-close then do :
+      739       if not can-find (first ub.pay-type where ub.pay-type.obj-code = v-cntxp-in-pay) then do:
+      740               run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("В настройках объекта &1 указан вид оплаты прихода &2, который отсутствует в справочнике.", p-obj-code, v-cntxp-in-pay) ).
+      741         undo, throw new Progress.Lang.AppError (substitute("В настройках объекта &1 указан вид оплаты прихода &2, который отсутствует в справочнике.", p-obj-code, v-cntxp-in-pay)) .
+      742       end .
+      743     end .
+      744   define stream fosnid.
+      745   define temp-table w-osn no-undo
+      746     field supp-type-15_0 as character
+      747     field supp-code-15_0 as integer
+      748     field supp-code-16_0 as integer
+      749   .
+      750   // 19/IX-2018 сопоставление товаров потребовалось переделать с артикулов на коды товаров
+      751   define temp-table w-gds no-undo
+      752     field gds-code-15_0 as integer
+      753     field gds-code-16_0 as integer
+      754   .
+      755   run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("чтение файла соответствия поставщиков &1", p-osn-fname) ).
+      756     file-info:file-name = p-osn-fname .
+      757     if file-info:file-type = ? then do :
+      758           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Отсутствует файл для импорта &1", p-osn-fname) ).
+      759       undo, throw new Progress.Lang.AppError (substitute("Отсутствует файл для импорта &1", p-osn-fname)) .
+      760     end .
+      761   input stream fosnid from value (p-osn-fname).
+      762   repeat:
+      763     define variable v-osn-15 as character no-undo .
+      764     define variable v-osn-16 as integer no-undo .
+      765     define variable v-error  as logical no-undo .
+      766     import stream fosnid delimiter ';' v-osn-15 v-osn-16.
+      767     create w-osn.
+      768       w-osn.supp-type-15_0 =         substring(v-osn-15, 1, 3) no-error .
+      769       if error-status:error then v-error = true .
+      770       w-osn.supp-code-15_0 = integer(substring(v-osn-15, 4)) no-error .
+      771       if error-status:error then v-error = true .
+      772       w-osn.supp-code-16_0 =                   v-osn-16 no-error .
+      773   if v-error then do:
+      774           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Не правильная кодировка в файле для импорта &1", p-osn-fname) ).
+      775   end.
+      776   end.
+      777   input stream fosnid close.
+      778   run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("чтение файла соответствия товаров &1", p-art-fname) ).
+      779   input stream fosnid from value (p-art-fname).
+      780   repeat:
+      781     create w-gds.
+      782     import stream fosnid delimiter ';' w-gds.
+      783   end.
+      784   input stream fosnid close.
+      785   find w-gds where w-gds.gds-code-16_0 = 0 and w-gds.gds-code-15_0 = 0 no-error.
+      786   if available w-gds then delete w-gds.
+      787     assign
+      788       new_obj-type = p-obj-type
+      789       new_obj-code = p-obj-code
+      790     .
+      791     find first buf_shop no-lock where buf_shop.obj-code = new_obj-code no-error .
+      792     if available buf_shop then do:
+      793       new_purch-code = if buf_shop.purch-code > 0 then buf_shop.purch-code else 1 .
+      794     end .
+      795     else new_purch-code = 1 .
+      796   define variable vss-include-info13 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      797   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+      798     (input  new_obj-type
+      799     ,input  new_obj-code
+      800     ,output new_host-code
+      801     )  .
+      802   define variable vss-include-info14 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      803   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objdtget in g#library
+      804     (input  new_obj-type
+      805     ,input  new_obj-code
+      806     ,output to-day
+      807     ) no-error .
+      808       empty temp-table temp-line no-error .
+      809       EMPTY TEMP-TABLE temp_parts no-error .
+      810       empty temp-table tt-parts .
+      811   define stream f-err-lines .
+      812   if p-retry-fname > '' then . else do :
+      813     p-retry-fname = substitute("&1imp-parts-ptrl.err", ibs.th.gbl.gbl-inipar:logDir ) .
+      814   end .
+      815   output stream f-err-lines to value(p-retry-fname) .
+      816   run create_temp_parts in this-procedure
+      817      (new_obj-code
+      818     , new_obj-type
+      819     , new_host-code
+      820     , output p-count-err
+      821     , output p-count-err1
+      822     , output p-count-err2
+      823     ).
+      824   output stream f-err-lines close .
+      825   empty temp-table tt-trn-close .
+      826   run import-hed in this-procedure no-error .
+      827       if error-status :error then do:
+      828               run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("ошибка при импорте ПН  &1 &2" , error-status :get-message(1) , return-value ) ).
+      829         return error  .
+      830       end.
+      831     for each tt-trn-close :
+      832   if valid-handle( g#trdcalib ) <> yes then do:       run str/trdcalib.p persistent no-error.       if error-status :error or valid-handle( g#trdcalib ) <> yes then do:         message "Error starting trdcalib.p"    skip( 0 )                 g#trdcalib                     skip( 0 )                 g#trdcalib   :type             skip( 0 )                 g#trdcalib   :file-name        skip( 0 )                 error-status :get-message( 1 ) skip( 0 )                 return-value                   skip( 0 )         view-as alert-box error.         stop.       end.      end.     run trdcalib_tdat-wrt in g#trdcalib ( input tt-trn-close.trn-code ,
+      833                          input 'is-auto-trn':U ,
+      834                          input yes ) no-error .
+      835           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute(" Закрытие документа &1 на ФАКТ" , tt-trn-close.trn-code ) ).
+      836       run clos-trn2 in this-procedure (tt-trn-close.trn-code) no-error .
+      837       if not can-find (first trn-doc where trn-doc.doc-code = tt-trn-close.trn-code
+      838                                        and trn-doc.status_  = 'факт':U) then do:
+      839               run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Не удалось закрыть на факт ПН &1 &2 &3" ,tt-trn-close.trn-code , return-value , error-status :get-message(1) ) ).
+      840        end.
+      841     end .
+      842     for each tt-gds:
+      843       find first ub.goods-attr where ub.goods-attr.gds-code = tt-gds.gds-code and ub.goods-attr.attr-code = 'ptrl-without-rvs':U no-error.
+      844       if available (ub.goods-attr)
+      845         then delete ub.goods-attr.
+      846     end.
+      847       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("При переносе остатков по топливу отвергнуто &1 записей. Из них:", p-count-err ) ).
+      848       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("  нет соответствий по товарам &1", p-count-err1 ) ).
+      849       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("  нет соответствий по поставщикам &1", p-count-err2 ) ).
+      850       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("  прочие ошибки &1", p-count-err - p-count-err2 - p-count-err1 ) ).
+      851   define stream f-tgds .
+      852   function getImpRow returns character private (buffer buf_tt-parts for tt-imp-parts-ptrl) :
+      853   define variable v-imp-row as character no-undo .
+      854     v-imp-row =
+      855             substitute("&1;", buf_tt-parts.artic) +
+      856             ";" +
+      857             substitute("&1;", buf_tt-parts.part-code) +
+      858             substitute("&1;", buf_tt-parts.in-code) +
+      859             substitute("&1;", buf_tt-parts.gds-code) +
+      860             substitute("&1;", buf_tt-parts.price-rubl) +
+      861             substitute("&1;", buf_tt-parts.fact-qnty) +
+      862             ";" +
+      863             ";" +
+      864             ";" +
+      865             substitute("&1;", buf_tt-parts.vat-tax-value) +
+      866             ";" +
+      867             ";" +
+      868             substitute("&1;", buf_tt-parts.name-gtd) +
+      869             ";" +
+      870             ";" +
+      871             substitute("&1;", buf_tt-parts.srok-god) +
+      872             ";" +
+      873             ";" +
+      874             substitute("&1;", buf_tt-parts.supp-code) +
+      875             substitute("&1;", buf_tt-parts.supp-type) +
+      876             substitute("&1;", buf_tt-parts.cont-prn-code) +
+      877             substitute("&1;", buf_tt-parts.pl-loc1) +
+      878             substitute("&1;", buf_tt-parts.cli-qnty)
+      879     .
+      880     return v-imp-row .
+      881   end function .
+      882   procedure create_temp_parts private :
+      883   define input  parameter p-obj-code  as integer no-undo .
+      884   define input  parameter p-obj-type  as character no-undo .
+      885   define input  parameter p-host-code as integer no-undo .
+      886   define output parameter p-count-err as integer no-undo .
+      887   define output parameter p-count-err1 as integer no-undo .
+      888   define output parameter p-count-err2 as integer no-undo .
+      889   define variable v-last-date as date no-undo .
+      890   define variable v-artic     as character no-undo .
+      891   define variable v-prod-type as character no-undo .
+      892   define variable v-prod-code as integer no-undo .
+      893   define variable v-contract-code as integer no-undo .
+      894   define variable new_cli-type  as character no-undo .
+      895   define variable new_cli-code  as integer   no-undo .
+      896   define variable new_gds-code  as integer no-undo .
+      897   define variable v-is-supp-err as logical no-undo .
+      898   define variable v-is-cont-err as logical no-undo .
+      899   define variable v-is-good-err as logical no-undo .
+      900   define variable v-my-message  as character no-undo .
+      901   define variable v-today       as date no-undo .
+      902   define buffer buf_tt-parts    for tt-imp-parts-ptrl .
+      903   define buffer buf_goods       for ub.goods .
+      904   define buffer buf_goods-attr  for ub.goods-attr .
+      905   define buffer buf_contract for ub.contract .
+      906   define buffer new_clients  for ub.clients .
+      907     assign
+      908       p-count-err  = 0
+      909       p-count-err1 = 0
+      910       p-count-err2 = 0
+      911       v-today = today
+      912     .
+      913     for each buf_tt-parts
+      914     break by buf_tt-parts.supp-code
+      915           by buf_tt-parts.cont-prn-code
+      916           by buf_tt-parts.gds-code
+      917     :
+      918       if first-of (buf_tt-parts.supp-code) then do:
+      919         if buf_tt-parts.supp-type = ""
+      920         or buf_tt-parts.supp-type = 'скл':U
+      921         or buf_tt-parts.supp-type = 'маг':U then assign
+      922           v-my-message  = substitute ("Фиктивный контрагент &1 &2", buf_tt-parts.supp-type, buf_tt-parts.supp-code )
+      923           v-is-supp-err = true
+      924         .
+      925         else do :
+      926           find first w-osn where w-osn.supp-code-15_0 = buf_tt-parts.supp-code
+      927                              and w-osn.supp-type-15_0 = buf_tt-parts.supp-type no-error .
+      928           if available w-osn then do:
+      929             assign
+      930               new_cli-type = 'орг':U
+      931               new_cli-code = w-osn.supp-code-16_0
+      932             .
+      933             v-is-supp-err = not can-find (first new_clients
+      934                                           where new_clients.obj-type = new_cli-type
+      935                                             and new_clients.obj-code = new_cli-code) .
+      936             if v-is-supp-err then v-my-message = substitute("ошибка (новый клиент &1 &2)", new_cli-type , new_cli-code) .
+      937           end .
+      938           else assign
+      939             v-my-message  = substitute ( "Отсутствует код поставщика &1 &2 в файле соответствия &3"
+      940                                        , buf_tt-parts.supp-type, buf_tt-parts.supp-code, p-osn-fname )
+      941             v-is-supp-err = true
+      942           .
+      943         end .
+      944         if v-is-supp-err then do :
+      945           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, v-my-message ).
+      946         end .
+      947       end .
+      948       if v-is-supp-err then do :
+      949         if buf_tt-parts.imp-row > "" then
+      950           put stream f-err-lines unformatted buf_tt-parts.imp-row skip .
+      951         else
+      952           put stream f-err-lines unformatted getImpRow(buffer buf_tt-parts) skip .
+      953         p-count-err = p-count-err + 1 .
+      954         p-count-err2 = p-count-err2 + 1 .
+      955         next .
+      956       end .
+      957       if first-of (buf_tt-parts.cont-prn-code) then do:
+      958         find first buf_contract no-lock
+      959              where buf_contract.contract-prn-code = buf_tt-parts.cont-prn-code
+      960              and buf_contract.cli-type = new_cli-type
+      961              and buf_contract.cli-code = new_cli-code no-error .
+      962         if available buf_contract then assign
+      963           v-contract-code = buf_contract.contract-code
+      964           v-is-cont-err   = false
+      965         .
+      966         else do :
+      967           v-my-message  = substitute (
+      968             "Предупреждение. Отсутствует договор № &2 (вер.15) по поставщику &3 в вер.16. Товар &1 в вер.15",
+      969             buf_tt-parts.gds-code, buf_tt-parts.cont-prn-code, new_cli-code ) .
+      970           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, v-my-message ).
+      971           assign
+      972             v-contract-code = 0
+      973             v-is-cont-err   = true
+      974           .
+      975           for each buf_contract no-lock
+      976              where buf_contract.cli-type = new_cli-type
+      977                and buf_contract.cli-code = new_cli-code
+      978                 by buf_contract.contract-date-beg descending :
+      979             if buf_contract.contract-date-end < v-today then . else do :
+      980               v-my-message  = substitute (
+      981                 "Предупреждение. Вместо договора № &2 (вер.15) по поставщику &3 в вер.16 используется договор &4 (код=&5). Товар &1 в вер.15&6",
+      982                 buf_tt-parts.gds-code, buf_tt-parts.cont-prn-code, new_cli-code,
+      983                 buf_contract.contract-prn-code, buf_contract.contract-code, chr(10) ) .
+      984               run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, v-my-message ).
+      985               assign
+      986                 v-contract-code = buf_contract.contract-code
+      987                 v-is-cont-err   = false
+      988               .
+      989               leave .
+      990             end .
+      991           end .
+      992           if v-is-cont-err then do :
+      993             v-is-cont-err = false.
+      994             v-my-message  = substitute (
+      995               "Предупреждение. Отсутствует действующий договор на дату &3 по поставщику &2 в вер.16. Товар &1 в вер.15&4",
+      996               buf_tt-parts.gds-code, new_cli-code, v-today, chr(10) ) .
+      997             run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, v-my-message ).
+      998           end .
+      999         end.
+     1000       end .
+     1001       if first-of (buf_tt-parts.gds-code) then do:
+     1002         find first w-gds where w-gds.gds-code-15_0 = buf_tt-parts.gds-code no-error .
+     1003         if available w-gds then do :
+     1004           new_gds-code = w-gds.gds-code-16_0 .
+     1005           find first buf_goods no-lock
+     1006                where buf_goods.gds-code = new_gds-code no-error .
+     1007           if available buf_goods then assign
+     1008             v-artic     = buf_goods.artic
+     1009             v-prod-type = buf_goods.prod-type
+     1010             v-prod-code = buf_goods.prod-code
+     1011             v-is-good-err = false
+     1012           .
+     1013           else assign
+     1014             v-artic     = ""
+     1015             v-prod-type = ""
+     1016             v-prod-code = 0
+     1017             v-is-good-err = true
+     1018             v-my-message  = substitute ("Отсутствует товар с кодом &1 в справочнике товаров БД вер.16", new_gds-code )
+     1019           .
+     1020         end .
+     1021         else assign
+     1022           v-my-message  = substitute ("Отсутствует код товара &1 из вер.15 в файле соответствия &2", buf_tt-parts.gds-code, p-art-fname )
+     1023           v-is-good-err = true
+     1024         .
+     1025         DEFINE VARIABLE pltn AS DECIMAL .
+     1026         pltn = ROUND ((buf_tt-parts.cli-qnty / buf_tt-parts.fact-qnty), 4 ) .
+     1027         IF (buf_tt-parts.cli-qnty / buf_tt-parts.fact-qnty  > 1 ) THEN DO:
+     1028         MESSAGE 'плотность более 1, остатки с такой плотностью не переносятся.' pltn VIEW-AS ALERT-BOX.
+     1029         v-is-good-err = TRUE.
+     1030         p-count-err = p-count-err + 1 .
+     1031         v-is-cont-err = TRUE.
+     1032         v-my-message  = substitute ("Ошибка. Плотность &1, остатки с такой плотностью не переносятся, код товара &2", pltn, new_gds-code ).
+     1033         END.
+     1034         if v-is-good-err then do :
+     1035           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, v-my-message ).
+     1036         end .
+     1037       end .
+     1038       if v-is-good-err then do :
+     1039         if buf_tt-parts.imp-row > "" then
+     1040           put stream f-err-lines unformatted buf_tt-parts.imp-row skip .
+     1041         else
+     1042           put stream f-err-lines unformatted getImpRow(buffer buf_tt-parts) skip .
+     1043         p-count-err = p-count-err + 1 .
+     1044         p-count-err1 = p-count-err1 + 1 .
+     1045         next .
+     1046       end .
+     1047       if buf_tt-parts.srok-god = "" then v-last-date = 01/01/2001 .
+     1048                                     else v-last-date = date(buf_tt-parts.srok-god) no-error .
+     1049       do :
+     1050       find first ub.place no-lock where ub.place.obj-type = p-obj-type
+     1051         and ub.place.obj-code = p-obj-code
+     1052         and ub.place.loc1 = buf_tt-parts.pl-loc1 no-error .
+     1053       if not available (ub.place) then next .
+     1054       find first temp_parts where
+     1055             temp_parts.new-cli-code = new_cli-code
+     1056         and temp_parts.artic = v-artic
+     1057         and temp_parts.prod-type  = v-prod-type
+     1058         and temp_parts.prod-code  = v-prod-code
+     1059         and temp_parts.contract-code = v-contract-code
+     1060         and temp_parts.pl-code = ub.place.pl-code
+     1061             no-error.
+     1062       if available (temp_parts)
+     1063       then do:
+     1064         assign
+     1065           temp_parts.fact-qnty1 = temp_parts.fact-qnty1 + buf_tt-parts.fact-qnty
+     1066           temp_parts.cli-qnty1 = temp_parts.cli-qnty1 + buf_tt-parts.cli-qnty
+     1067         .
+     1068           temp_parts.cli-base-rate = temp_parts.fact-qnty1 / temp_parts.cli-qnty1.
+     1069         next.
+     1070       end.
+     1071       create temp_parts.
+     1072       assign
+     1073         temp_parts.artic      = v-artic // 19/IX-2018 поле из импорта buf_tt-parts.artic игнорируется
+     1074         temp_parts.prod-type  = v-prod-type
+     1075         temp_parts.prod-code  = v-prod-code
+     1076         temp_parts.obj-type   = p-obj-type
+     1077         temp_parts.obj-code   = p-obj-code
+     1078         temp_parts.host-code  = p-host-code
+     1079         temp_parts.supp-code  = new_cli-code
+     1080         temp_parts.supp-type  = new_cli-type
+     1081         temp_parts.new-cli-type = new_cli-type
+     1082         temp_parts.new-cli-code = new_cli-code
+     1083         temp_parts.contract-code = v-contract-code
+     1084   //  field cont-prn-code like ub.contract.contract-prn-code
+     1085         temp_parts.in-code    = buf_tt-parts.in-code // temp_parts.in-code используется для распределения партий по накладным; далее после записи документа в БД перезатирается номером созданного документа внутри стандартных процедур
+     1086   //      temp_parts.out-code создаётся пустым и потом заполняется номером документа, в который внесён товар по данной партии
+     1087         temp_parts.part-code  = buf_tt-parts.part-code // Код, определяющий конкретную партию внутри одного прихода
+     1088   //  field gds-code      as integer - в таблице parts не предусмотрено поле gds-code
+     1089         temp_parts.price-rubl = buf_tt-parts.price-rubl // вместо price-cli используется price-rubl
+     1090         temp_parts.fact-qnty1  = buf_tt-parts.fact-qnty
+     1091         temp_parts.cli-qnty1   = buf_tt-parts.cli-qnty
+     1092         temp_parts.VAT-type   = 'в т. ч.':U
+     1093         temp_parts.VAT-pc     = buf_tt-parts.vat-tax-value
+     1094         temp_parts.cst-code   = buf_tt-parts.name-gtd
+     1095         temp_parts.last-date  = v-last-date
+     1096         temp_parts.cli-base-rate = temp_parts.fact-qnty1 / temp_parts.cli-qnty1
+     1097         temp_parts.pl-code = ub.place.pl-code
+     1098       .
+     1099       end .
+     1100       do :
+     1101       end .
+     1102     end .
+     1103   // output stream f-tgds close .
+     1104     if p-count-err > 0 then do :
+     1105       v-my-message  = substitute (
+     1106         "Строки с ошибками выведены в файл &1. Файл предназначен для повторного импорта в ручном режиме"
+     1107       , p-retry-fname ) .
+     1108       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, v-my-message ).
+     1109     end .
+     1110   if local-trace-on then do:
+     1111    define variable dsXmlFileName as character no-undo .
+     1112    dsXmlFileName = substitute("&1/&2.xml", ibs.th.gbl.gbl-inipar:logDir, "temp_parts").
+     1113    temp-table temp_parts:WRITE-XML ( "FILE", dsXmlFileName, true, "UTF-8").
+     1114   end .
+     1115   end procedure .
+     1116   procedure import-hed :
+     1117   define variable v-qnty-fact as decimal   no-undo .
+     1118   define variable v-qnty-cli  as decimal   no-undo .
+     1119   define variable v-num       as integer   no-undo .
+     1120   define variable dsXmlFileName as character no-undo .
+     1121   define variable dsLineCount   as integer no-undo .
+     1122   // Message "Обработка файла" p-in-file view-as alert-box .
+     1123   do on error undo, return error substitute("ошибка &1 &2", error-status:get-message(1) , return-value) :
+     1124     assign
+     1125     v-qnty-fact = 0
+     1126     v-qnty-cli  = 0
+     1127     dsLineCount = 0
+     1128     .
+     1129       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Подготовка партий..."  ) ).
+     1130     for each temp_parts break
+     1131      by temp_parts.supp-type
+     1132      by temp_parts.supp-code
+     1133      by temp_parts.host-code
+     1134      by temp_parts.contract-code
+     1135      by temp_parts.VAT-type
+     1136      by temp_parts.VAT-PC
+     1137      by temp_parts.prod-type
+     1138      by temp_parts.prod-code
+     1139      by temp_parts.artic
+     1140      by temp_parts.price-rubl
+     1141      by temp_parts.pl-code
+     1142     :
+     1143       dsLineCount = dsLineCount + 1 .
+     1144       do :
+     1145       create tt-parts.
+     1146       assign
+     1147         tt-parts.prod-type      = temp_parts.prod-type
+     1148         tt-parts.prod-code      = temp_parts.prod-code
+     1149         tt-parts.artic          = temp_parts.artic
+     1150         tt-parts.obj-type       = new_obj-type
+     1151         tt-parts.obj-code       = new_obj-code
+     1152         tt-parts.host-code      = new_host-code
+     1153         tt-parts.supp-type      = temp_parts.new-cli-type
+     1154         tt-parts.supp-code      = temp_parts.new-cli-code
+     1155         tt-parts.price-base     = temp_parts.price-rubl
+     1156         tt-parts.price-rubl     = temp_parts.price-rubl
+     1157         tt-parts.price-cli      = temp_parts.price-rubl
+     1158         tt-parts.cli-base-rate  = 1
+     1159         tt-parts.qnty           = temp_parts.fact-qnty1
+     1160         tt-parts.fact-qnty      = temp_parts.fact-qnty1
+     1161         tt-parts.cli-qnty       = temp_parts.cli-qnty1
+     1162         tt-parts.VAT-pc         = temp_parts.vat-pc
+     1163         tt-parts.VAT-type       = temp_parts.vat-type
+     1164         tt-parts.SLT-pc         = 0
+     1165         tt-parts.SLT-type       = 'без':U
+     1166         tt-parts.road-tax-base  = 0
+     1167         tt-parts.road-tax-rubl  = 0
+     1168         tt-parts.transport-base = 0
+     1169         tt-parts.transport-rubl = 0
+     1170         tt-parts.other-base     = 0
+     1171         tt-parts.other-rubl     = 0
+     1172         tt-parts.PS             = ""
+     1173         tt-parts.fact-date      = ? // источник заполнения new_trn-doc.fact-date отсутствует
+     1174         tt-parts.fact-num       = 0
+     1175         // tt-parts.pay-code заполняется непосредственно в tt-trn-doc
+     1176         tt-parts.rsrv-free      = ?
+     1177         tt-parts.pl-code        = 0
+     1178         tt-parts.exch-code      = 0
+     1179         tt-parts.is-supp        = yes
+     1180         tt-parts.last-date      = ?
+     1181         tt-parts.purch-code     = ? // источник заполнения new_trn-doc.purch-code отсутствует
+     1182         tt-parts.contract-code  = temp_parts.contract-code
+     1183         tt-parts.doc-type       = 'при':U
+     1184         tt-parts.part-code      = temp_parts.part-code + temp_parts.out-code
+     1185         tt-parts.in-code        = temp_parts.in-code // в исходной версии - new_trn-doc.doc-code
+     1186         tt-parts.out-code       = "" // new_trn-doc.doc-code
+     1187         tt-parts.cst-code       = ""
+     1188         tt-parts.status_        = no
+     1189         tt-parts.cli-base-rate  = temp_parts.cli-base-rate
+     1190         tt-parts.pl-code        = temp_parts.pl-code
+     1191        no-error.
+     1192        if error-status:error then do:
+     1193            message 'ошибка импорта' tt-parts.artic temp_parts.in-code temp_parts.out-code view-as alert-box.
+     1194            end.
+     1195       end .
+     1196       v-qnty-fact = v-qnty-fact + temp_parts.fact-qnty1  .
+     1197       v-qnty-cli  = v-qnty-cli  + temp_parts.cli-qnty1  . // - не заполняется
+     1198       if last-of ( temp_parts.price-rubl )
+     1199       or last-of ( temp_parts.pl-code )
+     1200       then do:
+     1201         create temp-line .
+     1202         assign
+     1203         temp-line.supp-type     = temp_parts.supp-type
+     1204         temp-line.supp-code     = temp_parts.supp-code
+     1205         temp-line.host-code     = temp_parts.host-code
+     1206         temp-line.contract-code = temp_parts.contract-code
+     1207         temp-line.vat-type      = temp_parts.vat-type
+     1208         temp-line.vat-pc        = temp_parts.vat-pc
+     1209         temp-line.prod-type     = temp_parts.prod-type
+     1210         temp-line.prod-code     = temp_parts.prod-code
+     1211         temp-line.artic         = temp_parts.artic
+     1212         temp-line.price-rubl    = temp_parts.price-rubl
+     1213         temp-line.pl-code       = temp_parts.pl-code
+     1214   // 21/V-2018 temp-line.part-code     = temp_parts.part-code
+     1215   //  field num           as integer
+     1216         temp-line.fact-qnty     = v-qnty-fact
+     1217         temp-line.cli-qnty      = v-qnty-cli
+     1218         temp-line.new-cli-type  = temp_parts.new-cli-type
+     1219         temp-line.new-cli-code  = temp_parts.new-cli-code
+     1220         v-qnty-fact = 0
+     1221         v-qnty-cli  = 0
+     1222         .
+     1223       end.
+     1224   if local-trace-on then do:
+     1225    dsXmlFileName = substitute("&1/&2-&3.xml", ibs.th.gbl.gbl-inipar:logDir, "tt_parts", string(dsLineCount, "9999999")).
+     1226    temp-table tt-parts:WRITE-XML ( "FILE", dsXmlFileName, true, "UTF-8").
+     1227   end.
+     1228     end.
+     1229       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("обработано &1 партий", dsLineCount  ) ).
+     1230     for each temp-line  break
+     1231     by temp-line.supp-type
+     1232     by temp-line.supp-code
+     1233     by temp-line.host-code
+     1234     by temp-line.contract-code
+     1235     by temp-line.vat-type
+     1236     by temp-line.vat-pc
+     1237     by temp-line.prod-type
+     1238     by temp-line.prod-code
+     1239     by temp-line.artic
+     1240     :
+     1241       if first-of (temp-line.artic) then do:
+     1242         v-num = 0 .
+     1243       end.
+     1244       v-num = v-num + 1 .
+     1245       temp-line.num = v-num .
+     1246     end.
+     1247   if local-trace-on then do:
+     1248    dsXmlFileName = substitute("&1/&2.xml", ibs.th.gbl.gbl-inipar:logDir, "temp_line").
+     1249    temp-table temp-line:WRITE-XML ( "FILE", dsXmlFileName, true, "UTF-8").
+     1250   end.
+     1251     for each temp-line break
+     1252     by temp-line.supp-type
+     1253     by temp-line.supp-code
+     1254     by temp-line.host-code
+     1255     by temp-line.contract-code
+     1256     by temp-line.vat-type
+     1257     by temp-line.vat-pc
+     1258     by temp-line.num
+     1259     :
+     1260       if first-of (temp-line.num) then do:
+     1261         empty temp-table tt-trn-doc .
+     1262         empty temp-table tt2-doc-line .
+     1263         empty temp-table tt-doc-line .
+     1264         empty temp-table tt-gds-dtl .
+     1265         for each lib-trn_ret-doc :
+     1266           delete lib-trn_ret-doc.
+     1267         end.
+     1268         for each lib-trn_ret-line :
+     1269           delete lib-trn_ret-line      .
+     1270         end.
+     1271         for each lib-trn_ret-line-attr :
+     1272           delete lib-trn_ret-line.
+     1273         end.
+     1274         for each lib-trn_ret-dtl :
+     1275           delete lib-trn_ret-dtl.
+     1276         end.
+     1277         for each lib-trn_ret-parts :
+     1278           delete lib-trn_ret-parts .
+     1279         end.
+     1280         run create-nakl in this-procedure  ( temp-line.num, temp-line.new-cli-type, temp-line.new-cli-code ) .
+     1281       end.
+     1282     end.
+     1283   end.
+     1284   end procedure.
+     1285   procedure create-nakl :
+     1286   define input parameter p-num        as integer no-undo .
+     1287   define input parameter new_cli-type as character no-undo .
+     1288   define input parameter new_cli-code as integer no-undo .
+     1289   define variable n-d as character no-undo .
+     1290   define variable v-ext-doc-type as character no-undo .
+     1291   define buffer buf_goods for ub.goods .
+     1292   define buffer buf_goods-attr  for ub.goods-attr .
+     1293   define buffer new_trn-doc     for ub.trn-doc  .
+     1294   do on error undo, return error return-value :
+     1295     run doc-code in this-procedure
+     1296       (input  "main":u,
+     1297        input  new_obj-type,
+     1298        input  new_obj-code,
+     1299        input  ?,
+     1300        output n-d ) no-error.
+     1301     if error-status:error then do:
+     1302           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Ошибка при генерации номера документа &1 &2: &3 | &4" ,new_obj-type, new_obj-code, error-status:get-message(1), return-value ) ).
+     1303       undo, throw new Progress.Lang.AppError(substitute("Ошибка при генерации номера документа &1 &2: &3 | &4" ,new_obj-type, new_obj-code, error-status:get-message(1), return-value )) .
+     1304     end.
+     1305       run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Создание ПН № &1 объект &2&3 контраг &4&5 &6" , n-d  , new_obj-type , new_obj-code ,  new_cli-type ,  new_cli-code , temp-line.contract-code ) ).
+     1306     assign
+     1307       v-ext-doc-type = 'ie':U
+     1308     .
+     1309     find first temp_parts where
+     1310                temp_parts.artic         = temp-line.artic     and
+     1311                temp_parts.prod-type     = temp-line.prod-type and
+     1312                temp_parts.prod-code     = temp-line.prod-code and
+     1313                temp_parts.supp-code     = temp-line.supp-code and
+     1314                temp_parts.supp-type     = temp-line.supp-type and
+     1315                temp_parts.host-code     = temp-line.host-code and
+     1316                temp_parts.vat-type      = temp-line.vat-type  and
+     1317                temp_parts.vat-pc        = temp-line.vat-pc    and
+     1318                temp_parts.contract-code = temp-line.contract-code  and
+     1319                temp_parts.price-rubl    = temp-line.price-rubl no-error .
+     1320     if not available temp_parts then do:
+     1321       message "Parts not found" skip
+     1322    "artic:" temp-line.artic skip
+     1323    "prod-type:" temp-line.prod-type skip
+     1324    "prod-code:" temp-line.prod-code skip
+     1325    "supp-code:" temp-line.supp-code skip
+     1326    "supp-type:" temp-line.supp-type skip
+     1327    "host-code:" temp-line.host-code skip
+     1328    "vat-type:" temp-line.vat-type skip
+     1329    "vat-pc:" temp-line.vat-pc skip
+     1330    "contract-code:" temp-line.contract-code skip
+     1331    "part-code:" temp-line.part-code skip
+     1332    "price-rubl:" temp-line.price-rubl skip
+     1333       view-as alert-box.
+     1334       return.
+     1335     end .
+     1336     do :
+     1337     create  tt-trn-doc.
+     1338     buffer-copy temp_parts to tt-trn-doc
+     1339     assign
+     1340       tt-trn-doc.status_       = "temp"
+     1341       tt-trn-doc.doc-code      = n-d
+     1342       tt-trn-doc.doc-date      = to-day
+     1343       tt-trn-doc.cli-type      = new_cli-type
+     1344       tt-trn-doc.cli-code      = new_cli-code
+     1345       tt-trn-doc.obj-type      = new_obj-type
+     1346       tt-trn-doc.obj-code      = new_obj-code
+     1347       tt-trn-doc.host-code     = new_host-code
+     1348       tt-trn-doc.contract-code = temp-line.contract-code
+     1349       tt-trn-doc.doc-type      = 'при':U
+     1350       tt-trn-doc.internal      = false
+     1351       tt-trn-doc.cr-db-num     = ibs.th.gbl.gbl-var:g#db-num
+     1352       tt-trn-doc.office        = false
+     1353       tt-trn-doc.fact-num      = 0
+     1354       tt-trn-doc.PS            = "Перенос остатков"
+     1355       tt-trn-doc.creid         = ibs.th.gbl.gbl-var:g#userid
+     1356       tt-trn-doc.flag_         = false
+     1357       tt-trn-doc.ext-doc-type  = v-ext-doc-type
+     1358       tt-trn-doc.discnt-type   = ""
+     1359       tt-trn-doc.ret-supp      = false
+     1360       tt-trn-doc.pay-code      = v-cntxp-in-pay
+     1361       tt-trn-doc.purch-code    = new_purch-code
+     1362       tt-trn-doc.SLT-type      = 'без':U // ранее это значение присвоилось во все tt-parts.SLT-type, но не в temp_parts
+     1363     .
+     1364     if tt-trn-doc.exch-code = ? then tt-trn-doc.exch-code = 0 .
+     1365   define variable vss-include-info15 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1366   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run baserate in g#library
+     1367     (input  new_host-code
+     1368     ,input  temp_parts.fact-date
+     1369     ,output tt-trn-doc.base-rate
+     1370     ,output tt-trn-doc.base-scale
+     1371     ) no-error .
+     1372     if tt-trn-doc.base-rate  = ? or tt-trn-doc.base-rate  = 0 then tt-trn-doc.base-rate  = 1 .
+     1373     if tt-trn-doc.base-scale = ? or tt-trn-doc.base-scale = 0 then tt-trn-doc.base-scale = 1 .
+     1374     if tt-trn-doc.exch-rate  = ? or tt-trn-doc.exch-rate  = 0 then tt-trn-doc.exch-rate  = 1 .
+     1375     if tt-trn-doc.exch-scale = ? or tt-trn-doc.exch-scale = 0 then tt-trn-doc.exch-scale = 1 .
+     1376   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_crtrndoc in g#lib-trn
+     1377   (input tt-trn-doc.acc-date
+     1378   ,input tt-trn-doc.bge-date
+     1379   ,input tt-trn-doc.base-rate
+     1380   ,input tt-trn-doc.base-scale
+     1381   ,input tt-trn-doc.cli-code
+     1382   ,input tt-trn-doc.cli-type
+     1383   ,input tt-trn-doc.cli-name
+     1384   ,input tt-trn-doc.cr-db-num
+     1385   ,input tt-trn-doc.creid
+     1386   ,input tt-trn-doc.discnt-type
+     1387   ,input tt-trn-doc.doc-code
+     1388   ,input tt-trn-doc.doc-date
+     1389   ,input tt-trn-doc.doc-type
+     1390   ,input tt-trn-doc.flag_
+     1391   ,input tt-trn-doc.host-code
+     1392   ,input tt-trn-doc.internal
+     1393   ,input tt-trn-doc.obj-code
+     1394   ,input tt-trn-doc.obj-type
+     1395   ,input tt-trn-doc.office
+     1396   ,input tt-trn-doc.pay-code
+     1397   ,input tt-trn-doc.ps
+     1398   ,input tt-trn-doc.ret-supp
+     1399   ,input tt-trn-doc.slt-type
+     1400   ,input tt-trn-doc.status_
+     1401   ,input tt-trn-doc.vat-type
+     1402   ,input tt-trn-doc.ext-doc-type
+     1403   ,input tt-trn-doc.purch-code
+     1404   ) no-error
+     1405   .
+     1406     if error-status :error then do:
+     1407           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Ошибка при генерации  документа1 &1 &2" , return-value , error-status :get-message(1) ) ).
+     1408       return error return-value .
+     1409     end.
+     1410     end .
+     1411     find first new_trn-doc where new_trn-doc.doc-code = n-d  exclusive-lock no-error .
+     1412     if error-status :error then do:
+     1413           run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Ошибка при генерации  документа2 &1 &2" , return-value , error-status :get-message(1) ) ).
+     1414       return error return-value .
+     1415     end.
+     1416     assign
+     1417      new_trn-doc.contract-code = temp-line.contract-code
+     1418      new_trn-doc.exch-rate   = tt-trn-doc.exch-rate
+     1419      new_trn-doc.exch-scale  = tt-trn-doc.exch-scale
+     1420      new_trn-doc.exch-date   = to-day
+     1421      new_trn-doc.exch-code   = tt-trn-doc.exch-code
+     1422      new_trn-doc.status_     = 'накл':U
+     1423      new_trn-doc.hold-doc-code-child   = "no-hold"
+     1424      new_trn-doc.hold-doc-code-parent  = "no-hold"
+     1425      new_trn-doc.print-rubl  = v-print-rubl
+     1426      new_trn-doc.reason-code = 24
+     1427     .
+     1428    define variable dsXmlFileName1 as character no-undo .
+     1429    define variable dsXmlFileName2 as character no-undo .
+     1430    define variable dsXmlFileName3 as character no-undo .
+     1431   // dsXmlFileName1 = substitute("&1/&2.xml", ibs.th.gbl.gbl-inipar:logDir, "tt-doc-line0").
+     1432   // dsXmlFileName2 = substitute("&1/&2.xml", ibs.th.gbl.gbl-inipar:logDir, "tt2-doc-line0").
+     1433     for each    new_line where
+     1434                 new_line.supp-type      = temp_parts.supp-type     and
+     1435                 new_line.supp-code      = temp_parts.supp-code     and
+     1436                 new_line.host-code      = temp_parts.host-code     and
+     1437                 new_line.vat-type       = temp_parts.vat-type      and
+     1438                 new_line.vat-pc         = temp_parts.vat-pc        and
+     1439                 new_line.contract-code  = temp_parts.contract-code and
+     1440                 new_line.num            = p-num :
+     1441       if new_line.price-rubl <= 0  or new_line.price-rubl = ? then do:
+     1442               run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Цена &2   = &1 Пропускаю " , new_line.price-rubl  , new_line.artic ) ).
+     1443         next.
+     1444       end.
+     1445       if new_line.fact-qnty <= 0 then do:
+     1446               run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Количество &2   = &1 Пропускаю " , new_line.fact-qnty  , new_line.artic ) ).
+     1447         next.
+     1448       end.
+     1449     for each buf2_temp_parts no-lock where
+     1450           buf2_temp_parts.host-code      = temp_parts.host-code and
+     1451           buf2_temp_parts.price-rubl <> ? and
+     1452           buf2_temp_parts.price-rubl <> 0 and
+     1453           buf2_temp_parts.vat-type       = temp_parts.vat-type and
+     1454           buf2_temp_parts.contract-code  = temp_parts.contract-code and
+     1455           buf2_temp_parts.supp-type      = temp_parts.supp-type and
+     1456           buf2_temp_parts.supp-code      = temp_parts.supp-code and
+     1457           buf2_temp_parts.vat-pc         = temp_parts.vat-pc    and
+     1458           buf2_temp_parts.artic          = new_line.artic       and
+     1459           buf2_temp_parts.prod-type      = new_line.prod-type   and
+     1460           buf2_temp_parts.prod-code      = new_line.prod-code   and
+     1461           buf2_temp_parts.price-rubl     = new_line.price-rubl and
+     1462           buf2_temp_parts.pl-code        = new_line.pl-code
+     1463     :
+     1464       find first tt-doc-line exclusive-lock where
+     1465                 tt-doc-line.doc-code       = n-d and
+     1466                 tt-doc-line.artic          = buf2_temp_parts.artic   and
+     1467                 tt-doc-line.prod-type      = buf2_temp_parts.prod-type and
+     1468                 tt-doc-line.prod-code      = buf2_temp_parts.prod-code no-error .
+     1469       if not available tt-doc-line then do:
+     1470         find first buf_goods no-lock
+     1471              where buf_goods.artic     = buf2_temp_parts.artic
+     1472                and buf_goods.prod-type = buf2_temp_parts.prod-type
+     1473                and buf_goods.prod-code = buf2_temp_parts.prod-code no-error .
+     1474         find first tt-gds where tt-gds.gds-code = buf_goods.gds-code no-error.
+     1475         if not available (tt-gds)
+     1476         then do:
+     1477           create tt-gds.
+     1478           tt-gds.gds-code = buf_goods.gds-code.
+     1479           find first buf_goods-attr where buf_goods-attr.gds-code = tt-gds.gds-code and buf_goods-attr.attr-code = 'ptrl-without-rvs':U no-error.
+     1480           if not available (buf_goods-attr)
+     1481           then do:
+     1482             create buf_goods-attr.
+     1483             buf_goods-attr.gds-code = tt-gds.gds-code.
+     1484             buf_goods-attr.attr-code = 'ptrl-without-rvs':U.
+     1485             buf_goods-attr.attr-value = "yes".
+     1486           end.
+     1487         end.
+     1488         if not available buf_goods then next .
+     1489         create  tt-doc-line.
+     1490         assign
+     1491         tt-doc-line.doc-code       = n-d
+     1492         tt-doc-line.obj-type       = new_obj-type
+     1493         tt-doc-line.obj-code       = new_obj-code
+     1494         tt-doc-line.line-num       = next-value (s-line-num, ub)
+     1495         tt-doc-line.artic          = buf2_temp_parts.artic
+     1496         tt-doc-line.prod-type      = buf2_temp_parts.prod-type
+     1497         tt-doc-line.prod-code      = buf2_temp_parts.prod-code
+     1498         tt-doc-line.prt-root       = buf_goods.prt-root
+     1499         tt-doc-line.unit-cli       = buf_goods.unit-base
+     1500         tt-doc-line.slt-pc         = buf2_temp_parts.slt-pc
+     1501         tt-doc-line.vat-pc         = buf2_temp_parts.vat-pc
+     1502         tt-doc-line.ext-doc-type   = v-ext-doc-type
+     1503         tt-doc-line.price-base     = buf2_temp_parts.price-rubl
+     1504         tt-doc-line.price-cli      = buf2_temp_parts.price-rubl
+     1505         tt-doc-line.price-rubl     = buf2_temp_parts.price-rubl
+     1506         tt-doc-line.status_        = "temp"
+     1507         tt-doc-line.cli-qnty       = 0
+     1508         tt-doc-line.doc-qnty       = 0
+     1509         tt-doc-line.fact-qnty      = 0
+     1510         tt-doc-line.pl-code        = buf2_temp_parts.pl-code
+     1511         .
+     1512         create temp-2exists.
+     1513         assign
+     1514         temp-2exists.artic = buf2_temp_parts.artic
+     1515         temp-2exists.prod-type = buf2_temp_parts.prod-type
+     1516         temp-2exists.prod-code = buf2_temp_parts.prod-code
+     1517         temp-2exists.doc-code = n-d
+     1518         .
+     1519         release temp-2exists.
+     1520       end.
+     1521       assign
+     1522         tt-doc-line.cli-qnty  = tt-doc-line.cli-qnty  + buf2_temp_parts.cli-qnty1
+     1523         tt-doc-line.doc-qnty  = tt-doc-line.doc-qnty  + buf2_temp_parts.fact-qnty1
+     1524         tt-doc-line.fact-qnty = tt-doc-line.fact-qnty + buf2_temp_parts.fact-qnty1
+     1525       .
+     1526       assign
+     1527         tt-doc-line.cli-base-rate  = tt-doc-line.doc-qnty / tt-doc-line.cli-qnty
+     1528         tt-doc-line.doc-density    = tt-doc-line.cli-qnty / tt-doc-line.doc-qnty
+     1529         tt-doc-line.fact-density   = tt-doc-line.cli-qnty / tt-doc-line.fact-qnty
+     1530       .
+     1531       find first tt2-doc-line exclusive-lock where
+     1532                 tt2-doc-line.doc-code       = n-d and
+     1533                 tt2-doc-line.artic          = tt-doc-line.artic   and
+     1534                 tt2-doc-line.prod-code      = tt-doc-line.prod-code and
+     1535                 tt2-doc-line.prod-type      = tt-doc-line.prod-type  no-error .
+     1536       if not available tt2-doc-line then do:
+     1537         create  tt2-doc-line .
+     1538       end.
+     1539       BUFFER-COPY tt-doc-line to tt2-doc-line no-error.
+     1540       if error-status:error then do:
+     1541         message "buf-copy1 err" skip
+     1542         "doc-code:" n-d
+     1543         "artic:" tt-doc-line.artic
+     1544         view-as alert-box .
+     1545       end .
+     1546       find first tt-gds-dtl exclusive-lock where
+     1547                 tt-gds-dtl.doc-code   = n-d and
+     1548                 tt-gds-dtl.prt-code   = tt-doc-line.prt-root and
+     1549                 tt-gds-dtl.artic      = tt-doc-line.artic   and
+     1550                 tt-gds-dtl.prod-code  = tt-doc-line.prod-code and
+     1551                 tt-gds-dtl.prod-type  = tt-doc-line.prod-type  no-error .
+     1552       if not available tt-gds-dtl then do:
+     1553         create  tt-gds-dtl .
+     1554       end.
+     1555       buffer-copy  tt-doc-line  to  tt-gds-dtl
+     1556       assign
+     1557       tt-gds-dtl.prt-code  =  tt-doc-line.prt-root
+     1558       no-error .
+     1559       if error-status:error then do:
+     1560         message "buf-copy2 err" skip
+     1561         "doc-code:" n-d
+     1562         "artic:" tt-doc-line.artic
+     1563         view-as alert-box .
+     1564       end .
+     1565   // temp-table tt-doc-line:WRITE-XML ( "FILE", dsXmlFileName1, true, "UTF-8").
+     1566   // temp-table tt2-doc-line:WRITE-XML ( "FILE", dsXmlFileName2, true, "UTF-8").
+     1567     end .
+     1568     end .
+     1569   if local-trace-on then do:
+     1570    dsXmlFileName1 = substitute("&1/&2-&3.xml", ibs.th.gbl.gbl-inipar:logDir, "tt-doc-line", n-d).
+     1571    temp-table tt-doc-line:WRITE-XML ( "FILE", dsXmlFileName1, true, "UTF-8").
+     1572    dsXmlFileName2 = substitute("&1/&2-&3.xml", ibs.th.gbl.gbl-inipar:logDir, "tt2-doc-line", n-d).
+     1573    temp-table tt2-doc-line:WRITE-XML ( "FILE", dsXmlFileName2, true, "UTF-8").
+     1574   end .
+     1575     for each tt-doc-line :
+     1576       // pi линий:  doc-code artic prod-type prod-code
+     1577       // pi партий: obj-type obj-code artic prod-type prod-code in-code out-code part-code prt-code
+     1578       for each tt-parts
+     1579          where tt-parts.obj-type  = tt-doc-line.obj-type
+     1580            and tt-parts.obj-code  = tt-doc-line.obj-code
+     1581            and tt-parts.artic     = tt-doc-line.artic
+     1582            and tt-parts.prod-type = tt-doc-line.prod-type
+     1583            and tt-parts.prod-code = tt-doc-line.prod-code
+     1584            and tt-parts.supp-type     = new_trn-doc.cli-type
+     1585            and tt-parts.supp-code     = new_trn-doc.cli-code
+     1586            and tt-parts.contract-code = new_trn-doc.contract-code
+     1587            and tt-parts.vat-type      = new_trn-doc.vat-type
+     1588            and tt-parts.vat-pc        = tt-doc-line.vat-pc
+     1589            and tt-parts.price-rubl    = tt-doc-line.price-rubl
+     1590            and tt-parts.pl-code       = tt-doc-line.pl-code
+     1591       :
+     1592         tt-parts.out-code = tt-doc-line.doc-code no-error .
+     1593       end . // end_of for_each tt-parts
+     1594     end.
+     1595   if local-trace-on then do:
+     1596    dsXmlFileName3 = substitute("&1/&2-&3.xml", ibs.th.gbl.gbl-inipar:logDir, "tt_parts-2", n-d).
+     1597    temp-table tt-parts:WRITE-XML ( "FILE", dsXmlFileName3, true, "UTF-8").
+     1598   end .
+     1599   define variable vss-include-info16 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1600   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn4) <> true) then do:   run str/lib-trn4.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn4) <> true) then do:     message       "Error starting lib-trn4.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn4 skip       ibs.th.gbl.gbl-hndllib:g#lib-trn4 :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn4 :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn4_copy-in in g#lib-trn4
+     1601   ( input parParentProc
+     1602    ,input recid(new_trn-doc)
+     1603    ,input table tt-trn-doc
+     1604    ,input table tt2-doc-line
+     1605    ,input table tt-doc-line-attr
+     1606    ,input table tt-gds-dtl
+     1607    ,input table tt-parts
+     1608    ,input yes
+     1609    ,input yes
+     1610    ,input no
+     1611    ,input yes
+     1612    ,input this-procedure
+     1613     ) no-error .
+     1614     if error-status:error then do :
+     1615               run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute("Не удалось добавить товар в приходную накладную  (copy-in.i)! &1 &2" , return-value , error-status :get-message(1) ) ).
+     1616         return error return-value .
+     1617     end.
+     1618     v-ii = v-ii + 1.
+     1619     run gbl/calc-trn.p ( input parparentproc, input recid(new_trn-doc)) no-error.
+     1620     find first new_trn-doc where new_trn-doc.doc-code = n-d  exclusive-lock no-error .
+     1621     assign
+     1622     new_trn-doc.tot-cli = new_trn-doc.tot-calc
+     1623     .
+     1624     if p-is-close then do :
+     1625         create tt-trn-close .
+     1626         assign tt-trn-close.trn-code = new_trn-doc.doc-code .
+     1627     end .
+     1628   end.
+     1629   end procedure.
+     1630   procedure clos-trn2 :
+     1631   define input parameter p-trn-code as character no-undo .
+     1632   define variable v-cntxt-rsrv-time  as integer   no-undo .
+     1633   define variable v-cntxt-load-time  as integer   no-undo .
+     1634   define variable v-cntxt-holidays  as character no-undo .
+     1635   define variable varchg-inv as logical no-undo .
+     1636   do
+     1637   on error undo, return error return-value
+     1638   :
+     1639     run str/trn-stat.p (
+     1640       input  parparentproc  ,
+     1641       input  this-procedure ,
+     1642       input  '<закрытие документа на факт>':U ,
+     1643       input  p-trn-code,
+     1644       input  false  ,
+     1645       input  ibs.th.gbl.gbl-var:g#db-num,
+     1646       input  false ,
+     1647       input  v-cntxt-rsrv-time,
+     1648       input  v-cntxt-load-time,
+     1649       input  v-cntxt-holidays,
+     1650       input  false ,
+     1651       output varchg-inv ,
+     1652       output table gds-list1 )
+     1653       no-error.
+     1654       if error-status:error then do :
+     1655                   run write-log-and-file in p-log-handle ( 1, p-log-filename, 1, substitute(" Ошибка при закрытии документа &2 &1" , return-value , p-trn-code ) ).
+     1656       end.
+     1657   end.
+     1658   end procedure.

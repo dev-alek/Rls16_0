@@ -1,0 +1,858 @@
+        1   using ibs.th.skt.*.
+        2   using ibs.th.skt.Commands.*.
+        3   using ibs.th.skt.ControlledClients.*.
+        4   using ibs.th.skt.Adapters.*.
+        5   block-level on error undo, throw.
+        6   class ibs.th.skt.Commands.webCommand inherits ICommand:
+        7     define override public property vss-revision    as character no-undo init "$Revision:$":U get .
+        8     define override public property vss-author      as character no-undo init "$Author:$":U get.
+        9     define override public property vss-date        as character no-undo init "$Date:$":U get.
+       10     define override public property vss-workfile    as character no-undo init "$Workfile:$":U get.
+       11     define override public property vss-archive     as character no-undo init "$Archive:$":U get.
+       12     define override public property vss-description as character no-undo init "Обработка запросов в сокет по web" get.
+       13     define temp-table TempTrnDoc no-undo
+       14       field SuppInDocNo   as character
+       15       field stts          as character
+       16       field ext-doc-type  as character
+       17       field doc-date      as date
+       18       field cli-type      as character
+       19       field cli-code      as integer
+       20       field obj-type      as character
+       21       field obj-code      as integer
+       22       field ContractID    as integer
+       23       field ContractNum   as character
+       24       field vat-type      as character
+       25       field tot-transp    as decimal
+       26       field tot-other     as decimal
+       27       field wrkr          as integer
+       28       field agnt          as integer
+       29       field boss          as integer
+       30       field pay-code      as integer
+       31       field discnt-type   as character
+       32       field discnt-pc     as decimal
+       33       field user-id       as character
+       34       field reason-code   as integer
+       35       field ps            as character
+       36       field hold-obj-type as character
+       37       field hold-obj-code as integer
+       38       field ship-num      as character
+       39       field ship-date     as date
+       40       index pi SuppInDocNo .
+       41     define temp-table TempDocLine no-undo
+       42       field SuppInDocNo  as character
+       43       field line-num     as integer
+       44       field gds-code     as integer
+       45       field doc-qnty     as decimal
+       46       field fact-qnty    as decimal
+       47       field price-rubl   as decimal
+       48       field vat-pc       as decimal
+       49       field b-code       as character
+       50       index pi
+       51       SuppInDocNo
+       52       line-num
+       53       gds-code
+       54       .
+       55     define temp-table TempGdsDtl no-undo
+       56       field SuppInDocNo  as character
+       57       field line-num     as integer
+       58       field gds-code     as integer
+       59       field prt-code     as integer
+       60       field b-code       as integer
+       61       field doc-qnty     as decimal
+       62       field price-rubl   as decimal
+       63       index pi
+       64       SuppInDocNo
+       65       line-num
+       66       gds-code
+       67       prt-code
+       68       .
+       69     define temp-table TempParts no-undo
+       70       field SuppInDocNo  as character
+       71       field line-num     as integer
+       72       field gds-code     as integer
+       73       field part-code    as character
+       74       field out-code     as character
+       75       index pi
+       76       SuppInDocNo
+       77       line-num
+       78       gds-code
+       79       part-code
+       80       .
+       81     define temp-table TempDocAttr no-undo
+       82       field SuppInDocNo  as character
+       83       field attr-code    as character
+       84       field attr-value   as character
+       85       index pi
+       86       SuppInDocNo
+       87       attr-code
+       88       .
+       89     define public property ErrStatus as logical no-undo
+       90       get.
+       91       private set.
+       92     define public property LogMsg as character no-undo
+       93       get.
+       94       private set.
+       95     define private variable websrv      as class     websrv .
+       96     define private variable hRoot       as handle    no-undo.
+       97     define private variable hDoc        as handle    no-undo.
+       98     define private variable hRow        as handle    no-undo.
+       99     define private variable tthDocument as handle    no-undo.
+      100     define private variable i           as integer   no-undo.
+      101     define private variable userId_     as character no-undo.
+      102     define private variable sn          as character no-undo.
+      103     define private variable hndlSocket  as handle    no-undo.
+      104     define private variable good        AS LOGICAL   NO-UNDO.
+      105     define private variable line-num    as integer no-undo .
+      106     define private variable v-type      as character no-undo .
+      107     method public override void Execute_( input req as IRequest, resp as class IResponse ):
+      108     do transaction:
+      109       define variable contLength as integer   no-undo.
+      110       define variable strLog     as character no-undo.
+      111       define variable str        as character no-undo.
+      112       define buffer buf_bar-code  for ub.bar-code.
+      113       define buffer buf_prod-bc   for ub.prod-bc.
+      114       define buffer buf_place     for ub.place.
+      115       define buffer bfTempDocLine for TempDocLine.
+      116       define variable ANS as logical .
+      117       websrv = new websrv().
+      118       create x-document hDoc.
+      119       create x-noderef  hRoot.
+      120       hDoc:load("longchar",req:Content,no).
+      121       websrv:CP = hDoc:encoding.
+      122       if hDoc:encoding <> "windows-" + session:charset then
+      123       do:
+      124         str = req:Content.
+      125         str = codepage-convert (str, session:charset, hDoc:encoding) no-error.
+      126         if error-status:error
+      127           then return error "Ошибка при преобразовании кодировки".
+      128         req:Content = str.
+      129         delete object hDoc.
+      130         create x-document hDoc.
+      131         hDoc:load("longchar",req:Content,no).
+      132       end.
+      133       hDoc:encoding = if session:charset begins "12" then "windows-" + session:charset else session:charset.
+      134       hDoc:get-document-element(hRoot) .
+      135       assign
+      136         websrv:ReqType = hRoot:get-attribute("item")
+      137       .
+      138       hndlsocket = req:HndlSocket.
+      139       case websrv:ReqType :
+      140         when "WAYBILL" then
+      141           do:
+      142             parseXML(hRoot, 1).
+      143             websrv:ImpWB(table TempTrnDoc, table TempDocLine, table TempGdsDtl, table TempParts, table TempDocAttr, output ANS) .
+      144               if ANS then ErrStatus = false.
+      145               else ErrStatus = true.
+      146           end.
+      147         otherwise
+      148         do:
+      149           websrv:WriteUnknown().
+      150         end.
+      151       end.
+      152       case websrv:ReqType :
+      153         when "WAYBILL" then
+      154           do:
+      155             LogWrite:LogStr = 'Отправлен ответ на запрос типа "WAYBILL".' + chr(10) + LogWrite:LogStr.
+      156           end.
+      157       end case.
+      158       if ErrStatus then
+      159       do:
+      160         writeSock("").
+      161       end.
+      162       else do:
+      163         writeSock(str).
+      164       end.
+      165     end .
+      166       delete object websrv.
+      167     end method.
+      168     method private void parseXML(hParent AS HANDLE, level AS INTEGER):
+      169       DEFINE VARIABLE ii AS INTEGER NO-UNDO.
+      170       DEFINE VARIABLE hNoderef AS HANDLE NO-UNDO.
+      171       DEFINE VARIABLE hText AS HANDLE NO-UNDO.
+      172       CREATE X-NODEREF hNoderef.
+      173       CREATE X-NODEREF hText .
+      174       REPEAT ii = 1 TO hParent:NUM-CHILDREN:
+      175           good = hParent:GET-CHILD(hNoderef,ii).
+      176           IF NOT good THEN
+      177               LEAVE.
+      178           IF hNoderef:SUBTYPE <> "element" THEN
+      179               NEXT.
+      180           hNoderef:GET-CHILD(hText, 1) no-error .
+      181           if hNoderef:NAME = "trn-doc" then do :
+      182               create TempTrnDoc .
+      183               line-num = 0 .
+      184           end.
+      185           if hNoderef:NAME = "SuppInDocNo"        then do :
+      186               assign TempTrnDoc.SuppInDocNo =        hText:node-value no-error .
+      187           end.
+      188           if hNoderef:NAME = "Stts"               then assign TempTrnDoc.Stts =               hText:node-value no-error .
+      189           if hNoderef:NAME = "ExtDocType"         then assign TempTrnDoc.ext-doc-type =       hText:node-value no-error .
+      190           if hNoderef:NAME = "DocDate"            then assign TempTrnDoc.doc-date =           date(hText:node-value) no-error .
+      191           if hNoderef:NAME = "ContractId"         then assign TempTrnDoc.ContractID =         integer(hText:node-value) no-error .
+      192           if hNoderef:NAME = "ContractNum"        then assign TempTrnDoc.ContractNum =        hText:node-value no-error .
+      193           if hNoderef:NAME = "CliType"            then assign TempTrnDoc.cli-type =           hText:node-value no-error .
+      194           if hNoderef:NAME = "CliCode"            then assign TempTrnDoc.cli-code =           integer(hText:node-value) no-error .
+      195           if hNoderef:NAME = "ObjType"            then assign TempTrnDoc.obj-type =           hText:node-value no-error .
+      196           if hNoderef:NAME = "ObjCode"            then assign TempTrnDoc.obj-code =           integer(hText:node-value) no-error .
+      197           if hNoderef:NAME = "VatType"            then assign TempTrnDoc.vat-type =           hText:node-value no-error .
+      198           if hNoderef:NAME = "TransportExpSuppl"  then assign TempTrnDoc.tot-transp =         decimal(hText:node-value) no-error .
+      199           if hNoderef:NAME = "OtherExpSuppl"      then assign TempTrnDoc.tot-other =          decimal(hText:node-value) no-error .
+      200           if hNoderef:NAME = "Wrkr"               then assign TempTrnDoc.wrkr =               integer(hText:node-value) no-error .
+      201           if hNoderef:NAME = "Agnt"               then assign TempTrnDoc.agnt =               integer(hText:node-value) no-error .
+      202           if hNoderef:NAME = "Boss"               then assign TempTrnDoc.boss =               integer(hText:node-value) no-error .
+      203           if hNoderef:NAME = "PayCode"            then assign TempTrnDoc.pay-code =           integer(hText:node-value) no-error .
+      204           if hNoderef:NAME = "DiscntType"         then assign TempTrnDoc.discnt-type =        hText:node-value no-error .
+      205           if hNoderef:NAME = "DiscntPc"           then assign TempTrnDoc.discnt-pc =          decimal(hText:node-value) no-error .
+      206           if hNoderef:NAME = "User-id"            then assign TempTrnDoc.user-id =            hText:node-value no-error .
+      207           if hNoderef:NAME = "PS"                 then assign TempTrnDoc.ps =                 hText:node-value no-error .
+      208           if hNoderef:NAME = "ReasonCode"         then assign TempTrnDoc.reason-code =        integer(hText:node-value) no-error .
+      209           if hNoderef:NAME = "hold-obj-type"      then assign TempTrnDoc.hold-obj-type =      hText:node-value no-error .
+      210           if hNoderef:NAME = "hold-obj-code"      then assign TempTrnDoc.hold-obj-code =      integer(hText:node-value) no-error .
+      211           if hNoderef:NAME = "ShipNum"            then assign TempTrnDoc.ship-num =           hText:node-value no-error .
+      212           if hNoderef:NAME = "ShipDate"           then assign TempTrnDoc.ship-date =          date(hText:node-value) no-error .
+      213           if hNoderef:NAME = "PlaceStorage" then do :
+      214               create TempDocAttr .
+      215               assign
+      216                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      217                   TempDocAttr.attr-code   = 'PlaceStorage':U
+      218                   TempDocAttr.attr-value  = hText:node-value
+      219               no-error.
+      220               if error-status:error then delete TempDocAttr .
+      221           end.
+      222           if hNoderef:NAME = "QntyPlace" then do :
+      223               create TempDocAttr .
+      224               assign
+      225                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      226                   TempDocAttr.attr-code   = 'QntyPlace':U
+      227                   TempDocAttr.attr-value  = hText:node-value
+      228               no-error.
+      229               if error-status:error then delete TempDocAttr .
+      230           end.
+      231           if hNoderef:NAME = "Packer" then do :
+      232               create TempDocAttr .
+      233               assign
+      234                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      235                   TempDocAttr.attr-code   = 'Packer':U
+      236                   TempDocAttr.attr-value  = hText:node-value
+      237               no-error.
+      238               if error-status:error then delete TempDocAttr .
+      239           end.
+      240           if hNoderef:NAME = "Dispath" then do :
+      241               create TempDocAttr .
+      242               assign
+      243                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      244                   TempDocAttr.attr-code   = 'Dispath':U
+      245                   TempDocAttr.attr-value  = hText:node-value
+      246               no-error.
+      247               if error-status:error then delete TempDocAttr .
+      248           end.
+      249           if hNoderef:NAME = "NFinDoc" then do :
+      250               create TempDocAttr .
+      251               assign
+      252                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      253                   TempDocAttr.attr-code   = 'NFinDoc':U
+      254                   TempDocAttr.attr-value  = hText:node-value
+      255               no-error.
+      256               if error-status:error then delete TempDocAttr .
+      257           end.
+      258           if hNoderef:NAME = "DFinDoc" then do :
+      259               create TempDocAttr .
+      260               assign
+      261                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      262                   TempDocAttr.attr-code   = 'DFinDoc':U
+      263                   TempDocAttr.attr-value  = hText:node-value
+      264               no-error.
+      265               if error-status:error then delete TempDocAttr .
+      266           end.
+      267           if hNoderef:NAME = "clcasol" then do :
+      268               create TempDocAttr .
+      269               assign
+      270                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      271                   TempDocAttr.attr-code   = 'clcasol':U
+      272                   TempDocAttr.attr-value  = hText:node-value
+      273               no-error.
+      274               if error-status:error then delete TempDocAttr .
+      275           end.
+      276           if hNoderef:NAME = "clcaswt" then do :
+      277               create TempDocAttr .
+      278               assign
+      279                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      280                   TempDocAttr.attr-code   = 'clcaswt':U
+      281                   TempDocAttr.attr-value  = hText:node-value
+      282               no-error.
+      283               if error-status:error then delete TempDocAttr .
+      284           end.
+      285           if hNoderef:NAME = "indoclnsum" then do :
+      286               create TempDocAttr .
+      287               assign
+      288                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      289                   TempDocAttr.attr-code   = 'indoclnsum':U
+      290                   TempDocAttr.attr-value  = hText:node-value
+      291               no-error.
+      292               if error-status:error then delete TempDocAttr .
+      293           end.
+      294           if hNoderef:NAME = "purchlimit" then do :
+      295               create TempDocAttr .
+      296               assign
+      297                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      298                   TempDocAttr.attr-code   = 'purchlimit':U
+      299                   TempDocAttr.attr-value  = hText:node-value
+      300               no-error.
+      301               if error-status:error then delete TempDocAttr .
+      302           end.
+      303           if hNoderef:NAME = "purchcodelist" then do :
+      304               create TempDocAttr .
+      305               assign
+      306                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      307                   TempDocAttr.attr-code   = 'purchcodelist':U
+      308                   TempDocAttr.attr-value  = hText:node-value
+      309               no-error.
+      310               if error-status:error then delete TempDocAttr .
+      311           end.
+      312           if hNoderef:NAME = "expense_own" then do :
+      313               create TempDocAttr .
+      314               assign
+      315                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      316                   TempDocAttr.attr-code   = 'expense_own':U
+      317                   TempDocAttr.attr-value  = hText:node-value
+      318               no-error.
+      319               if error-status:error then delete TempDocAttr .
+      320           end.
+      321           if hNoderef:NAME = "priceTarget" then do :
+      322               create TempDocAttr .
+      323               assign
+      324                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      325                   TempDocAttr.attr-code   = 'price-target':U
+      326                   TempDocAttr.attr-value  = hText:node-value
+      327               no-error.
+      328               if error-status:error then delete TempDocAttr .
+      329           end.
+      330           if hNoderef:NAME = "envd" then do :
+      331               create TempDocAttr .
+      332               assign
+      333                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      334                   TempDocAttr.attr-code   = 'envd':U
+      335                   TempDocAttr.attr-value  = hText:node-value
+      336               no-error.
+      337               if error-status:error then delete TempDocAttr .
+      338           end.
+      339           if hNoderef:NAME = "discntStop" then do :
+      340               create TempDocAttr .
+      341               assign
+      342                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      343                   TempDocAttr.attr-code   = 'discnt-stop':U
+      344                   TempDocAttr.attr-value  = hText:node-value
+      345               no-error.
+      346               if error-status:error then delete TempDocAttr .
+      347           end.
+      348           if hNoderef:NAME = "discntOther" then do :
+      349               create TempDocAttr .
+      350               assign
+      351                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      352                   TempDocAttr.attr-code   = 'discnt-other':U
+      353                   TempDocAttr.attr-value  = hText:node-value
+      354               no-error.
+      355               if error-status:error then delete TempDocAttr .
+      356           end.
+      357           if hNoderef:NAME = "scanfile" then do :
+      358               create TempDocAttr .
+      359               assign
+      360                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      361                   TempDocAttr.attr-code   = 'scanfile':U
+      362                   TempDocAttr.attr-value  = hText:node-value
+      363               no-error.
+      364               if error-status:error then delete TempDocAttr .
+      365           end.
+      366           if hNoderef:NAME = "addsum" then do :
+      367               create TempDocAttr .
+      368               assign
+      369                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      370                   TempDocAttr.attr-code   = 'addsum':U
+      371                   TempDocAttr.attr-value  = hText:node-value
+      372               no-error.
+      373               if error-status:error then delete TempDocAttr .
+      374           end.
+      375           if hNoderef:NAME = "F21ord_phone" then do :
+      376               create TempDocAttr .
+      377               assign
+      378                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      379                   TempDocAttr.attr-code   = '21ord_phone':U
+      380                   TempDocAttr.attr-value  = hText:node-value
+      381               no-error.
+      382               if error-status:error then delete TempDocAttr .
+      383           end.
+      384           if hNoderef:NAME = "F22ord_contact" then do :
+      385               create TempDocAttr .
+      386               assign
+      387                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      388                   TempDocAttr.attr-code   = '22ord_contact':U
+      389                   TempDocAttr.attr-value  = hText:node-value
+      390               no-error.
+      391               if error-status:error then delete TempDocAttr .
+      392           end.
+      393           if hNoderef:NAME = "F4ord_dl" then do :
+      394               create TempDocAttr .
+      395               assign
+      396                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      397                   TempDocAttr.attr-code   = '4ord_dl':U
+      398                   TempDocAttr.attr-value  = hText:node-value
+      399               no-error.
+      400               if error-status:error then delete TempDocAttr .
+      401           end.
+      402           if hNoderef:NAME = "F8ord_adr" then do :
+      403               create TempDocAttr .
+      404               assign
+      405                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      406                   TempDocAttr.attr-code   = '8ord_adr':U
+      407                   TempDocAttr.attr-value  = hText:node-value
+      408               no-error.
+      409               if error-status:error then delete TempDocAttr .
+      410           end.
+      411           if hNoderef:NAME = "Auto" then do :
+      412               create TempDocAttr .
+      413               assign
+      414                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      415                   TempDocAttr.attr-code   = 'Auto':U
+      416                   TempDocAttr.attr-value  = hText:node-value
+      417               no-error.
+      418               if error-status:error then delete TempDocAttr .
+      419           end.
+      420           if hNoderef:NAME = "cargo-desc" then do :
+      421               create TempDocAttr .
+      422               assign
+      423                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      424                   TempDocAttr.attr-code   = 'cargo-desc':U
+      425                   TempDocAttr.attr-value  = hText:node-value
+      426               no-error.
+      427               if error-status:error then delete TempDocAttr .
+      428           end.
+      429           if hNoderef:NAME = "cargo-mass" then do :
+      430               create TempDocAttr .
+      431               assign
+      432                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      433                   TempDocAttr.attr-code   = 'cargo-mass':U
+      434                   TempDocAttr.attr-value  = hText:node-value
+      435               no-error.
+      436               if error-status:error then delete TempDocAttr .
+      437           end.
+      438           if hNoderef:NAME = "carry-type" then do :
+      439               create TempDocAttr .
+      440               assign
+      441                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      442                   TempDocAttr.attr-code   = 'carry-type':U
+      443                   TempDocAttr.attr-value  = hText:node-value
+      444               no-error.
+      445               if error-status:error then delete TempDocAttr .
+      446           end.
+      447           if hNoderef:NAME = "ddog" then do :
+      448               create TempDocAttr .
+      449               assign
+      450                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      451                   TempDocAttr.attr-code   = 'ddog':U
+      452                   TempDocAttr.attr-value  = hText:node-value
+      453               no-error.
+      454               if error-status:error then delete TempDocAttr .
+      455           end.
+      456           if hNoderef:NAME = "ddov" then do :
+      457               create TempDocAttr .
+      458               assign
+      459                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      460                   TempDocAttr.attr-code   = 'ddov':U
+      461                   TempDocAttr.attr-value  = hText:node-value
+      462               no-error.
+      463               if error-status:error then delete TempDocAttr .
+      464           end.
+      465           if hNoderef:NAME = "dids" then do :
+      466               create TempDocAttr .
+      467               assign
+      468                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      469                   TempDocAttr.attr-code   = 'dids':U
+      470                   TempDocAttr.attr-value  = hText:node-value
+      471               no-error.
+      472               if error-status:error then delete TempDocAttr .
+      473           end.
+      474           if hNoderef:NAME = "nids" then do :
+      475               create TempDocAttr .
+      476               assign
+      477                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      478                   TempDocAttr.attr-code   = 'nids':U
+      479                   TempDocAttr.attr-value  = hText:node-value
+      480               no-error.
+      481               if error-status:error then delete TempDocAttr .
+      482           end.
+      483           if hNoderef:NAME = "negais" then do :
+      484               create TempDocAttr .
+      485               assign
+      486                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      487                   TempDocAttr.attr-code   = 'negais':U
+      488                   TempDocAttr.attr-value  = hText:node-value
+      489               no-error.
+      490               if error-status:error then delete TempDocAttr .
+      491           end.
+      492           if hNoderef:NAME = "egais" then do :
+      493               create TempDocAttr .
+      494               assign
+      495                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      496                   TempDocAttr.attr-code   = 'egais':U
+      497                   TempDocAttr.attr-value  = hText:node-value
+      498               no-error.
+      499               if error-status:error then delete TempDocAttr .
+      500           end.
+      501           if hNoderef:NAME = "delivery-date" then do :
+      502               create TempDocAttr .
+      503               assign
+      504                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      505                   TempDocAttr.attr-code   = 'delivery-date':U
+      506                   TempDocAttr.attr-value  = hText:node-value
+      507               no-error.
+      508               if error-status:error then delete TempDocAttr .
+      509           end.
+      510           if hNoderef:NAME = "delivery-time" then do :
+      511               create TempDocAttr .
+      512               assign
+      513                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      514                   TempDocAttr.attr-code   = 'delivery-time':U
+      515                   TempDocAttr.attr-value  = hText:node-value
+      516               no-error.
+      517               if error-status:error then delete TempDocAttr .
+      518           end.
+      519           if hNoderef:NAME = "ptbobj" then do :
+      520               create TempDocAttr .
+      521               assign
+      522                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      523                   TempDocAttr.attr-code   = 'ptbobj':U
+      524                   TempDocAttr.attr-value  = hText:node-value
+      525               no-error.
+      526               if error-status:error then delete TempDocAttr .
+      527           end.
+      528           if hNoderef:NAME = "autoent" then do :
+      529               create TempDocAttr .
+      530               assign
+      531                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      532                   TempDocAttr.attr-code   = 'autoent':U
+      533                   TempDocAttr.attr-value  = hText:node-value
+      534               no-error.
+      535               if error-status:error then delete TempDocAttr .
+      536           end.
+      537           if hNoderef:NAME = "car-num" then do :
+      538               create TempDocAttr .
+      539               assign
+      540                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      541                   TempDocAttr.attr-code   = 'car-num':U
+      542                   TempDocAttr.attr-value  = hText:node-value
+      543               no-error.
+      544               if error-status:error then delete TempDocAttr .
+      545           end.
+      546           if hNoderef:NAME = "fio-driver" then do :
+      547               create TempDocAttr .
+      548               assign
+      549                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      550                   TempDocAttr.attr-code   = 'fio-driver':U
+      551                   TempDocAttr.attr-value  = hText:node-value
+      552               no-error.
+      553               if error-status:error then delete TempDocAttr .
+      554           end.
+      555           if hNoderef:NAME = "time-income" then do :
+      556               create TempDocAttr .
+      557               assign
+      558                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      559                   TempDocAttr.attr-code   = 'time-income':U
+      560                   TempDocAttr.attr-value  = hText:node-value
+      561               no-error.
+      562               if error-status:error then delete TempDocAttr .
+      563           end.
+      564           if hNoderef:NAME = "inspection-cert" then do :
+      565               create TempDocAttr .
+      566               assign
+      567                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      568                   TempDocAttr.attr-code   = 'inspection-cert':U
+      569                   TempDocAttr.attr-value  = hText:node-value
+      570               no-error.
+      571               if error-status:error then delete TempDocAttr .
+      572           end.
+      573           if hNoderef:NAME = "date-cert" then do :
+      574               create TempDocAttr .
+      575               assign
+      576                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      577                   TempDocAttr.attr-code   = 'date-cert':U
+      578                   TempDocAttr.attr-value  = hText:node-value
+      579               no-error.
+      580               if error-status:error then delete TempDocAttr .
+      581           end.
+      582           if hNoderef:NAME = "condition" then do :
+      583               create TempDocAttr .
+      584               assign
+      585                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      586                   TempDocAttr.attr-code   = 'condition':U
+      587                   TempDocAttr.attr-value  = hText:node-value
+      588               no-error.
+      589               if error-status:error then delete TempDocAttr .
+      590           end.
+      591           if hNoderef:NAME = "seals-condition" then do :
+      592               create TempDocAttr .
+      593               assign
+      594                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      595                   TempDocAttr.attr-code   = 'seals-condition':U
+      596                   TempDocAttr.attr-value  = hText:node-value
+      597               no-error.
+      598               if error-status:error then delete TempDocAttr .
+      599           end.
+      600           if hNoderef:NAME = "ptb-item-pour" then do :
+      601               create TempDocAttr .
+      602               assign
+      603                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      604                   TempDocAttr.attr-code   = 'ptb-item-pour':U
+      605                   TempDocAttr.attr-value  = hText:node-value
+      606               no-error.
+      607               if error-status:error then delete TempDocAttr .
+      608           end.
+      609           if hNoderef:NAME = "postpay" then do :
+      610               create TempDocAttr .
+      611               assign
+      612                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      613                   TempDocAttr.attr-code   = '1postpay':U
+      614                   TempDocAttr.attr-value  = hText:node-value
+      615               no-error.
+      616               if error-status:error then delete TempDocAttr .
+      617           end.
+      618           if hNoderef:NAME = "Driver" then do :
+      619               create TempDocAttr .
+      620               assign
+      621                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      622                   TempDocAttr.attr-code   = 'Driver':U
+      623                   TempDocAttr.attr-value  = hText:node-value
+      624               no-error.
+      625               if error-status:error then delete TempDocAttr .
+      626           end.
+      627           if hNoderef:NAME = "dsf" then do :
+      628               create TempDocAttr .
+      629               assign
+      630                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      631                   TempDocAttr.attr-code   = 'dsf':U
+      632                   TempDocAttr.attr-value  = hText:node-value
+      633               no-error.
+      634               if error-status:error then delete TempDocAttr .
+      635           end.
+      636           if hNoderef:NAME = "exp-trans" then do :
+      637               create TempDocAttr .
+      638               assign
+      639                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      640                   TempDocAttr.attr-code   = 'exp-trans':U
+      641                   TempDocAttr.attr-value  = hText:node-value
+      642               no-error.
+      643               if error-status:error then delete TempDocAttr .
+      644           end.
+      645           if hNoderef:NAME = "ndog" then do :
+      646               create TempDocAttr .
+      647               assign
+      648                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      649                   TempDocAttr.attr-code   = 'ndog':U
+      650                   TempDocAttr.attr-value  = hText:node-value
+      651               no-error.
+      652               if error-status:error then delete TempDocAttr .
+      653           end.
+      654           if hNoderef:NAME = "ndov" then do :
+      655               create TempDocAttr .
+      656               assign
+      657                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      658                   TempDocAttr.attr-code   = 'ndov':U
+      659                   TempDocAttr.attr-value  = hText:node-value
+      660               no-error.
+      661               if error-status:error then delete TempDocAttr .
+      662           end.
+      663           if hNoderef:NAME = "ndovwho" then do :
+      664               create TempDocAttr .
+      665               assign
+      666                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      667                   TempDocAttr.attr-code   = 'ndovwho':U
+      668                   TempDocAttr.attr-value  = hText:node-value
+      669               no-error.
+      670               if error-status:error then delete TempDocAttr .
+      671           end.
+      672           if hNoderef:NAME = "nosn" then do :
+      673               create TempDocAttr .
+      674               assign
+      675                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      676                   TempDocAttr.attr-code   = 'nosn':U
+      677                   TempDocAttr.attr-value  = hText:node-value
+      678               no-error.
+      679               if error-status:error then delete TempDocAttr .
+      680           end.
+      681           if hNoderef:NAME = "nsf" then do :
+      682               create TempDocAttr .
+      683               assign
+      684                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      685                   TempDocAttr.attr-code   = 'nsf':U
+      686                   TempDocAttr.attr-value  = hText:node-value
+      687               no-error.
+      688               if error-status:error then delete TempDocAttr .
+      689           end.
+      690           if hNoderef:NAME = "dateinv" then do :
+      691               create TempDocAttr .
+      692               assign
+      693                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      694                   TempDocAttr.attr-code   = 'dateinv':U
+      695                   TempDocAttr.attr-value  = hText:node-value
+      696               no-error.
+      697               if error-status:error then delete TempDocAttr .
+      698           end.
+      699           if hNoderef:NAME = "ser_on_pack" then do :
+      700               create TempDocAttr .
+      701               assign
+      702                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      703                   TempDocAttr.attr-code   = 'ser_on_pack':U
+      704                   TempDocAttr.attr-value  = hText:node-value
+      705               no-error.
+      706               if error-status:error then delete TempDocAttr .
+      707           end.
+      708           if hNoderef:NAME = "print-num" then do :
+      709               create TempDocAttr .
+      710               assign
+      711                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      712                   TempDocAttr.attr-code   = 'print-num':U
+      713                   TempDocAttr.attr-value  = hText:node-value
+      714               no-error.
+      715               if error-status:error then delete TempDocAttr .
+      716           end.
+      717           if hNoderef:NAME = "Recipient" then do :
+      718               create TempDocAttr .
+      719               assign
+      720                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      721                   TempDocAttr.attr-code   = 'Recipient':U
+      722                   TempDocAttr.attr-value  = hText:node-value
+      723               no-error.
+      724               if error-status:error then delete TempDocAttr .
+      725           end.
+      726           if hNoderef:NAME = "Shipper" then do :
+      727               create TempDocAttr .
+      728               assign
+      729                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      730                   TempDocAttr.attr-code   = 'Shipper':U
+      731                   TempDocAttr.attr-value  = hText:node-value
+      732               no-error.
+      733               if error-status:error then delete TempDocAttr .
+      734           end.
+      735           if hNoderef:NAME = "oldsuppcntr" then do :
+      736               create TempDocAttr .
+      737               assign
+      738                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      739                   TempDocAttr.attr-code   = 'olsuppcntr':U
+      740                   TempDocAttr.attr-value  = hText:node-value
+      741               no-error.
+      742               if error-status:error then delete TempDocAttr .
+      743           end.
+      744           if hNoderef:NAME = "t_accept-fname" then do :
+      745               create TempDocAttr .
+      746               assign
+      747                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      748                   TempDocAttr.attr-code   = 't_accept-fname':U
+      749                   TempDocAttr.attr-value  = hText:node-value
+      750               no-error.
+      751               if error-status:error then delete TempDocAttr .
+      752           end.
+      753           if hNoderef:NAME = "t_accept-position" then do :
+      754               create TempDocAttr .
+      755               assign
+      756                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      757                   TempDocAttr.attr-code   = 't_accept-position':U
+      758                   TempDocAttr.attr-value  = hText:node-value
+      759               no-error.
+      760               if error-status:error then delete TempDocAttr .
+      761           end.
+      762           if hNoderef:NAME = "t_pass-fname" then do :
+      763               create TempDocAttr .
+      764               assign
+      765                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      766                   TempDocAttr.attr-code   = 't_pass-fname':U
+      767                   TempDocAttr.attr-value  = hText:node-value
+      768               no-error.
+      769               if error-status:error then delete TempDocAttr .
+      770           end.
+      771           if hNoderef:NAME = "t_pass-position" then do :
+      772               create TempDocAttr .
+      773               assign
+      774                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      775                   TempDocAttr.attr-code   = 't_pass-position':U
+      776                   TempDocAttr.attr-value  = hText:node-value
+      777               no-error.
+      778               if error-status:error then delete TempDocAttr .
+      779           end.
+      780           if hNoderef:NAME = "zakaz-date" then do :
+      781               create TempDocAttr .
+      782               assign
+      783                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      784                   TempDocAttr.attr-code   = 'zakaz-date':U
+      785                   TempDocAttr.attr-value  = hText:node-value
+      786               no-error.
+      787               if error-status:error then delete TempDocAttr .
+      788           end.
+      789           if hNoderef:NAME = "zakaz-number" then do :
+      790               create TempDocAttr .
+      791               assign
+      792                   TempDocAttr.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      793                   TempDocAttr.attr-code   = 'zakaz-number':U
+      794                   TempDocAttr.attr-value  = hText:node-value
+      795               no-error.
+      796               if error-status:error then delete TempDocAttr .
+      797           end.
+      798           if hNoderef:NAME = "doc-Line" then do :
+      799               v-type = "doc-line" .
+      800               create TempDocLine .
+      801               line-num = line-num + 1 .
+      802               assign
+      803                   TempDocLine.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      804                   TempDocLine.line-num    = line-num
+      805               no-error.
+      806           end.
+      807           if hNoderef:NAME = "gdsCode"        then assign TempDocLine.gds-code        = integer(hText:node-value) no-error .
+      808           if hNoderef:NAME = "DocQnty"        then do :
+      809               if v-type = "doc-line"          then assign TempDocLine.doc-qnty        = decimal(hText:node-value) no-error .
+      810               if v-type = "gds-dtl"           then assign TempGdsDtl.doc-qnty         = decimal(hText:node-value) no-error .
+      811           end.
+      812           if hNoderef:NAME = "PriceRubl"      then assign TempDocLine.price-rubl      = decimal(hText:node-value) no-error .
+      813           if hNoderef:NAME = "VatPcDoc"       then assign TempDocLine.vat-pc          = decimal(hText:node-value) no-error .
+      814           if hNoderef:NAME = "gds-dtl" then do :
+      815               v-type = "gds-dtl" .
+      816               create TempGdsDtl .
+      817               assign
+      818                   TempGdsDtl.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      819                   TempGdsDtl.line-num    = TempDocLine.line-num
+      820                   TempGdsDtl.gds-code    = TempDocLine.gds-code
+      821               .
+      822           end.
+      823           if hNoderef:NAME = "PrtCode"        then assign TempGdsDtl.prt-code         = integer(hText:node-value) no-error .
+      824           if hNoderef:NAME = "BarCodeUnitBase" then assign TempGdsDtl.b-code          = integer(hText:node-value) no-error .
+      825           if hNoderef:NAME = "PriceRublDoc"   then assign TempGdsDtl.price-rubl       = decimal(hText:node-value) no-error .
+      826           if hNoderef:NAME = "parts" then do :
+      827               create TempParts .
+      828               assign
+      829                   TempParts.SuppInDocNo = TempTrnDoc.SuppInDocNo
+      830                   TempParts.line-num    = TempDocLine.line-num
+      831                   TempParts.gds-code    = TempDocLine.gds-code
+      832               .
+      833           end.
+      834           if hNoderef:NAME = "partCode"       then assign TempParts.part-code         = hText:node-value no-error .
+      835           if hNoderef:NAME = "parDocNum"      then assign TempParts.out-code          = hText:node-value no-error .
+      836           parseXML(hNoderef, (level + 1)).
+      837       end.
+      838       DELETE OBJECT hNoderef.
+      839       DELETE OBJECT hText.
+      840     end method.
+      841     method private logical writeSock ( arg as character ):
+      842       define variable mbuffer  as memptr   no-undo.
+      843       define variable mbuffer1 as memptr   no-undo.
+      844       define variable tempStr  as longchar no-undo.
+      845       define variable glog     as logical  no-undo.
+      846       set-size(mbuffer1) = length (websrv:SomeStr, "RAW":U) + 1.
+      847       put-string(mbuffer1,1) = websrv:SomeStr.
+      848       assign
+      849         glog = hndlsocket:write(mbuffer1,1,get-size(mbuffer1)) no-error.
+      850       set-size(mbuffer1) = 0.
+      851       if not glog
+      852         then do:
+      853           LogWrite:LogStr = LogWrite:LogStr + " " + "Ошибка при отправке сообщения удаленному клиенту.".
+      854           ErrStatus = true.
+      855         end.
+      856       return true.
+      857     end method.
+      858   end class.

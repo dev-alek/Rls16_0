@@ -1,0 +1,2447 @@
+        1   block-level on error undo, throw.
+        2   TRIGGER PROCEDURE FOR WRITE OF ub.shift-obj old buffer oldb.
+        3   define variable vss-revision    as character no-undo init "$Revision$":U .
+        4   define variable vss-author      as character no-undo init "$Author$":U .
+        5   define variable vss-date        as character no-undo init "$Date$":U .
+        6   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        7   define variable vss-archive     as character no-undo init "$Archive$":U .
+        8   define variable vss-description as character no-undo init "Триггер на запись смены".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27       assign
+       28         p-vss-parameters = substitute('&1|&2|&3|&4|&5':u,ub.shift-obj.obj-type,ub.shift-obj.obj-code,ub.shift-obj.shift-date,ub.shift-obj.shift-num,ub.shift-obj.status_)
+       29       .
+       30   end procedure.
+       31   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       32   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       33   define variable v-vssrevis-logger                   as handle    no-undo .
+       34   procedure vss-logevent :
+       35     define input  parameter p-extra-paramters as character no-undo .
+       36     define variable v-vssrevis-parameters as character no-undo .
+       37     do
+       38     on error undo, return error return-value
+       39     :
+       40       if  valid-handle(v-vssrevis-logger)
+       41       and v-vssrevis-logger :get-signature("logevent") <> ""
+       42       then do:
+       43         run vss-get-parameters in this-procedure
+       44           (output v-vssrevis-parameters
+       45           ).
+       46         run logevent in v-vssrevis-logger
+       47           (input vss-workfile
+       48           ,input vss-revision
+       49           ,input v-vssrevis-parameters
+       50           ,input p-extra-paramters
+       51           ).
+       52       end.
+       53     end.
+       54   end procedure.
+       55   assign
+       56     v-vssrevis-logger = g#vssrevis-logger
+       57   .
+       58   if  valid-handle(v-vssrevis-logger)
+       59   and v-vssrevis-logger :get-signature("logevent") <> ""
+       60   then do:
+       61     assign
+       62       v-vssrevis-logevent = true
+       63     .
+       64     run vss-logevent in this-procedure (input vss-description) .
+       65   end.
+       66   define new global shared variable g#language as character no-undo .
+       67   if g#language <> '' and g#language <> 'rus':U then do:
+       68     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       69   end.
+       70   define new global shared variable g#library  as handle no-undo .
+       71   define new global shared variable g#library2 as handle no-undo .
+       72   define   shared variable g#auto as logical no-undo.
+       73   define   shared variable g#news as logical no-undo.
+       74   define   shared variable g#oxml as logical no-undo.
+       75   define   shared variable g#esys as logical no-undo.
+       76   define   shared variable g#news-source-db as integer no-undo.
+       77   define   shared variable g#esys-source-esys as integer no-undo.
+       78   define   shared variable g#db-num as integer   no-undo .
+       79   define   shared variable g#userid as character no-undo .
+       80   define   shared variable g#passwd as character no-undo .
+       81   define new global shared variable g#lib-trn  as handle no-undo .
+       82   define new global shared variable g#lib-trn2 as handle no-undo .
+       83   define new global shared variable g#lib-trn3 as handle no-undo .
+       84   define new global shared variable g#lib-trn4 as handle no-undo .
+       85   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       86   procedure factord :
+       87     define input  parameter p-fact-date            as date    no-undo .
+       88     define input  parameter p-fact-time            as integer no-undo .
+       89     define input  parameter p-fact-num             as integer no-undo .
+       90     define input  parameter p-shift-date           as date    no-undo .
+       91     define input  parameter p-shift-num            as integer no-undo .
+       92     define input  parameter p-shift-on             as logical no-undo .
+       93     define output parameter p-fact-order           as decimal no-undo .
+       94     define output parameter p-shift-end-fact-order as decimal no-undo .
+       95     define output parameter p-day-end-fact-order   as decimal no-undo .
+       96     define variable vss-description as character no-undo init "factord: Определение порядкового номера документа".
+       97     if p-fact-date = ?
+       98     then do:
+       99       return error "Не указана фактическая дата" .
+      100     end.
+      101     define variable v-fact-date-num as integer no-undo .
+      102     assign
+      103       v-fact-date-num = integer(p-fact-date)
+      104     .
+      105     if p-fact-num = ?
+      106     or p-fact-num = 0
+      107     then do:
+      108       return error "Не задан p-fact-num " + string(p-fact-num) .
+      109     end.
+      110     if p-fact-num < 0
+      111     then do:
+      112       return error "Отрицательный fact-num " + string(p-fact-num) .
+      113     end.
+      114     if p-fact-num >= 100000000
+      115     then do:
+      116       return error "Недопустимо большой fact-num " + string(p-fact-num) .
+      117     end.
+      118     if p-shift-on = true
+      119     then do:
+      120       if p-shift-date = ?
+      121       then do:
+      122         return error "Не задана дата смены" .
+      123       end.
+      124       if p-shift-num = ?
+      125       or p-shift-num = 0
+      126       then do:
+      127         return error "Не задан номер смены" .
+      128       end.
+      129     end.
+      130     else do:
+      131       assign
+      132         p-shift-date = p-fact-date
+      133         p-shift-num  = 24
+      134       .
+      135     end.
+      136     define variable v-shift-offset as integer no-undo .
+      137     if p-shift-date = p-fact-date
+      138     then do:
+      139       assign
+      140         v-shift-offset = 1
+      141       .
+      142     end.
+      143     if p-shift-date < p-fact-date
+      144     then do:
+      145       assign
+      146         v-shift-offset = 0
+      147       .
+      148     end.
+      149     if p-shift-date > p-fact-date
+      150     then do:
+      151       message
+      152         vss-workfile vss-revision vss-description skip
+      153         "Неправильная дата закрытия смены" skip
+      154         "Дата закрытия не смены не может быть раньше чем дата открытия смены" skip
+      155         view-as alert-box error .
+      156       undo, return error
+      157         substitute("Дата закрытия не смены &1 не может быть раньше чем дата открытия смены &2"
+      158           ,string(p-fact-date, '99/99/9999':U)
+      159           ,string(p-shift-date, '99/99/9999':U)
+      160           )
+      161       .
+      162     end.
+      163     if p-shift-num < 1
+      164     or p-shift-num > 24
+      165     then do:
+      166       message
+      167         vss-workfile vss-revision vss-description skip
+      168         "Неправильный номер смены" skip
+      169         "p-shift-num" p-shift-num skip
+      170         view-as alert-box error .
+      171       undo, return error return-value .
+      172     end.
+      173     assign
+      174       p-fact-order           = v-fact-date-num
+      175                              + v-shift-offset * 0.5
+      176                              + p-shift-num    * 0.02 - 0.01
+      177                              + p-fact-num     * 0.0000000001
+      178       p-shift-end-fact-order = v-fact-date-num
+      179                              + v-shift-offset * 0.5
+      180                              + p-shift-num    * 0.02
+      181       p-day-end-fact-order   = v-fact-date-num
+      182                              + 0.99
+      183     .
+      184     if p-fact-order           <= v-fact-date-num
+      185     or p-shift-end-fact-order <= v-fact-date-num
+      186     or p-fact-order           >= p-shift-end-fact-order - 0.0000000001
+      187     or p-shift-end-fact-order >= p-day-end-fact-order
+      188     then do:
+      189       message
+      190         vss-workfile vss-revision vss-description skip
+      191         "Внутренняя ошибка при генерации фактического номера" skip
+      192         "p-fact-date"            p-fact-date            skip
+      193         "p-fact-time"            p-fact-time            skip
+      194         "p-fact-num"             p-fact-num             skip
+      195         "p-shift-date"           p-shift-date           skip
+      196         "p-shift-num"            p-shift-num            skip
+      197         "p-shift-on"             p-shift-on             skip
+      198         "p-shift-end-fact-order" p-shift-end-fact-order skip
+      199         "p-day-end-fact-order"   p-day-end-fact-order   skip
+      200         "v-fact-date-num"        v-fact-date-num        skip
+      201         view-as alert-box error .
+      202       undo, return error return-value .
+      203     end.
+      204   end procedure.
+      205   procedure day-begin-fact-order :
+      206     define input  parameter p-fact-date            as date    no-undo .
+      207     define output parameter p-day-begin-fact-order as decimal no-undo .
+      208     do
+      209     on error undo, return error return-value
+      210     :
+      211       if p-fact-date = ?
+      212       then do:
+      213         assign
+      214           p-day-begin-fact-order = 0
+      215         .
+      216       end.
+      217       else do:
+      218         assign
+      219           p-day-begin-fact-order = integer(p-fact-date)
+      220         .
+      221       end.
+      222     end.
+      223   end procedure.
+      224   procedure factord-max-fact-order :
+      225     define output parameter p-max-fact-order as decimal   no-undo .
+      226     do
+      227     on error undo, return error return-value
+      228     :
+      229       run day-begin-fact-order in this-procedure
+      230         (input  date(1, 1, 5000)
+      231         ,output p-max-fact-order
+      232         ) .
+      233     end.
+      234   end procedure.
+      235   procedure factord-cut-archive :
+      236     define input  parameter p-obj-type             as character no-undo .
+      237     define input  parameter p-obj-code             as integer   no-undo .
+      238     define input  parameter p-fact-date            as date      no-undo .
+      239     define output parameter p-shift-on             as logical   no-undo .
+      240     define output parameter p-shift-date           as date      no-undo .
+      241     define output parameter p-shift-num            as integer   no-undo .
+      242     define output parameter p-day-end-fact-order   as decimal   no-undo .
+      243     define output parameter p-shift-end-fact-order as decimal   no-undo .
+      244     define variable v-fact-order as decimal   no-undo .
+      245     define buffer buf_shift-obj for ub.shift-obj .
+      246     do
+      247     on error undo, return error return-value
+      248     :
+      249   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      250   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      251     (input  p-obj-type
+      252     ,input  p-obj-code
+      253     ,input  'shift-on=request'
+      254     ,output p-shift-on
+      255     ) no-error .
+      256       if error-status :error
+      257       then do:
+      258         message
+      259           vss-workfile vss-revision vss-description skip
+      260           "Ошибка при определении атрибута объекта" skip
+      261           "Объект" p-obj-type p-obj-code skip
+      262           error-status :get-message(1) skip
+      263           return-value skip
+      264           view-as alert-box error .
+      265         undo, return error return-value .
+      266       end.
+      267       if p-shift-on = false
+      268       then do:
+      269         assign
+      270           p-shift-date               = ?
+      271           p-shift-num                = 0
+      272         .
+      273       end.
+      274       else do:
+      275         find first buf_shift-obj share-lock
+      276           where buf_shift-obj.obj-type   = p-obj-type
+      277             and buf_shift-obj.obj-code   = p-obj-code
+      278             and buf_shift-obj.shift-date > p-fact-date
+      279           use-index pi
+      280           no-error .
+      281         if not available buf_shift-obj
+      282         or buf_shift-obj.status_ <> 'зкр':U
+      283         then do:
+      284           message
+      285             vss-workfile vss-revision vss-description skip
+      286             "Невозможно вычислить последнюю смену" skip
+      287             "Отсутствует закрытая смена с датой большей чем дата инициализации архива" skip
+      288             "Объект" p-obj-type p-obj-code skip
+      289             "Дата" p-fact-date skip
+      290             view-as alert-box error .
+      291           undo, return error return-value .
+      292         end.
+      293         find last buf_shift-obj share-lock
+      294           where buf_shift-obj.obj-type = p-obj-type
+      295             and buf_shift-obj.obj-code = p-obj-code
+      296             and buf_shift-obj.shift-date <= p-fact-date
+      297           use-index pi
+      298           no-error .
+      299         if available buf_shift-obj
+      300         then do:
+      301           if  buf_shift-obj.status_ = 'зкр':U
+      302           then do:
+      303             assign
+      304               p-shift-date = buf_shift-obj.shift-date
+      305               p-shift-num  = buf_shift-obj.shift-num
+      306             .
+      307           end.
+      308           else do:
+      309             message
+      310               vss-workfile vss-revision vss-description skip
+      311               "Невозможно вычислить последнюю смену" skip
+      312               "Статус смены отличен от статуса" 'зкр':U skip
+      313               "Объект" p-obj-type p-obj-code skip
+      314               "Дата" p-fact-date skip
+      315               "Смена" buf_shift-obj.shift-date buf_shift-obj.shift-num skip
+      316               view-as alert-box error .
+      317             undo, return error return-value .
+      318           end.
+      319         end.
+      320         else do:
+      321           assign
+      322             p-shift-date = p-fact-date - 1
+      323             p-shift-num  = 1
+      324           .
+      325         end.
+      326       end.
+      327       run factord in this-procedure
+      328         (input  p-fact-date
+      329         ,input  1
+      330         ,input  1
+      331         ,input  p-shift-date
+      332         ,input  p-shift-num
+      333         ,input  p-shift-on
+      334         ,output v-fact-order
+      335         ,output p-shift-end-fact-order
+      336         ,output p-day-end-fact-order
+      337         ) no-error .
+      338       if error-status :error
+      339       then do:
+      340         message
+      341           vss-workfile vss-revision vss-description skip
+      342           "Ошибка при вызове процедуры factord"
+      343           error-status :get-message(1) skip
+      344           return-value skip
+      345           view-as alert-box error .
+      346         undo, return error return-value .
+      347       end.
+      348     end.
+      349   end procedure.
+      350   procedure factord-lock-shift :
+      351     define input  parameter p-obj-type  as character no-undo .
+      352     define input  parameter p-obj-code  as integer   no-undo .
+      353     define input  parameter p-fact-date as date      no-undo .
+      354     define parameter buffer buf_shift-obj for ub.shift-obj .
+      355     define variable v-shift-on      as logical   no-undo .
+      356     define variable v-extra-message as character no-undo .
+      357     define variable v-error as character no-undo .
+      358     do
+      359     on error undo, return error return-value
+      360     :
+      361   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      362   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      363     (input  p-obj-type
+      364     ,input  p-obj-code
+      365     ,input  'shift-on=request'
+      366     ,output v-shift-on
+      367     ) no-error .
+      368       if error-status :error
+      369       then do:
+      370         v-error = substitute("Ошибка при определении атрибута объекта  &1 &2 &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value) .
+      371         undo, return error v-error .
+      372       end.
+      373       if v-shift-on = true
+      374       then do:
+      375         find first buf_shift-obj share-lock
+      376           where buf_shift-obj.obj-type   = p-obj-type
+      377             and buf_shift-obj.obj-code   = p-obj-code
+      378             and buf_shift-obj.shift-date > p-fact-date
+      379           use-index pi
+      380           no-error .
+      381         if not available buf_shift-obj
+      382         or buf_shift-obj.status_ <> 'зкр':U
+      383         then do:
+      384           find last buf_shift-obj
+      385             where buf_shift-obj.obj-type = p-obj-type
+      386               and buf_shift-obj.obj-code = p-obj-code
+      387               and buf_shift-obj.status_  = 'зкр':U
+      388             use-index stts
+      389             no-error .
+      390           if available buf_shift-obj
+      391           then do:
+      392             assign
+      393               v-extra-message =
+      394                     substitute("Дата начала последеней закрытой смены на объекте &1"
+      395                               ,string(buf_shift-obj.shift-date, '99/99/9999':u)
+      396                               )
+      397             .
+      398           end.
+      399           v-error = substitute("Ошибка при блокировке смены объекта  &1 &2 Отсутствует закрытая смена с датой большей чем указанная дата  &5  &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value , p-fact-date) .
+      400           undo, return error v-error .
+      401         end.
+      402       end.
+      403     end.
+      404   end procedure.
+      405   procedure factord-end-day :
+      406     define input  parameter p-fact-date            as date    no-undo .
+      407     define output parameter p-day-end-fact-order   as decimal no-undo .
+      408     do
+      409     on error undo, return error return-value
+      410     :
+      411       if p-fact-date = ?
+      412       then do:
+      413         return error "Не указана фактическая дата" .
+      414       end.
+      415       assign
+      416         p-day-end-fact-order = integer(p-fact-date) + 0.99
+      417       .
+      418     end.
+      419   end procedure.
+      420   procedure factord-to-date :
+      421     define input  parameter p-fact-order as decimal no-undo .
+      422     define output parameter p-fact-date  as date    no-undo .
+      423     define variable v-ref-date  as date      no-undo .
+      424     define variable v-ref-delta as integer   no-undo .
+      425     do
+      426     on error undo, return error return-value
+      427     :
+      428       if p-fact-order = ?
+      429       or p-fact-order = 0
+      430       then do:
+      431         return error "Не указан fact-order" .
+      432       end.
+      433       assign
+      434         v-ref-date  = date(1, 1, 2000)
+      435       .
+      436       assign
+      437         v-ref-delta = integer(truncate(p-fact-order, 0)) - integer(v-ref-date)
+      438       .
+      439       assign
+      440         p-fact-date = v-ref-date + v-ref-delta
+      441       .
+      442     end.
+      443   end procedure.
+      444   procedure factord-to-fact-num :
+      445     define input  parameter p-fact-order as decimal no-undo .
+      446     define output parameter p-fact-num   as integer no-undo .
+      447     define variable v-fact-order-trunc as decimal no-undo .
+      448     do
+      449     on error undo, return error return-value
+      450     :
+      451       if p-fact-order = ?
+      452       or p-fact-order = 0
+      453       then do:
+      454         return error "Не указан fact-order" .
+      455       end.
+      456       assign
+      457        v-fact-order-trunc = truncate(p-fact-order, 2)
+      458       .
+      459       assign
+      460         p-fact-num = (p-fact-order - v-fact-order-trunc ) * 10000000000
+      461       .
+      462     end.
+      463   end procedure.
+      464   procedure factord-to-shift-num :
+      465     define input  parameter p-fact-order as decimal no-undo .
+      466     define output parameter p-shift-num   as integer no-undo .
+      467     define variable  p-shift-numd  as decimal   no-undo .
+      468     define variable v-fact-order-trunc as decimal no-undo .
+      469     do
+      470     on error undo, return error return-value
+      471     :
+      472       if p-fact-order = ?
+      473       or p-fact-order = 0
+      474       then do:
+      475         return error "Не указан fact-order" .
+      476       end.
+      477       assign
+      478        v-fact-order-trunc = truncate(p-fact-order, 2)  - truncate(p-fact-order,0)
+      479       .
+      480       if v-fact-order-trunc < 0.5 then do:
+      481         v-fact-order-trunc = v-fact-order-trunc + 0.5.
+      482       end.
+      483       assign
+      484         p-shift-numd = (( v-fact-order-trunc  * 100 - 50 ) + 1 ) / 2
+      485         .
+      486        assign
+      487         p-shift-num = truncate (p-shift-numd , 0)
+      488       .
+      489     end.
+      490   end procedure.
+      491   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      492   procedure cur-time :
+      493      define output parameter p-today as date      no-undo .
+      494      define output parameter p-time  as integer   no-undo .
+      495     do
+      496     on error undo, return error
+      497     :
+      498       define variable v-date1 as date      no-undo .
+      499       define variable v-date2 as date      no-undo .
+      500       define variable v-time  as integer   no-undo .
+      501       assign
+      502         v-date1 = today
+      503         v-time  = time
+      504         v-date2 = today
+      505       .
+      506       if v-date1 <> v-date2
+      507       then do:
+      508         assign
+      509           v-date1 = today
+      510           v-time  = v-time
+      511         .
+      512       end.
+      513       assign
+      514         p-today = v-date1
+      515         p-time  = v-time
+      516       .
+      517     end.
+      518   end.
+      519   function cur-time-date returns character
+      520   :
+      521     return string(today, '99/99/9999':U) .
+      522   end.
+      523   function cur-time-mjd returns decimal
+      524   :
+      525     define variable v-date as date      no-undo .
+      526     define variable v-time as integer   no-undo .
+      527     run cur-time in this-procedure
+      528       (output v-date
+      529       ,output v-time
+      530       ) .
+      531     return integer(v-date) - 2400002 + (v-time / 86400) .
+      532   end.
+      533   function cur-time-get-ending-index returns integer
+      534   (input p-number as integer
+      535   )
+      536   :
+      537     if p-number < 0
+      538     or p-number = ?
+      539     then do:
+      540       return 1 .
+      541     end.
+      542     define variable v-rest as integer   no-undo .
+      543     assign
+      544       p-number = p-number modulo 100
+      545     .
+      546     if p-number < 20
+      547     then do:
+      548       assign
+      549         v-rest = p-number
+      550       .
+      551     end.
+      552     else do:
+      553       assign
+      554         v-rest = p-number modulo 10
+      555       .
+      556     end.
+      557     case v-rest :
+      558       when 1
+      559       then do:
+      560         return 2 .
+      561       end.
+      562       when 2 or
+      563       when 3 or
+      564       when 4
+      565       then do:
+      566         return 3 .
+      567       end.
+      568       otherwise do:
+      569         return 1 .
+      570       end.
+      571     end case .
+      572   end.
+      573   procedure cur-time-mjd-to-date :
+      574      define input  parameter i-mjd-diff as decimal no-undo.
+      575      define output parameter o-Date     as date    no-undo.
+      576      define output parameter o-Time     as integer no-undo.
+      577      define variable v-day-number as integer   no-undo .
+      578      if    i-mjd-diff < 0
+      579         or i-mjd-diff = ?
+      580      then do:
+      581         return "?" .
+      582      end.
+      583      assign
+      584         v-day-number = truncate(i-mjd-diff,0).
+      585         o-Date = date(v-day-number + 2400002).
+      586         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      587     .
+      588   end.
+      589   function cur-time-mjd-to-string returns character
+      590   (input p-mjd-diff as decimal
+      591   )
+      592   :
+      593     define variable v-day-number as integer   no-undo .
+      594     define variable v-seconds    as integer   no-undo .
+      595     define variable v-hour       as integer   no-undo .
+      596     define variable v-min        as integer   no-undo .
+      597     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      598     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      599     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      600     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      601     if p-mjd-diff < 0
+      602     or p-mjd-diff = ?
+      603     then do:
+      604       return "?" .
+      605     end.
+      606     assign
+      607       v-day-number = integer(truncate(p-mjd-diff,0))
+      608       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      609     .
+      610     if v-seconds > 86400
+      611     then do:
+      612       assign
+      613         v-seconds = 86400 - 1
+      614       .
+      615     end.
+      616     if v-seconds < 0
+      617     then do:
+      618       assign
+      619         v-seconds = 0
+      620       .
+      621     end.
+      622     assign
+      623       v-hour = truncate(v-seconds / 3600, 0)
+      624     .
+      625     assign
+      626       v-seconds = v-seconds modulo 3600
+      627     .
+      628     assign
+      629       v-min = truncate(v-seconds / 60, 0)
+      630     .
+      631     assign
+      632       v-seconds = v-seconds modulo 60
+      633     .
+      634     return
+      635         (if v-day-number <> 0
+      636           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      637           else ""
+      638         )
+      639       + (if v-day-number <> 0 or v-hour <> 0
+      640           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      641           else ""
+      642         )
+      643       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      644           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      645           else ""
+      646         )
+      647       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      648       .
+      649   end.
+      650   function cur-time-string returns character
+      651   :
+      652     define variable v-date as date      no-undo .
+      653     define variable v-time as integer   no-undo .
+      654     run cur-time in this-procedure
+      655       (output v-date
+      656       ,output v-time
+      657       ) .
+      658     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      659   end.
+      660   function cur-time-string-sec returns character
+      661   :
+      662     define variable v-date as date      no-undo .
+      663     define variable v-time as integer   no-undo .
+      664     run cur-time in this-procedure
+      665       (output v-date
+      666       ,output v-time
+      667       ) .
+      668     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      669   end.
+      670   function cur-time-custom  returns character
+      671   (input p-prefix as character
+      672   ,input p-date-format as character
+      673   ,input p-delimiter as character
+      674   ,input p-time-format as character
+      675   ,input p-suffix as character
+      676   )
+      677   :
+      678     define variable v-date as date      no-undo .
+      679     define variable v-time as integer   no-undo .
+      680     run cur-time in this-procedure
+      681       (output v-date
+      682       ,output v-time
+      683       ) .
+      684     return
+      685       p-prefix
+      686       + string(v-date, p-date-format)
+      687       + p-delimiter
+      688       + string(v-time, p-time-format)
+      689       + p-suffix
+      690       .
+      691   end.
+      692   function cur-time-print  returns character
+      693   :
+      694     define variable v-date as date      no-undo .
+      695     define variable v-time as integer   no-undo .
+      696     run cur-time in this-procedure
+      697       (output v-date
+      698       ,output v-time
+      699       ) .
+      700     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      701   end.
+      702   function cur-time-datetime returns datetime
+      703   :
+      704     define variable v-char as character no-undo .
+      705     define variable v-datetime as datetime no-undo .
+      706     v-char = cur-time-string().
+      707     v-datetime = datetime(v-char).
+      708     return  v-datetime.
+      709   end.
+      710   function cur-time-string-msec returns character
+      711   :
+      712     define variable v-date as datetime  no-undo .
+      713     v-date = now.
+      714     return string(v-date) .
+      715   end.
+      716   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      717   define new global shared variable g#attr-lib  as handle no-undo .
+      718   define variable v-attr-lib-variable as handle no-undo .
+      719   procedure gds-attr-name :
+      720     define input  parameter p-code           as character no-undo .
+      721     define output parameter p-type           as character no-undo .
+      722     define output parameter p-format         as character no-undo .
+      723     define output parameter p-label          as character no-undo .
+      724     define output parameter p-user-can-edit  as logical   no-undo .
+      725     define output parameter p-output-display as logical   no-undo .
+      726     define output parameter p-other          as character no-undo .
+      727     do
+      728     on error undo, return error
+      729     :
+      730           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-name in g#attr-lib
+      731         (input  p-code
+      732         ,output p-type
+      733         ,output p-format
+      734         ,output p-label
+      735         ,output p-user-can-edit
+      736         ,output p-output-display
+      737         ,output p-other
+      738         ) no-error .
+      739       if error-status :error
+      740       then do:
+      741         undo, return error return-value .
+      742       end.
+      743     end.
+      744   end procedure.
+      745   procedure gds-attr-tooltip :
+      746     define input  parameter p-code    as character no-undo .
+      747     define output parameter p-tooltip as character no-undo .
+      748     define output parameter p-label   as character no-undo .
+      749     do
+      750     on error undo, return error
+      751     :
+      752           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-tooltip in g#attr-lib
+      753         (input  p-code
+      754         ,output p-tooltip
+      755         ,output p-label
+      756         ) no-error .
+      757       if error-status :error
+      758       then do:
+      759         undo, return error return-value .
+      760       end.
+      761     end.
+      762   end procedure.
+      763   procedure gds-attr-value :
+      764     define input  parameter p-gds-code as integer   no-undo .
+      765     define input  parameter p-code     as character no-undo .
+      766     define output parameter p-value    as character no-undo .
+      767     define output parameter p-type     as character no-undo .
+      768     do
+      769     on error undo, return error
+      770     :
+      771           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-value in g#attr-lib
+      772         (input  p-gds-code
+      773         ,input  p-code
+      774         ,output p-value
+      775         ,output p-type
+      776         ) no-error .
+      777       if error-status :error
+      778       then do:
+      779         undo, return error return-value .
+      780       end.
+      781     end.
+      782   end procedure.
+      783   procedure gds-attr-write :
+      784     define input parameter p-gds-code like ub.goods-attr.gds-code   no-undo .
+      785     define input parameter p-code     like ub.goods-attr.attr-code  no-undo .
+      786     define input parameter p-value    like ub.goods-attr.attr-value no-undo .
+      787     do
+      788     on error undo, return error
+      789     :
+      790           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-write in g#attr-lib
+      791         (input  p-gds-code
+      792         ,input  p-code
+      793         ,input  p-value
+      794         ) no-error .
+      795       if error-status :error
+      796       then do:
+      797         undo, return error return-value .
+      798       end.
+      799     end.
+      800   end procedure.
+      801   procedure gds-attr-exist :
+      802     define input  parameter p-gds-code like ub.goods-attr.gds-code   no-undo .
+      803     define input  parameter p-code     like ub.goods-attr.attr-code  no-undo .
+      804     define output parameter p-exist    as logical no-undo .
+      805     do
+      806     on error undo, return error
+      807     :
+      808           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-exist in g#attr-lib
+      809         (input  p-gds-code
+      810         ,input  p-code
+      811         ,output p-exist
+      812         ) no-error .
+      813       if error-status :error
+      814       then do:
+      815         undo, return error return-value .
+      816       end.
+      817     end.
+      818   end procedure.
+      819   procedure gds-attr-delete :
+      820     define input  parameter p-gds-code like ub.goods-attr.gds-code   no-undo .
+      821     define input  parameter p-code     like ub.goods-attr.attr-code  no-undo .
+      822     define output parameter p-deleted  as logical no-undo .
+      823     do
+      824     on error undo, return error
+      825     :
+      826           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-delete in g#attr-lib
+      827         (input  p-gds-code
+      828         ,input  p-code
+      829         ,output p-deleted
+      830         ) no-error .
+      831       if error-status :error
+      832       then do:
+      833         undo, return error return-value .
+      834       end.
+      835     end.
+      836   end procedure.
+      837   procedure gds-attr-news :
+      838     define input  parameter p-code           as character no-undo .
+      839     define output parameter p-news           as logical   no-undo .
+      840     do
+      841     on error undo, return error
+      842     :
+      843           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-news in g#attr-lib
+      844         (input  p-code
+      845         ,output p-news
+      846         ) no-error .
+      847       if error-status :error
+      848       then do:
+      849         undo, return error return-value .
+      850       end.
+      851     end.
+      852   end procedure.
+      853   procedure gds-attr-copy-to :
+      854     define input  parameter p-gds-code as integer   no-undo .
+      855     define input  parameter p-code     as character no-undo .
+      856     define input  parameter p-bh       as handle no-undo .
+      857     do
+      858     on error undo, return error
+      859     :
+      860           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-copy-to in g#attr-lib
+      861         (input  p-gds-code
+      862         ,input  p-code
+      863         ,input  p-bh
+      864         ) no-error .
+      865       if error-status :error
+      866       then do:
+      867         undo, return error return-value .
+      868       end.
+      869     end.
+      870   end procedure.
+      871   procedure gds-attr-copy :
+      872     define input  parameter p-code as character no-undo .
+      873     define output parameter p-copy as logical   no-undo .
+      874     do
+      875     on error undo, return error
+      876     :
+      877           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-copy in g#attr-lib
+      878         (input  p-code
+      879         ,output p-copy
+      880         ) no-error .
+      881       if error-status :error
+      882       then do:
+      883         undo, return error return-value .
+      884       end.
+      885     end.
+      886   end procedure.
+      887   procedure gds-attr_check-ptrl-divis :
+      888     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+      889     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+      890     define input  parameter p-value       as character no-undo .
+      891     define input  parameter p-mode        as character no-undo .
+      892     define output parameter p-correct     as logical no-undo .
+      893     define output parameter p-error-code  as character no-undo .
+      894     do
+      895     on error undo, return error return-value
+      896     :
+      897           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-ptrl-divis in g#attr-lib
+      898         (input  p-gds-code
+      899         ,input  p-code
+      900         ,input  p-value
+      901         ,input  p-mode
+      902         ,output p-correct
+      903         ,output p-error-code
+      904         ) no-error .
+      905       if error-status :error
+      906       then do:
+      907         undo, return error return-value .
+      908       end.
+      909     end.
+      910   end procedure.
+      911   procedure gds-glob-sum-grps :
+      912     define input  parameter p-mode        as character no-undo .
+      913     define input  parameter p-gds-code like ub.gds-obj-attr.gds-code no-undo .
+      914     define input-output parameter p-value as integer no-undo .
+      915     define output parameter p-setted as logical no-undo .
+      916     do
+      917     on error undo, return error
+      918     :
+      919           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-glob-sum-grps in g#attr-lib
+      920         (input p-mode
+      921         ,input p-gds-code
+      922         ,input-output p-value
+      923         ,output p-setted
+      924         ) no-error .
+      925       if error-status :error
+      926       then do:
+      927         undo, return error return-value .
+      928       end.
+      929     end.
+      930   end procedure.
+      931   procedure gds-attr_gds-ptrl-densities :
+      932     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+      933     define input-output  parameter p-value as character no-undo .
+      934     define output parameter p-setted      as logical no-undo .
+      935     do
+      936     on error undo, return error return-value
+      937     :
+      938           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_gds-ptrl-densities in g#attr-lib
+      939         (input  p-gds-code
+      940         ,input-output p-value
+      941         ,output p-setted
+      942         ) no-error .
+      943       if error-status :error
+      944       then do:
+      945         undo, return error return-value .
+      946       end.
+      947     end.
+      948   end procedure.
+      949   procedure gds-attr_gds-CommodityCode :
+      950     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+      951     define input-output  parameter p-value as character no-undo .
+      952     define output parameter p-setted      as logical no-undo .
+      953     do
+      954     on error undo, return error return-value
+      955     :
+      956           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_gds-CommodityCode in g#attr-lib
+      957         (input  p-gds-code
+      958         ,input-output p-value
+      959         ,output p-setted
+      960         ) no-error .
+      961       if error-status :error
+      962       then do:
+      963         undo, return error return-value .
+      964       end.
+      965     end.
+      966   end procedure.
+      967   procedure gds-attr_check-office-type :
+      968     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+      969     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+      970     define input  parameter p-value       as character no-undo .
+      971     define input  parameter p-mode        as character no-undo .
+      972     define output parameter p-correct     as logical no-undo .
+      973     define output parameter p-error-code  as character no-undo .
+      974     do
+      975     on error undo, return error return-value
+      976     :
+      977           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-office-type in g#attr-lib
+      978         (input  p-gds-code
+      979         ,input  p-code
+      980         ,input  p-value
+      981         ,input  p-mode
+      982         ,output p-correct
+      983         ,output p-error-code
+      984         ) no-error .
+      985       if error-status :error
+      986       then do:
+      987         undo, return error return-value .
+      988       end.
+      989     end.
+      990   end procedure.
+      991   procedure gds-attr_check-mark-type :
+      992     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+      993     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+      994     define input  parameter p-value       as character no-undo .
+      995     define input  parameter p-mode        as character no-undo .
+      996     define output parameter p-correct     as logical no-undo .
+      997     define output parameter p-error-code  as character no-undo .
+      998     do
+      999     on error undo, return error return-value
+     1000     :
+     1001           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-mark-type in g#attr-lib
+     1002         (input  p-gds-code
+     1003         ,input  p-code
+     1004         ,input  p-value
+     1005         ,input  p-mode
+     1006         ,output p-correct
+     1007         ,output p-error-code
+     1008         ) no-error .
+     1009       if error-status :error
+     1010       then do:
+     1011         undo, return error return-value .
+     1012       end.
+     1013     end.
+     1014   end procedure.
+     1015   procedure gds-attr_check-emrc-type :
+     1016     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1017     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+     1018     define input  parameter p-value       as character no-undo .
+     1019     define input  parameter p-mode        as character no-undo .
+     1020     define output parameter p-correct     as logical no-undo .
+     1021     define output parameter p-error-code  as character no-undo .
+     1022     do
+     1023     on error undo, return error return-value
+     1024     :
+     1025           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-emrc-type in g#attr-lib
+     1026         (input  p-gds-code
+     1027         ,input  p-code
+     1028         ,input  p-value
+     1029         ,input  p-mode
+     1030         ,output p-correct
+     1031         ,output p-error-code
+     1032         ) no-error .
+     1033       if error-status :error
+     1034       then do:
+     1035         undo, return error return-value .
+     1036       end.
+     1037     end.
+     1038   end procedure.
+     1039   procedure gds-attr_check-group-np :
+     1040     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1041     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+     1042     define input  parameter p-value       as character no-undo .
+     1043     define input  parameter p-mode        as character no-undo .
+     1044     define output parameter p-correct     as logical no-undo .
+     1045     define output parameter p-error-code  as character no-undo .
+     1046     do
+     1047     on error undo, return error return-value
+     1048     :
+     1049           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-group-np in g#attr-lib
+     1050         (input  p-gds-code
+     1051         ,input  p-code
+     1052         ,input  p-value
+     1053         ,input  p-mode
+     1054         ,output p-correct
+     1055         ,output p-error-code
+     1056         ) no-error .
+     1057       if error-status :error
+     1058       then do:
+     1059         undo, return error return-value .
+     1060       end.
+     1061     end.
+     1062   end procedure.
+     1063   procedure gds-attr_check-item-matter-mark :
+     1064     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1065     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+     1066     define input  parameter p-value       as character no-undo .
+     1067     define input  parameter p-mode        as character no-undo .
+     1068     define output parameter p-correct     as logical no-undo .
+     1069     define output parameter p-error-code  as character no-undo .
+     1070     do
+     1071     on error undo, return error return-value
+     1072     :
+     1073           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-item-matter-mark in g#attr-lib
+     1074         (input  p-gds-code
+     1075         ,input  p-code
+     1076         ,input  p-value
+     1077         ,input  p-mode
+     1078         ,output p-correct
+     1079         ,output p-error-code
+     1080         ) no-error .
+     1081       if error-status :error
+     1082       then do:
+     1083         undo, return error return-value .
+     1084       end.
+     1085     end.
+     1086   end procedure.
+     1087   procedure gds-attr_check-type-method-calc :
+     1088     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1089     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+     1090     define input  parameter p-value       as character no-undo .
+     1091     define input  parameter p-mode        as character no-undo .
+     1092     define output parameter p-correct     as logical no-undo .
+     1093     define output parameter p-error-code  as character no-undo .
+     1094     do
+     1095     on error undo, return error return-value
+     1096     :
+     1097           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-type-method-calc in g#attr-lib
+     1098         (input  p-gds-code
+     1099         ,input  p-code
+     1100         ,input  p-value
+     1101         ,input  p-mode
+     1102         ,output p-correct
+     1103         ,output p-error-code
+     1104         ) no-error .
+     1105       if error-status :error
+     1106       then do:
+     1107         undo, return error return-value .
+     1108       end.
+     1109     end.
+     1110   end procedure.
+     1111   procedure gds-attr_check-is-loyalty-payment :
+     1112     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1113     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+     1114     define input  parameter p-value       as character no-undo .
+     1115     define input  parameter p-mode        as character no-undo .
+     1116     define output parameter p-correct     as logical no-undo .
+     1117     define output parameter p-error-code  as character no-undo .
+     1118     do
+     1119     on error undo, return error return-value
+     1120     :
+     1121           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-is-loyalty-payment in g#attr-lib
+     1122         (input  p-gds-code
+     1123         ,input  p-code
+     1124         ,input  p-value
+     1125         ,input  p-mode
+     1126         ,output p-correct
+     1127         ,output p-error-code
+     1128         ) no-error .
+     1129       if error-status :error
+     1130       then do:
+     1131         undo, return error return-value .
+     1132       end.
+     1133     end.
+     1134   end procedure.
+     1135   procedure gds-attr_init-15x80 :
+     1136     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1137     define output parameter p-attr-value  as character no-undo .
+     1138     do
+     1139     on error undo, return error return-value
+     1140     :
+     1141           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_init-15x80 in g#attr-lib
+     1142         (input  p-gds-code
+     1143         ,output p-attr-value
+     1144         ) no-error .
+     1145       if error-status :error
+     1146       then do:
+     1147         message error-status:get-message(1) skip return-value view-as alert-box .
+     1148         undo, return error return-value .
+     1149       end.
+     1150     end.
+     1151   end procedure.
+     1152   procedure gds-attr_init-8x50 :
+     1153     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1154     define output parameter p-attr-value  as character no-undo .
+     1155     do
+     1156     on error undo, return error return-value
+     1157     :
+     1158           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_init-8x50 in g#attr-lib
+     1159         (input  p-gds-code
+     1160         ,output p-attr-value
+     1161         ) no-error .
+     1162       if error-status :error
+     1163       then do:
+     1164         message error-status:get-message(1) skip return-value view-as alert-box .
+     1165         undo, return error return-value .
+     1166       end.
+     1167     end.
+     1168   end procedure.
+     1169   procedure gds-attr_init-6x50 :
+     1170     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1171     define output parameter p-attr-value  as character no-undo .
+     1172     do
+     1173     on error undo, return error return-value
+     1174     :
+     1175           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_init-6x50 in g#attr-lib
+     1176         (input  p-gds-code
+     1177         ,output p-attr-value
+     1178         ) no-error .
+     1179       if error-status :error
+     1180       then do:
+     1181         message error-status:get-message(1) skip return-value view-as alert-box .
+     1182         undo, return error return-value .
+     1183       end.
+     1184     end.
+     1185   end procedure.
+     1186   procedure gds-attr-manual-edit :
+     1187     define input  parameter p-code        as character no-undo .
+     1188     define output parameter p-section-num as integer no-undo .
+     1189     do
+     1190     on error undo, return error
+     1191     :
+     1192           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-manual-edit in g#attr-lib
+     1193         (input  p-code
+     1194         ,output p-section-num
+     1195         ) no-error .
+     1196       if error-status :error
+     1197       then do:
+     1198         undo, return error return-value .
+     1199       end.
+     1200     end.
+     1201   end procedure.
+     1202   procedure gds-attr-batch-edit :
+     1203     define input  parameter p-code        as character no-undo .
+     1204     define output parameter p-section-num as integer   no-undo .
+     1205     do
+     1206     on error undo, return error
+     1207     :
+     1208           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr-batch-edit in g#attr-lib
+     1209         (input  p-code
+     1210         ,output p-section-num
+     1211         ) no-error .
+     1212       if error-status :error
+     1213       then do:
+     1214         undo, return error return-value .
+     1215       end.
+     1216     end.
+     1217   end procedure.
+     1218   procedure gds-attr_check-can-energy-value :
+     1219     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1220     define input  parameter p-code        like ub.goods-attr.attr-code  no-undo .
+     1221     define input  parameter p-value       as character no-undo .
+     1222     define input  parameter p-mode        as character no-undo .
+     1223     define output parameter p-correct     as logical no-undo .
+     1224     define output parameter p-error-code  as character no-undo .
+     1225     do
+     1226     on error undo, return error return-value
+     1227     :
+     1228           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-can-energy-value in g#attr-lib
+     1229         (input  p-gds-code
+     1230         ,input  p-code
+     1231         ,input  p-value
+     1232         ,input  p-mode
+     1233         ,output p-correct
+     1234         ,output p-error-code
+     1235         ) no-error .
+     1236       if error-status :error
+     1237       then do:
+     1238         undo, return error return-value .
+     1239       end.
+     1240     end.
+     1241   end procedure.
+     1242   procedure gds-attr_check-can-set-dt-seasons :
+     1243     define input  parameter p-gds-code    like ub.goods-attr.gds-code     no-undo .
+     1244     define output parameter p-can-set  as logical no-undo .
+     1245     do
+     1246     on error undo, return error return-value
+     1247     :
+     1248           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-attr_check-can-set-dt-seasons in g#attr-lib
+     1249         (input  p-gds-code
+     1250         ,output p-can-set
+     1251         ) no-error .
+     1252       if error-status :error
+     1253       then do:
+     1254         undo, return error return-value .
+     1255       end.
+     1256     end.
+     1257   end procedure.
+     1258   procedure isExemplarGoods :
+     1259     define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+     1260     define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+     1261     define input  parameter p-gds-code as   integer                    no-undo .
+     1262     define output parameter o-result   as   logical                    no-undo.
+     1263     do
+     1264     on error undo, return error
+     1265     :
+     1266           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run isExemplarGoods in g#attr-lib
+     1267         (input  p-obj-type
+     1268         ,input  p-obj-code
+     1269         ,input p-gds-code
+     1270         ,output o-result
+     1271         ) no-error .
+     1272       if error-status :error
+     1273       then do:
+     1274         undo, return error return-value .
+     1275       end.
+     1276     end.
+     1277   end procedure.
+     1278   procedure isVolumArticGoods :
+     1279     define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+     1280     define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+     1281     define input  parameter p-gds-code as   integer                    no-undo .
+     1282     define output parameter o-result   as   logical                    no-undo.
+     1283     do
+     1284     on error undo, return error
+     1285     :
+     1286           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run isVolumArticGoods in g#attr-lib
+     1287         (input  p-obj-type
+     1288         ,input  p-obj-code
+     1289         ,input p-gds-code
+     1290         ,output o-result
+     1291         ) no-error .
+     1292       if error-status :error
+     1293       then do:
+     1294         undo, return error return-value .
+     1295       end.
+     1296     end.
+     1297   end procedure.
+     1298   define variable v-today          as date      no-undo.
+     1299   define variable v-time           as integer   no-undo.
+     1300   define variable v-obj-date       as date      no-undo.
+     1301   define variable v-sys-time       as integer   no-undo.
+     1302   define variable v-sys-date       as date      no-undo.
+     1303   define variable v-max-shift-days as integer   no-undo.
+     1304   define variable v-par-type       as character no-undo.
+     1305   define variable v-host-code      like ub.shop.host-code no-undo.
+     1306   define buffer prev-shift      for ub.shift-obj.
+     1307   define buffer buf_shift-obj   for ub.shift-obj.
+     1308   define buffer buf_c-shift-obj for ub.c-shift-obj.
+     1309   define buffer buf_c-sht-hist  for ub.c-sht-hist.
+     1310   define variable l-shift-on         as logical   no-undo .
+     1311   define variable lok                as logical   no-undo .
+     1312   define variable v-avail-petrol     as logical   no-undo .
+     1313   define variable v-is-petrol        as logical   no-undo .
+     1314   define variable v-is-pieces        as logical   no-undo .
+     1315   define variable v-ptrl-without-rvs as character no-undo .
+     1316   define variable v-attr-type        as character no-undo .
+     1317   define variable v-edit-time        as logical   no-undo .
+     1318   define variable v-vid-action       as integer   no-undo .
+     1319   define variable v-vid-ok           as logical   no-undo .
+     1320   define variable v-vid-mes          as character no-undo .
+     1321   define variable v-vid-param        as longchar  no-undo .
+     1322   define variable v-shift-staff-list as character no-undo .
+     1323   define variable v-shift-manager    as character no-undo .
+     1324   define buffer buf_inkas    for ub.inkas .
+     1325   define buffer buf_pl-gds   for ub.pl-gds .
+     1326   define buffer buf_goods    for ub.goods .
+     1327   define buffer buf_rvs-doc  for ub.rvs-doc .
+     1328   define buffer buf_rvs-line for ub.rvs-line .
+     1329   define variable v-fact-status-list as character no-undo .
+     1330   define variable ii                 as integer   no-undo .
+     1331   main-block:
+     1332   do
+     1333       on error undo, return error return-value
+     1334       :
+     1335       v-fact-status-list = (if 'факт':U < 'запрос':U
+     1336           then ('факт':U + chr(44) + 'запрос':U)
+     1337           else ('запрос':U + chr(44) + 'факт':U)).
+     1338   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1339   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+     1340     (input  ub.shift-obj.obj-type
+     1341     ,input  ub.shift-obj.obj-code
+     1342     ,input  'shift-on=request'
+     1343     ,output l-shift-on
+     1344     ) no-error .
+     1345       if error-status :error then
+     1346       do:
+     1347           message
+     1348               vss-workfile vss-revision vss-description skip
+     1349               "Ошибка при запуске процедуры objat" skip
+     1350               error-status :get-message(1) skip
+     1351               return-value skip
+     1352               view-as alert-box error .
+     1353           undo main-block, return error .
+     1354       end.
+     1355       if l-shift-on <> yes then
+     1356       do:
+     1357           message
+     1358               vss-workfile vss-revision vss-description skip
+     1359               "На объекте выключены смены" skip
+     1360               "Работа со сменами невозможна" skip
+     1361               "Объект" ub.shift-obj.obj-type ub.shift-obj.obj-code skip
+     1362               view-as alert-box error .
+     1363           undo main-block, return error .
+     1364       end.
+     1365       if lookup (ub.shift-obj.status_, 'ожд,тек,зкр,отм':U) = 0
+     1366           then
+     1367       do:
+     1368           message
+     1369               "Смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1370               "Недопустимый статус смены" ub.shift-obj.status_ skip
+     1371               "Невозможно выполнить операцию со сменой" skip
+     1372               view-as alert-box error .
+     1373           undo main-block, return error .
+     1374       end.
+     1375       if not new( ub.shift-obj )
+     1376           and ( ub.shift-obj.obj-type     <> oldb.obj-type
+     1377           or ub.shift-obj.obj-code   <> oldb.obj-code
+     1378           or ub.shift-obj.shift-date <> oldb.shift-date
+     1379           or ub.shift-obj.shift-num  <> oldb.shift-num
+     1380           )
+     1381           then
+     1382       do:
+     1383           message
+     1384               vss-workfile vss-revision vss-description skip
+     1385               "Нельзя менять уникальные параметры смены" skip
+     1386               "Объект:" ub.shift-obj.obj-type ub.shift-obj.obj-code skip
+     1387               "Смена:" ub.shift-obj.shift-date skip
+     1388               "Порядок:" ub.shift-obj.shift-num skip
+     1389               view-as alert-box error .
+     1390           undo main-block, return error .
+     1391       end.
+     1392       if not new( ub.shift-obj )
+     1393           and ub.shift-obj.shift-name <> oldb.shift-name
+     1394           then
+     1395       do:
+     1396           find first buf_shift-obj no-lock
+     1397               where buf_shift-obj.obj-type   = ub.shift-obj.obj-type
+     1398               and buf_shift-obj.obj-code   = ub.shift-obj.obj-code
+     1399               and buf_shift-obj.shift-date = ub.shift-obj.shift-date
+     1400               and buf_shift-obj.shift-name = ub.shift-obj.shift-name
+     1401               and rowid( buf_shift-obj )   <> rowid( ub.shift-obj )
+     1402               no-error .
+     1403           if available buf_shift-obj then
+     1404           do:
+     1405               message
+     1406                   vss-workfile vss-revision vss-description skip(1)
+     1407                   "Уже существует смена с номером:" ub.shift-obj.shift-name
+     1408                   "Дата:" string( ub.shift-obj.shift-date, "99/99/9999" ) skip
+     1409                   "Объект:" ub.shift-obj.obj-type ub.shift-obj.obj-code skip
+     1410                   view-as alert-box error .
+     1411               undo main-block, return error .
+     1412           end.
+     1413       end.
+     1414       if ub.shift-obj.shift-date = ?
+     1415           or ub.shift-obj.shift-num  = ?
+     1416           or ub.shift-obj.shift-name = ?
+     1417           then
+     1418       do:
+     1419           message
+     1420               vss-workfile vss-revision vss-description skip
+     1421               "Заданы не все основные параметры смены" skip
+     1422               "Объект:" ub.shift-obj.obj-type ub.shift-obj.obj-code skip
+     1423               "Смена:" ub.shift-obj.shift-date skip
+     1424               "Номер:" ub.shift-obj.shift-name skip
+     1425               "Порядок:" ub.shift-obj.shift-num skip
+     1426               "Статус:" ub.shift-obj.status_ skip
+     1427               view-as alert-box error .
+     1428           undo main-block, return error .
+     1429       end.
+     1430       if not g#news and ub.shift-obj.status_ = 'зкр':U and oldb.status_ = 'зкр':U then
+     1431       do:
+     1432           run gbl/sht-time-check.p(
+     1433               ub.shift-obj.shift-date,
+     1434               ub.shift-obj.shift-num,
+     1435               ub.shift-obj.obj-type,
+     1436               ub.shift-obj.obj-code,
+     1437               ub.shift-obj.open-time,
+     1438               ub.shift-obj.close-time,
+     1439               ub.shift-obj.open-date,
+     1440               ub.shift-obj.close-date
+     1441               ) no-error.
+     1442           if error-status:error then
+     1443               return error return-value.
+     1444           v-edit-time = true.
+     1445       end.
+     1446       if ub.shift-obj.status_ = 'ожд':U then
+     1447       do:
+     1448           find last prev-shift
+     1449               where prev-shift.obj-type = ub.shift-obj.obj-type
+     1450               and prev-shift.obj-code = ub.shift-obj.obj-code
+     1451               and prev-shift.status_ = 'тек':U
+     1452               no-error .
+     1453           if  available prev-shift
+     1454               and ( prev-shift.shift-date > ub.shift-obj.shift-date
+     1455               or ( prev-shift.shift-date = ub.shift-obj.shift-date
+     1456               and prev-shift.shift-num  > ub.shift-obj.shift-num ) )
+     1457               then
+     1458           do:
+     1459               message
+     1460                   "Была найдена смена со статусом" prev-shift.status_ skip
+     1461                   "Любая текущая или закрытая смена должна дату или номер больший чем у ожидаемой смены" skip
+     1462                   "Ожидаемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1463                   "Найдена смена" prev-shift.shift-date "Номер" prev-shift.shift-num skip
+     1464                   view-as alert-box error .
+     1465               undo main-block, return error .
+     1466           end.
+     1467           find last prev-shift where
+     1468               prev-shift.obj-type = ub.shift-obj.obj-type and
+     1469               prev-shift.obj-code = ub.shift-obj.obj-code and
+     1470               prev-shift.status_ = 'зкр':U
+     1471               use-index pi no-error.
+     1472           if available prev-shift
+     1473               and ( prev-shift.shift-date > ub.shift-obj.shift-date
+     1474               or ( prev-shift.shift-date = ub.shift-obj.shift-date
+     1475               and prev-shift.shift-num  > ub.shift-obj.shift-num ) )
+     1476               then
+     1477           do:
+     1478               message
+     1479                   "Найдена смена со статусом" prev-shift.status_ skip
+     1480                   "Любая текущая или закрытая смена должна иметь дату или номер больший чем у ожидаемой смены" skip
+     1481                   "Одидаемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num  skip
+     1482                   "Найдена смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num
+     1483                   view-as alert-box error .
+     1484               undo main-block, return error .
+     1485           end.
+     1486       end.
+     1487   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1488   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curobjdt in g#library
+     1489     (input  ub.shift-obj.obj-type
+     1490     ,input  ub.shift-obj.obj-code
+     1491     ,output v-obj-date
+     1492     )  .
+     1493       if not g#news and not v-edit-time then
+     1494       do:
+     1495           run cur-time in this-procedure ( output v-sys-date
+     1496               , output v-sys-time
+     1497               ).
+     1498           if oldb.status_ = ub.shift-obj.status_ then
+     1499           do:
+     1500               if  oldb.shift-date = ub.shift-obj.shift-date
+     1501                   and oldb.shift-num  = ub.shift-obj.shift-num
+     1502                   and ( oldb.status_ <> 'ожд':U
+     1503                   or oldb.open-time <> ub.shift-obj.open-time )
+     1504                   then
+     1505               do:
+     1506                   undo main-block, return error "Любое изменение смены без изменения статуса должно затрагивать дату, номер или время смены." .
+     1507               end.
+     1508               else
+     1509               do:
+     1510                   if ub.shift-obj.status_ <> 'ожд':U then
+     1511                   do:
+     1512                       message
+     1513                           "Дату или номер смены можно менять только для ожидаемой смены" skip
+     1514                           "Дата смены" oldb.shift-date skip
+     1515                           "Номер" oldb.shift-name skip
+     1516                           "Порядок" oldb.shift-num
+     1517                           view-as alert-box error .
+     1518                       undo main-block, return error .
+     1519                   end.
+     1520               end.
+     1521           end.
+     1522           else
+     1523           do:
+     1524               define variable v-valid-status-change as character no-undo .
+     1525               assign
+     1526                   v-valid-status-change = (''              + '-' + 'ожд':U)
+     1527             + "," + (''              + '-' + 'тек':U )
+     1528             + "," + ('ожд':U + '-' + 'тек':U )
+     1529             + "," + ('тек':U  + '-' + 'зкр':U  )
+     1530             + "," + ('ожд':U + '-' + 'отм':U)
+     1531             + "," + ('тек':U  + '-' + 'ожд':U)
+     1532             + "," + ('зкр':U   + '-' + 'тек':U )
+     1533                   .
+     1534               if lookup( (oldb.status_ + '-' + ub.shift-obj.status_), v-valid-status-change) > 0
+     1535                   then
+     1536               do:
+     1537               end.
+     1538               else
+     1539               do:
+     1540                   message
+     1541                       "Смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1542                       "Недопустимая замена статуса" oldb.status_ "->" ub.shift-obj.status_ skip
+     1543                       "Невозможно выполнить операцию со сменой" skip
+     1544                       view-as alert-box error .
+     1545                   undo main-block, return error .
+     1546               end.
+     1547               if  ub.shift-obj.status_ = 'тек':U
+     1548                   and (oldb.status_        = 'ожд':U
+     1549                   or oldb.status_        = ""
+     1550                   )
+     1551                   then
+     1552               do:
+     1553                   if ub.shift-obj.shift-num < 1
+     1554                       or ub.shift-obj.shift-num > 24
+     1555                       then
+     1556                   do:
+     1557                       message
+     1558                           "Неправильный номер смены" skip
+     1559                           "Невозможно открыть новую смену" skip
+     1560                           "Текущая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1561                           view-as alert-box error .
+     1562                       undo main-block, return error .
+     1563                   end.
+     1564                   if ub.shift-obj.shift-date <> v-obj-date then
+     1565                   do:
+     1566                       message
+     1567                           "Неправильная дата начала смены" skip
+     1568                           "Смену можно открыть только сегодняшним днем" skip
+     1569                           "Невозможно открыть новую смену" skip
+     1570                           "Текущая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1571                           view-as alert-box error .
+     1572                       undo main-block, return error .
+     1573                   end.
+     1574                   find first prev-shift
+     1575                       where prev-shift.obj-type = ub.shift-obj.obj-type
+     1576                       and prev-shift.obj-code = ub.shift-obj.obj-code
+     1577                       and prev-shift.status_ = 'тек':U
+     1578                       and recid (prev-shift) <> recid (ub.shift-obj)
+     1579                       no-error .
+     1580                   if available prev-shift then
+     1581                   do:
+     1582                       message
+     1583                           "Не закрыта текущая смена" skip
+     1584                           "Невозможно открыть новую смену" skip
+     1585                           "Текущая смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     1586                           view-as alert-box error .
+     1587                       undo main-block, return error .
+     1588                   end.
+     1589                   find first buf_rvs-doc
+     1590                       where buf_rvs-doc.obj-type = ub.shift-obj.obj-type
+     1591                       and buf_rvs-doc.obj-code = ub.shift-obj.obj-code
+     1592                       and buf_rvs-doc.rvs-type <> 'проверка':U
+     1593                       and buf_rvs-doc.status_  <> 'факт':U
+     1594                       no-error .
+     1595                   if available buf_rvs-doc then
+     1596                   do:
+     1597                       message
+     1598                           "Найдена незакрытая сверка" skip
+     1599                           "Невозможно открыть новую смену" skip
+     1600                           "Сверка" buf_rvs-doc.rvs-code skip
+     1601                           view-as alert-box error .
+     1602                       undo main-block, return error .
+     1603                   end.
+     1604                   do ii = 0 to num-entries(v-fact-status-list):
+     1605                       CASE ii:
+     1606                           when 0 then
+     1607                               do:
+     1608                                   find first buf_inkas no-lock
+     1609                                       where buf_inkas.obj-type = ub.shift-obj.obj-type
+     1610                                       and buf_inkas.obj-code = ub.shift-obj.obj-code
+     1611                                       and buf_inkas.status_ < entry(1, v-fact-status-list) no-error .
+     1612                               end.
+     1613                           when num-entries(v-fact-status-list) then
+     1614                               do:
+     1615                                   find first buf_inkas no-lock
+     1616                                       where buf_inkas.obj-type = ub.shift-obj.obj-type
+     1617                                       and buf_inkas.obj-code = ub.shift-obj.obj-code
+     1618                                       and buf_inkas.status_ > entry(num-entries(v-fact-status-list), v-fact-status-list) no-error .
+     1619                               end.
+     1620                           otherwise
+     1621                           do:
+     1622                               find first buf_inkas no-lock
+     1623                                   where buf_inkas.obj-type = ub.shift-obj.obj-type
+     1624                                   and buf_inkas.obj-code = ub.shift-obj.obj-code
+     1625                                   and buf_inkas.status_ > entry(ii, v-fact-status-list)
+     1626                                   and buf_inkas.status_ < entry(ii + 1, v-fact-status-list)
+     1627                                   no-error .
+     1628                           end.
+     1629                       END CASE.
+     1630                       if available buf_inkas then
+     1631                       do:
+     1632                           message
+     1633                               "Найдена незакрытая продажа" skip
+     1634                               "Невозможно открыть новую смену" skip
+     1635                               "Продажа" buf_inkas.inkas-code skip
+     1636                               view-as alert-box error .
+     1637                           undo main-block, return error.
+     1638                       end.
+     1639                   end.
+     1640                   find last prev-shift
+     1641                       where prev-shift.obj-type = ub.shift-obj.obj-type
+     1642                       and prev-shift.obj-code = ub.shift-obj.obj-code
+     1643                       and prev-shift.status_ = 'зкр':U
+     1644                       use-index pi
+     1645                       no-error .
+     1646                   if available prev-shift then
+     1647                   do:
+     1648                       if  ub.shift-obj.shift-date > prev-shift.shift-date
+     1649                           or  ( ub.shift-obj.shift-date = prev-shift.shift-date
+     1650                           and ub.shift-obj.shift-num  > prev-shift.shift-num
+     1651                           )
+     1652                           then
+     1653                       do:
+     1654                           .
+     1655                       end.
+     1656                       else
+     1657                       do:
+     1658                           message
+     1659                               "Найдена смена со статусом" 'зкр':U skip
+     1660                               "Найденная смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     1661                               "Новая смена должна по времени идти после закрытой" skip
+     1662                               "Невозможно открыть новую смену" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1663                               view-as alert-box error .
+     1664                           undo main-block, return error .
+     1665                       end.
+     1666                       if prev-shift.close-date < v-obj-date
+     1667                           or ( prev-shift.close-date = v-obj-date
+     1668                           and prev-shift.close-time < shift-obj.open-time    ) then
+     1669                       do:
+     1670                       end.
+     1671                       else
+     1672                       do:
+     1673                           message
+     1674                               "Найдена смена со статусом" 'зкр':U skip
+     1675                               "Найденная смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     1676                               "Закрыта" prev-shift.close-date string (prev-shift.close-time, "HH:MM") skip
+     1677                               "Сейчас" v-obj-date string (ub.shift-obj.open-time, "HH:MM") skip
+     1678                               "Новая смена должна быть открыта после закрытия предыдущей" skip
+     1679                               "Невозможно открыть новую смену" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1680                               view-as alert-box error .
+     1681                           undo main-block, return error .
+     1682                       end.
+     1683                   end.
+     1684                   find first prev-shift where
+     1685                       prev-shift.obj-type = ub.shift-obj.obj-type and
+     1686                       prev-shift.obj-code = ub.shift-obj.obj-code and
+     1687                       prev-shift.status_ = 'ожд':U
+     1688                       use-index pi no-error.
+     1689                   if available prev-shift then
+     1690                   do:
+     1691                       if oldb.status_ = 'ожд':U then
+     1692                       do:
+     1693                           if (prev-shift.shift-date < ub.shift-obj.shift-date or
+     1694                               prev-shift.shift-date = ub.shift-obj.shift-date and
+     1695                               prev-shift.shift-num < ub.shift-obj.shift-num) then
+     1696                           do:
+     1697                               message
+     1698                                   "Найдена более ранняя смена со статусом" 'ожд':U skip
+     1699                                   "Найденная смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     1700                                   "Новую смену можно открыть только из нее" skip
+     1701                                   "Невозможно открыть новую смену" skip
+     1702                                   view-as alert-box error .
+     1703                               undo main-block, return error .
+     1704                           end.
+     1705                       end.
+     1706                       else
+     1707                       do:
+     1708                           message
+     1709                               "Найдена смена со статусом" 'ожд':U skip
+     1710                               "Найденная смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     1711                               "Новую смену можно открыть, только изменив статус на" 'тек':U skip
+     1712                               "Невозможно открыть новую смену" skip
+     1713                               view-as alert-box error .
+     1714                           undo main-block, return error .
+     1715                       end.
+     1716                   end.
+     1717                   if ub.shift-obj.shift-date <> v-obj-date then
+     1718                   do:
+     1719                       message
+     1720                           "Открываемая смена" ub.shift-obj.shift-date ub.shift-obj.shift-name ub.shift-obj.shift-num skip
+     1721                           "Новая смена должна открываться сегодняшним числом" skip
+     1722                           "Невозможно открыть новую смену"
+     1723                           view-as alert-box error .
+     1724                       undo main-block, return error .
+     1725                   end.
+     1726                   assign
+     1727                       ub.shift-obj.open-id   = g#userid
+     1728                       ub.shift-obj.open-date = v-obj-date
+     1729                       .
+     1730                   v-vid-action = 51 .
+     1731                   v-vid-param = "SHOP_NUM=" + string(ub.shift-obj.obj-code) + chr(4) +
+     1732                       "SHIFT_NUM=" + string(ub.shift-obj.shift-num) + string(ub.shift-obj.shift-date, "99999999") + chr(4) +
+     1733                       "RESULT=0" + chr(4) +
+     1734                       "Description=".
+     1735               end.
+     1736               if ub.shift-obj.status_ = 'зкр':U then
+     1737               do:
+     1738                   if ub.shift-obj.open-date < v-obj-date
+     1739                       or (ub.shift-obj.open-date = v-obj-date
+     1740                       and ub.shift-obj.open-time < ub.shift-obj.close-time
+     1741                       )
+     1742                       then
+     1743                   do:
+     1744                   end.
+     1745                   else
+     1746                   do:
+     1747                       message
+     1748                           "Время и дата открытия должны быть раньше закрытия" skip
+     1749                           "Открыта" ub.shift-obj.open-date string (ub.shift-obj.open-time, "HH:MM") skip
+     1750                           "Сейчас" v-obj-date string (ub.shift-obj.close-time, "HH:MM") skip
+     1751                           "Невозможно закрыть смену N" ub.shift-obj.shift-name "порядок" ub.shift-obj.shift-num "от" ub.shift-obj.shift-date skip
+     1752                           view-as alert-box error .
+     1753                       undo main-block, return error .
+     1754                   end.
+     1755                   find first prev-shift
+     1756                       where prev-shift.obj-type = ub.shift-obj.obj-type
+     1757                       and prev-shift.obj-code = ub.shift-obj.obj-code
+     1758                       and prev-shift.status_ = 'тек':U
+     1759                       and recid (prev-shift) <> recid (ub.shift-obj)
+     1760                       no-error .
+     1761                   if available prev-shift then
+     1762                   do:
+     1763                       message
+     1764                           "Найдена другая открытая смена" skip
+     1765                           "Невозможно закрыть текущую смену" skip
+     1766                           "Найденная смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     1767                           view-as alert-box error .
+     1768                       undo main-block, return error .
+     1769                   end.
+     1770                   find first buf_rvs-doc
+     1771                       where buf_rvs-doc.obj-type = ub.shift-obj.obj-type
+     1772                       and buf_rvs-doc.obj-code = ub.shift-obj.obj-code
+     1773                       and buf_rvs-doc.rvs-type <> 'проверка':U
+     1774                       and buf_rvs-doc.status_  <> 'факт':U
+     1775                       no-error .
+     1776                   if available buf_rvs-doc then
+     1777                   do:
+     1778                       message
+     1779                           "Найдена незакрытая сверка" skip
+     1780                           "Невозможно закрыть текущую смену" skip
+     1781                           "Сверка" buf_rvs-doc.rvs-code
+     1782                           view-as alert-box error .
+     1783                       undo main-block, return error .
+     1784                   end.
+     1785                   assign
+     1786                       v-avail-petrol = false
+     1787                       .
+     1788                   _block_chk-ptrl:
+     1789                   for each buf_pl-gds
+     1790                       where buf_pl-gds.obj-type = ub.shift-obj.obj-type
+     1791                       and buf_pl-gds.obj-code = ub.shift-obj.obj-code
+     1792                       on error undo main-block, return error
+     1793                       :
+     1794                       find first buf_goods no-lock
+     1795                           where buf_goods.gds-code = buf_pl-gds.gds-code
+     1796                           .
+     1797   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_is-petrl in g#lib-trn
+     1798     (
+     1799        input buf_goods.artic
+     1800     ,  input buf_goods.prod-type
+     1801     ,  input buf_goods.prod-code
+     1802     , output v-is-petrol
+     1803     , output v-is-pieces
+     1804     ) no-error.
+     1805                       if v-is-petrol = true
+     1806                           and v-is-pieces = false
+     1807                           then
+     1808                       do:
+     1809                           assign
+     1810                               v-avail-petrol = true
+     1811                               .
+     1812                           leave _block_chk-ptrl.
+     1813                       end.
+     1814                   end.
+     1815                   if v-avail-petrol = true then
+     1816                   do:
+     1817                       find  buf_rvs-doc
+     1818                           where buf_rvs-doc.obj-type   = ub.shift-obj.obj-type
+     1819                           and buf_rvs-doc.obj-code   = ub.shift-obj.obj-code
+     1820                           and buf_rvs-doc.shift-date = ub.shift-obj.shift-date
+     1821                           and buf_rvs-doc.shift-num  = ub.shift-obj.shift-num
+     1822                           and buf_rvs-doc.status_    = 'факт':U
+     1823                           and buf_rvs-doc.rvs-type   = 'смена':U
+     1824                           no-error .
+     1825                       if not available buf_rvs-doc then
+     1826                       do:
+     1827                           message
+     1828                               "Нет закрытой сверки сменой сверки" skip
+     1829                               "Невозможно закрыть текущую смену" skip
+     1830                               "Закрываемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num
+     1831                               view-as alert-box error .
+     1832                           undo main-block, return error .
+     1833                       end.
+     1834                       if ub.shift-obj.shift-name <> buf_rvs-doc.shift-name then
+     1835                       do:
+     1836                           message
+     1837                               "Последняя закрытая сверка за смену не соответствует текущей смене." skip
+     1838                               "Невозможно закрыть текущую смену." skip
+     1839                               "Закрываемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1840                               "Сверка" buf_rvs-doc.rvs-code skip
+     1841                               "Сверка принадлежит смене" buf_rvs-doc.shift-date "Номер" buf_rvs-doc.shift-name "Порядок" buf_rvs-doc.shift-num skip
+     1842                               "Дата фактического закрытия сверки" buf_rvs-doc.fact-date skip
+     1843                               view-as alert-box error .
+     1844                           undo main-block, return error .
+     1845                       end.
+     1846                       find last ub.trn-doc
+     1847                           where ub.trn-doc.obj-type = ub.shift-obj.obj-type
+     1848                           and ub.trn-doc.obj-code = ub.shift-obj.obj-code
+     1849                           and ub.trn-doc.status_  = 'факт':U
+     1850                           use-index stat-fact
+     1851                           no-error .
+     1852                       if available ub.trn-doc
+     1853                           and ub.trn-doc.fact-order > buf_rvs-doc.fact-order
+     1854                           then
+     1855                       do:
+     1856                           message
+     1857                               "Найдена накладная, которая закрыта позже закрывающей сверки" skip
+     1858                               "Невозможно закрыть текущую смену" skip
+     1859                               "Закрываемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1860                               "Сверка" buf_rvs-doc.rvs-code skip
+     1861                               "Накладная" ub.trn-doc.doc-code
+     1862                               view-as alert-box error .
+     1863                           undo main-block, return error .
+     1864                       end.
+     1865                       find last ub.price-doc
+     1866                           where ub.price-doc.obj-type = ub.shift-obj.obj-type
+     1867                           and ub.price-doc.obj-code = ub.shift-obj.obj-code
+     1868                           and ub.price-doc.status_ = 'акт':U
+     1869                           use-index fact-close
+     1870                           no-error .
+     1871                       if available ub.price-doc
+     1872                           and ub.price-doc.fact-order > buf_rvs-doc.fact-order
+     1873                           then
+     1874                       do:
+     1875                           message
+     1876                               "Найдена переоценка, которая закрыта позже закрывающей сверки" skip
+     1877                               "Невозможно закрыть текущую смену" skip
+     1878                               "Закрываемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1879                               "Сверка" buf_rvs-doc.rvs-code skip
+     1880                               "Переоценка" ub.price-doc.doc-num
+     1881                               view-as alert-box error .
+     1882                           undo main-block, return error .
+     1883                       end.
+     1884                       for each buf_pl-gds
+     1885                           where buf_pl-gds.obj-type = ub.shift-obj.obj-type
+     1886                           and buf_pl-gds.obj-code = ub.shift-obj.obj-code,
+     1887                           first ub.place no-lock where ub.place.obj-type = buf_pl-gds.obj-type
+     1888                           and ub.place.obj-code = buf_pl-gds.obj-code
+     1889                           and ub.place.pl-code = buf_pl-gds.pl-code
+     1890                           and ub.place.status_ = ''
+     1891                           on error undo main-block, return error
+     1892                           :
+     1893                           find first buf_goods no-lock
+     1894                               where buf_goods.gds-code = buf_pl-gds.gds-code
+     1895                               .
+     1896   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_is-petrl in g#lib-trn
+     1897     (
+     1898        input buf_goods.artic
+     1899     ,  input buf_goods.prod-type
+     1900     ,  input buf_goods.prod-code
+     1901     , output v-is-petrol
+     1902     , output v-is-pieces
+     1903     ) no-error.
+     1904                           if v-is-petrol = true
+     1905                               and v-is-pieces = false
+     1906                               then
+     1907                           do:
+     1908                               run gds-attr-value in this-procedure
+     1909                                   ( input  buf_goods.gds-code
+     1910                                   , input  'ptrl-without-rvs':U
+     1911                                   , output v-ptrl-without-rvs
+     1912                                   , output v-attr-type
+     1913                                   ) .
+     1914                               if lookup(v-ptrl-without-rvs, 'true,yes':u) = 0 then
+     1915                               do:
+     1916                                   find first buf_rvs-line
+     1917                                       where buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code
+     1918                                       and buf_rvs-line.gds-code = buf_pl-gds.gds-code
+     1919                                       and buf_rvs-line.pl-code  = buf_pl-gds.pl-code
+     1920                                       and buf_rvs-line.obj-type = ub.shift-obj.obj-type
+     1921                                       and buf_rvs-line.obj-code = ub.shift-obj.obj-code
+     1922                                       no-error .
+     1923                                   if not available buf_rvs-line then
+     1924                                   do:
+     1925                                       message
+     1926                                           "Закрывающая сверка по смене не содержит всех действующих мест хранения топлива" skip
+     1927                                           "Невозможно закрыть текущую смену" skip
+     1928                                           "Закрываемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1929                                           "Сверка" buf_rvs-doc.rvs-code skip
+     1930                                           "Код места хранения" buf_pl-gds.pl-code skip
+     1931                                           "Локальный код товара" buf_pl-gds.gds-code skip
+     1932                                           view-as alert-box error .
+     1933                                       undo main-block, return error .
+     1934                                   end.
+     1935                               end.
+     1936                           end.
+     1937                       end.
+     1938                   end.
+     1939                   find first ub.inkas
+     1940                       where ub.inkas.obj-type = ub.shift-obj.obj-type
+     1941                       and ub.inkas.obj-code = ub.shift-obj.obj-code
+     1942                       and ub.inkas.status_  > 'факт':U
+     1943                       no-error .
+     1944                   if not available ub.inkas then
+     1945                   do:
+     1946                       find first ub.inkas
+     1947                           where ub.inkas.obj-type = ub.shift-obj.obj-type
+     1948                           and ub.inkas.obj-code = ub.shift-obj.obj-code
+     1949                           and ub.inkas.status_  < 'факт':U
+     1950                           no-error .
+     1951                   end.
+     1952                   if available ub.inkas then
+     1953                   do:
+     1954                   end.
+     1955                   do ii = 0 to num-entries(v-fact-status-list):
+     1956                       CASE ii:
+     1957                           when 0 then
+     1958                               do:
+     1959                                   find first buf_inkas no-lock
+     1960                                       where buf_inkas.obj-type = ub.shift-obj.obj-type
+     1961                                       and buf_inkas.obj-code = ub.shift-obj.obj-code
+     1962                                       and buf_inkas.status_ < entry(1, v-fact-status-list) no-error .
+     1963                               end.
+     1964                           when num-entries(v-fact-status-list) then
+     1965                               do:
+     1966                                   find first buf_inkas no-lock
+     1967                                       where buf_inkas.obj-type = ub.shift-obj.obj-type
+     1968                                       and buf_inkas.obj-code = ub.shift-obj.obj-code
+     1969                                       and buf_inkas.status_ > entry(num-entries(v-fact-status-list), v-fact-status-list) no-error .
+     1970                               end.
+     1971                           otherwise
+     1972                           do:
+     1973                               find first buf_inkas no-lock
+     1974                                   where buf_inkas.obj-type = ub.shift-obj.obj-type
+     1975                                   and buf_inkas.obj-code = ub.shift-obj.obj-code
+     1976                                   and buf_inkas.status_ > entry(ii, v-fact-status-list)
+     1977                                   and buf_inkas.status_ < entry(ii + 1, v-fact-status-list)
+     1978                                   no-error .
+     1979                           end.
+     1980                       END CASE.
+     1981                       if available buf_inkas then
+     1982                       do:
+     1983                           message
+     1984                               "Найдена незакрытая продажа" skip
+     1985                               "Невозможно закрыть текущую смену" skip
+     1986                               "Закрываемая смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     1987                               "Продажа" buf_inkas.inkas-code skip
+     1988                               view-as alert-box error .
+     1989                           undo main-block, return error .
+     1990                       end.
+     1991                   end.
+     1992                   run gbl/chk-date.p (
+     1993                       input shift-obj.obj-type
+     1994                       ,input shift-obj.obj-code
+     1995                       ,input v-obj-date
+     1996                       ,input shift-obj.close-time
+     1997                       ,input shift-obj.shift-date
+     1998                       ,input shift-obj.shift-num
+     1999                       ,input yes) no-error.
+     2000                   if error-status :error then
+     2001                   do:
+     2002                       message "Ошибка при определении даты смены."
+     2003                           view-as alert-box error.
+     2004                       undo main-block, return error .
+     2005                   end.
+     2006                   assign
+     2007                       ub.shift-obj.close-id       = g#userid
+     2008                       ub.shift-obj.close-sys-date = v-sys-date
+     2009                       ub.shift-obj.close-sys-time = v-sys-time
+     2010                       .
+     2011   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2012   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+     2013     (input  ub.shift-obj.obj-type
+     2014     ,input  ub.shift-obj.obj-code
+     2015     ,output v-host-code
+     2016     )  .
+     2017                   define variable v-value-character as character no-undo .
+     2018                   define variable v-value-date      as date      no-undo .
+     2019                   define variable v-value-decimal   as decimal   no-undo .
+     2020                   define variable v-value-logical   as logical   no-undo .
+     2021                   define variable v-tth             as handle    no-undo .
+     2022                   define variable v-param-type      as character no-undo .
+     2023                   run adm/shattri.p ( input "get":U
+     2024                       , input  ub.shift-obj.obj-type
+     2025                       , input  ub.shift-obj.obj-code
+     2026                       , input  'obj-date':U
+     2027                       , input  'diffshft':U
+     2028                       , output v-value-character
+     2029                       , output v-value-date
+     2030                       , output v-value-decimal
+     2031                       , output v-max-shift-days
+     2032                       , output v-value-logical
+     2033                       , output v-param-type
+     2034                       , input-output table-handle v-tth
+     2035                       ) no-error .
+     2036                   if error-status :error then
+     2037                   do:
+     2038                       assign
+     2039                           v-max-shift-days = 3.
+     2040                   end.
+     2041                   if ub.shift-obj.close-date > ub.shift-obj.open-date + v-max-shift-days then
+     2042                   do:
+     2043                       message
+     2044                           "С момента открытия смены прошло более " v-max-shift-days " дней" skip
+     2045                           "Смена не может быть закрыта датой " ub.shift-obj.close-date skip
+     2046                           view-as alert-box error .
+     2047                       undo main-block, return error .
+     2048                   end.
+     2049                   find first ub.wth-doc no-lock
+     2050                       where ub.wth-doc.obj-type    = ub.shift-obj.obj-type
+     2051                       and ub.wth-doc.obj-code    = ub.shift-obj.obj-code
+     2052                       and ub.wth-doc.shift-date  = ub.shift-obj.shift-date
+     2053                       and ub.wth-doc.shift-num   = ub.shift-obj.shift-num
+     2054                       and ub.wth-doc.status_    <> 'факт':U
+     2055                       no-error .
+     2056                   if available ub.wth-doc then
+     2057                   do:
+     2058                       message
+     2059                           vss-workfile vss-revision vss-description skip
+     2060                           "Ошибка при закрытии смены" skip
+     2061                           "Есть отркытые документы перемещения материальных ценностей" skip
+     2062                           "Документ МЦ" ub.wth-doc.doc-code skip
+     2063                           "Тип документа" ub.wth-doc.doc-type skip
+     2064                           "Дата" ub.wth-doc.doc-date skip
+     2065                           "Статус" ub.wth-doc.status_ skip
+     2066                           view-as alert-box error .
+     2067                       undo main-block, return error .
+     2068                   end.
+     2069                   define variable v-fact-order           as decimal no-undo .
+     2070                   define variable v-shift-end-fact-order as decimal no-undo .
+     2071                   define variable v-day-end-fact-order   as decimal no-undo .
+     2072                   run factord in this-procedure
+     2073                       (input  ub.shift-obj.close-date
+     2074                       ,input  ub.shift-obj.close-time
+     2075                       ,input  1
+     2076                       ,input  ub.shift-obj.shift-date
+     2077                       ,input  ub.shift-obj.shift-num
+     2078                       ,input  l-shift-on
+     2079                       ,output v-fact-order
+     2080                       ,output v-shift-end-fact-order
+     2081                       ,output v-day-end-fact-order
+     2082                       ) no-error .
+     2083                   if error-status :error
+     2084                       or v-fact-order = ?
+     2085                       or v-fact-order = 0 then
+     2086                   do:
+     2087                       message
+     2088                           vss-workfile vss-revision vss-description skip
+     2089                           "Ошибка при определении фактического номера смены" skip
+     2090                           "obj-type"                ub.shift-obj.obj-type   skip
+     2091                           "obj-code"                ub.shift-obj.obj-code   skip
+     2092                           "fact-date"               ub.shift-obj.close-date skip
+     2093                           "fact-time"               ub.shift-obj.close-time skip
+     2094                           "shift-date"              ub.shift-obj.shift-date skip
+     2095                           "shift-num"               ub.shift-obj.shift-num  skip
+     2096                           "v-fact-order"            v-fact-order            skip
+     2097                           "v-shift-end-fact-order"  v-shift-end-fact-order  skip
+     2098                           "v-day-end-fact-order"    v-day-end-fact-order    skip
+     2099                           error-status :get-message(1) skip
+     2100                           return-value skip
+     2101                           view-as alert-box error .
+     2102                       undo main-block, return error .
+     2103                   end.
+     2104                   assign
+     2105                       ub.shift-obj.fact-order = v-shift-end-fact-order
+     2106                       .
+     2107                   for each ub.shift-staff no-lock where ub.shift-staff.obj-type = ub.shift-obj.obj-type
+     2108                       and ub.shift-staff.obj-code = ub.shift-obj.obj-code
+     2109                       and ub.shift-staff.shift-num = ub.shift-obj.shift-num
+     2110                       and ub.shift-staff.shift-date = ub.shift-obj.shift-date
+     2111                       and ub.shift-staff.next-shift = no :
+     2112                       if ub.shift-staff.staff-role
+     2113                           then
+     2114                           assign
+     2115                               v-shift-manager = ub.shift-staff.name
+     2116                               .
+     2117                       else
+     2118                           assign
+     2119                               v-shift-staff-list = v-shift-staff-list + (if v-shift-staff-list = "" then "" else ", ") + ub.shift-staff.name
+     2120                               .
+     2121                   end.
+     2122                   v-vid-action = 62 .
+     2123                   v-vid-param = "SHOP_NUM=" + string(ub.shift-obj.obj-code) + chr(4) +
+     2124                       "SHIFT_NUM=" + string(ub.shift-obj.shift-num) + string(ub.shift-obj.shift-date, "99999999") + chr(4) +
+     2125                       "ShiftManager=" + v-shift-manager + chr(4) +
+     2126                       "ShiftStaff=" + v-shift-staff-list + chr(4) +
+     2127                       "RESULT=0" + chr(4) +
+     2128                       "Description=".
+     2129               end.
+     2130               if ub.shift-obj.status_ = 'тек':U and
+     2131                   oldb.status_         = 'зкр':U then
+     2132               do:
+     2133                   find first prev-shift where
+     2134                       prev-shift.obj-type = ub.shift-obj.obj-type and
+     2135                       prev-shift.obj-code = ub.shift-obj.obj-code and
+     2136                       prev-shift.status_ = 'тек':U and
+     2137                       recid (prev-shift) <> recid (ub.shift-obj) no-error.
+     2138                   if available prev-shift then
+     2139                   do:
+     2140                       message
+     2141                           "Найдена другая открытая смена" skip
+     2142                           "Невозможно отменить закрытую смену" skip
+     2143                           "Найденная смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     2144                           view-as alert-box error .
+     2145                       undo main-block, return error .
+     2146                   end.
+     2147                   find last prev-shift where
+     2148                       prev-shift.obj-type = ub.shift-obj.obj-type and
+     2149                       prev-shift.obj-code = ub.shift-obj.obj-code and
+     2150                       prev-shift.status_ = 'зкр':U
+     2151                       use-index pi no-error .
+     2152                   if not available prev-shift or
+     2153                       prev-shift.shift-date < ub.shift-obj.shift-date or
+     2154                       prev-shift.shift-date = ub.shift-obj.shift-date and
+     2155                       prev-shift.shift-num < ub.shift-obj.shift-num then
+     2156                       .
+     2157                   else
+     2158                   do:
+     2159                       message
+     2160                           "Найдена смена со статусом" 'зкр':U skip
+     2161                           "Найденная смена" prev-shift.shift-date "Номер" prev-shift.shift-name "Порядок" prev-shift.shift-num skip
+     2162                           "Отменяемая закрытая смена должна быть последней" skip
+     2163                           "Невозможно отменить смену" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     2164                           view-as alert-box error .
+     2165                       undo main-block, return error .
+     2166                   end.
+     2167                   ub.shift-obj.fact-order = 0.
+     2168                   for each ub.shift-staff no-lock where ub.shift-staff.obj-type = ub.shift-obj.obj-type
+     2169                       and ub.shift-staff.obj-code = ub.shift-obj.obj-code
+     2170                       and ub.shift-staff.shift-num = ub.shift-obj.shift-num
+     2171                       and ub.shift-staff.shift-date = ub.shift-obj.shift-date
+     2172                       and ub.shift-staff.next-shift = no :
+     2173                       if ub.shift-staff.staff-role
+     2174                           then
+     2175                           assign
+     2176                               v-shift-manager = ub.shift-staff.name
+     2177                               .
+     2178                       else
+     2179                           assign
+     2180                               v-shift-staff-list = v-shift-staff-list + (if v-shift-staff-list = "" then "" else ", ") + ub.shift-staff.name
+     2181                               .
+     2182                   end.
+     2183                   v-vid-action = 53 .
+     2184                   v-vid-param = "SHOP_NUM=" + string(ub.shift-obj.obj-code) + chr(4) +
+     2185                       "SHIFT_NUM=" + string(ub.shift-obj.shift-num) + string(ub.shift-obj.shift-date, "99999999") + chr(4) +
+     2186                       "ShiftManager=" + v-shift-manager + chr(4) +
+     2187                       "ShiftStaff=" + v-shift-staff-list + chr(4) +
+     2188                       "RESULT=0" + chr(4) +
+     2189                       "Description=".
+     2190               end.
+     2191               if ub.shift-obj.status_ = 'ожд':U and
+     2192                   oldb.status_         = 'тек':U then
+     2193               do:
+     2194                   find first ub.trn-doc where
+     2195                       ub.trn-doc.obj-type   = ub.shift-obj.obj-type   and
+     2196                       ub.trn-doc.obj-code   = ub.shift-obj.obj-code   and
+     2197                       ub.trn-doc.shift-date = ub.shift-obj.shift-date and
+     2198                       ub.trn-doc.shift-num  = ub.shift-obj.shift-num  and
+     2199                       ub.trn-doc.status_ = 'факт':U
+     2200                       use-index stat-fact no-error.
+     2201                   if available ub.trn-doc then
+     2202                   do:
+     2203                       message
+     2204                           "Найдена накладная, которая закрыта в течение смены" skip
+     2205                           "Невозможно отменить текущую смену" skip
+     2206                           "Смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     2207                           "Накладная" ub.trn-doc.doc-code
+     2208                           view-as alert-box error .
+     2209                       undo main-block, return error .
+     2210                   end.
+     2211                   find first ub.price-doc where
+     2212                       ub.price-doc.obj-type   = ub.shift-obj.obj-type and
+     2213                       ub.price-doc.obj-code   = ub.shift-obj.obj-code and
+     2214                       ub.price-doc.shift-date = ub.shift-obj.shift-date and
+     2215                       ub.price-doc.shift-num  = ub.shift-obj.shift-num  and
+     2216                       ub.price-doc.status_    = 'акт':U
+     2217                       use-index fact-close no-error.
+     2218                   if available ub.price-doc then
+     2219                   do:
+     2220                       message
+     2221                           "Найдена переоценка, которая закрыта в течение смены" skip
+     2222                           "Невозможно отменить текущую смену" skip
+     2223                           "Смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     2224                           "Переоценка" ub.price-doc.doc-num
+     2225                           view-as alert-box error .
+     2226                       undo main-block, return error .
+     2227                   end.
+     2228                   find first buf_rvs-doc
+     2229                       where buf_rvs-doc.obj-type = ub.shift-obj.obj-type
+     2230                       and buf_rvs-doc.obj-code = ub.shift-obj.obj-code
+     2231                       and buf_rvs-doc.rvs-type <> 'проверка':U
+     2232                       and buf_rvs-doc.status_  <> 'факт':U
+     2233                       no-error .
+     2234                   if available buf_rvs-doc then
+     2235                   do:
+     2236                       message
+     2237                           "Найдена незакрытая сверка" skip
+     2238                           "Невозможно отменить текущую смену" skip
+     2239                           "Смена" ub.shift-obj.shift-date "Номер" ub.shift-obj.shift-name "Порядок" ub.shift-obj.shift-num skip
+     2240                           "Сверка" buf_rvs-doc.rvs-code skip
+     2241                           view-as alert-box error .
+     2242                       undo main-block, return error .
+     2243                   end.
+     2244                   for each ub.shift-staff no-lock where ub.shift-staff.obj-type = ub.shift-obj.obj-type
+     2245                       and ub.shift-staff.obj-code = ub.shift-obj.obj-code
+     2246                       and ub.shift-staff.shift-num = ub.shift-obj.shift-num
+     2247                       and ub.shift-staff.shift-date = ub.shift-obj.shift-date
+     2248                       and ub.shift-staff.next-shift = no :
+     2249                       if ub.shift-staff.staff-role
+     2250                           then
+     2251                           assign
+     2252                               v-shift-manager = ub.shift-staff.name
+     2253                               .
+     2254                       else
+     2255                           assign
+     2256                               v-shift-staff-list = v-shift-staff-list + (if v-shift-staff-list = "" then "" else ", ") + ub.shift-staff.name
+     2257                               .
+     2258                   end.
+     2259                   v-vid-action = 53 .
+     2260                   v-vid-param = "SHOP_NUM=" + string(ub.shift-obj.obj-code) + chr(4) +
+     2261                       "SHIFT_NUM=" + string(ub.shift-obj.shift-num) + string(ub.shift-obj.shift-date, "99999999") + chr(4) +
+     2262                       "ShiftManager=" + v-shift-manager + chr(4) +
+     2263                       "ShiftStaff=" + v-shift-staff-list + chr(4) +
+     2264                       "RESULT=0" + chr(4) +
+     2265                       "Description=".
+     2266               end.
+     2267           end.
+     2268       end.
+     2269       if not g#news then
+     2270       do:
+     2271           run cur-time in this-procedure
+     2272               ( output v-today
+     2273               ,output v-time
+     2274               ).
+     2275           create buf_c-shift-obj.
+     2276           buffer-copy oldb except
+     2277               obj-type
+     2278               obj-code
+     2279               shift-date
+     2280               shift-num
+     2281               to buf_c-shift-obj
+     2282               .
+     2283           assign
+     2284               buf_c-shift-obj.obj-type         = ub.shift-obj.obj-type
+     2285               buf_c-shift-obj.obj-code         = ub.shift-obj.obj-code
+     2286               buf_c-shift-obj.shift-date       = ub.shift-obj.shift-date
+     2287               buf_c-shift-obj.shift-num        = ub.shift-obj.shift-num
+     2288               buf_c-shift-obj.chip-num         = next-value (s-shift-chip, ub)
+     2289               buf_c-shift-obj.corr-time        = v-time
+     2290               buf_c-shift-obj.corr-user-db-num = g#db-num
+     2291               buf_c-shift-obj.corr-user-name   = g#userid
+     2292               buf_c-shift-obj.corr-date        = v-today
+     2293               .
+     2294           if new( ub.shift-obj ) then
+     2295           do:
+     2296               assign
+     2297                   buf_c-shift-obj.shift-name = ub.shift-obj.shift-name
+     2298                   .
+     2299           end.
+     2300           create buf_c-sht-hist.
+     2301           buffer-copy buf_c-shift-obj to buf_c-sht-hist
+     2302               assign
+     2303               buf_c-sht-hist.action             = integer( if new( ub.shift-obj )
+     2304                                                 then '1':U
+     2305                                                 else '2':U)
+     2306               buf_c-sht-hist.subject = 'shift-obj':U
+     2307               buf_c-sht-hist.is-news = g#news
+     2308               .
+     2309           if ub.shift-obj.status_ <> "" then
+     2310           do:
+     2311               run str/callnews.p
+     2312                   (input 'shift-obj':U
+     2313                   ,input (buffer ub.shift-obj:handle)
+     2314                   ) no-error .
+     2315               if error-status :error then
+     2316               do:
+     2317                   message
+     2318                       vss-workfile vss-revision vss-description skip
+     2319                       "Невозможно маршрутизировать shift-obj для отправки в новости" skip
+     2320                       error-status :get-message(1) skip
+     2321                       return-value skip
+     2322                       view-as alert-box error .
+     2323                   undo main-block, return error .
+     2324               end.
+     2325           end.
+     2326           if ub.shift-obj.status_ = 'зкр':U then
+     2327           do:
+     2328               define buffer buf_user-account for ub.user-account .
+     2329               define variable user-id as character no-undo .
+     2330               define variable fio     as character no-undo .
+     2331               find first buf_user-account no-lock where buf_user-account.user-id = g#userid no-error .
+     2332               if available (buf_user-account) then
+     2333               do:
+     2334                   assign
+     2335                       user-id = buf_user-account.user-id
+     2336                       fio     = buf_user-account.last-name + " " + buf_user-account.first-name + " " + buf_user-account.second-name .
+     2337               end.
+     2338               define buffer buf_reportShift for ub.reportShift .
+     2339               define buffer buf_shift-attr  for ub.shift-obj-attr .
+     2340               find first buf_reportShift exclusive-lock where buf_reportShift.shift-date = ub.shift-obj.shift-date and
+     2341                   buf_reportShift.shift-num = ub.shift-obj.shift-num and buf_reportShift.obj-code = ub.shift-obj.obj-code and
+     2342                   buf_reportShift.obj-type = ub.shift-obj.obj-type and buf_reportShift.report-type = 0 no-error .
+     2343               if not available (buf_reportShift) then
+     2344               do:
+     2345                   find first buf_shift-attr exclusive-lock where buf_shift-attr.attr-code = "reportShift" and
+     2346                       buf_shift-attr.obj-code = ub.shift-obj.obj-code and
+     2347                       buf_shift-attr.obj-type = ub.shift-obj.obj-type and
+     2348                       buf_shift-attr.shift-date = 01/01/1970 and
+     2349                       buf_shift-attr.shift-num = 1 no-error .
+     2350                   if available (buf_shift-attr) then
+     2351                   do:
+     2352                       buf_shift-attr.attr-value = string(integer(buf_shift-attr.attr-value) + 1) .
+     2353                   end.
+     2354                   else
+     2355                   do:
+     2356                       create buf_shift-attr .
+     2357                       assign
+     2358                           buf_shift-attr.attr-code  = "reportShift"
+     2359                           buf_shift-attr.obj-code   = ub.shift-obj.obj-code
+     2360                           buf_shift-attr.obj-type   = ub.shift-obj.obj-type
+     2361                           buf_shift-attr.shift-date = 01/01/1970
+     2362                           buf_shift-attr.shift-num  = 1
+     2363                           buf_shift-attr.attr-value = string(next-value(s-reportShift, ub)).
+     2364                   end.
+     2365                   create buf_reportShift.
+     2366                   assign
+     2367                       buf_reportShift.id          = integer(buf_shift-attr.attr-value)
+     2368                       buf_reportShift.obj-code    = ub.shift-obj.obj-code
+     2369                       buf_reportShift.obj-type    = ub.shift-obj.obj-type
+     2370                       buf_reportShift.report-type = 0
+     2371                       buf_reportShift.shift-date  = ub.shift-obj.shift-date
+     2372                       buf_reportShift.shift-num   = ub.shift-obj.shift-num
+     2373                       .
+     2374               end.
+     2375               assign
+     2376                   buf_reportShift.date       = today
+     2377                   buf_reportShift.user-id    = user-id
+     2378                   buf_reportShift.fio        = fio
+     2379                   buf_reportShift.time_      = time
+     2380                   buf_reportShift.shift-name = ub.shift-obj.shift-name
+     2381                   .
+     2382               find first ub.susp-chk no-lock where ub.susp-chk.obj-code = ub.shift-obj.obj-code and
+     2383                   ub.susp-chk.obj-type = ub.shift-obj.obj-type and
+     2384                   ub.susp-chk.shift-date = ub.shift-obj.shift-date and
+     2385                   ub.susp-chk.shift-name = ub.shift-obj.shift-name and
+     2386                   ub.susp-chk.shift-num = ub.shift-obj.shift-num no-error .
+     2387               if available (ub.susp-chk) then buf_reportShift.flag = true .
+     2388           end.
+     2389       end.
+     2390       if g#oxml = yes
+     2391           then
+     2392       do:
+     2393           run str/calloxml.p (
+     2394               input 'update':U
+     2395               , input 'shift-obj':U
+     2396               , input ( buffer ub.shift-obj:handle )
+     2397               ) no-error.
+     2398           if error-status :error
+     2399               then
+     2400           do:
+     2401               undo, return error substitute( "&2&1Ошибка при отправке записи в систему OpenXML&1&3&1&4"
+     2402                   , chr(10)
+     2403                   , vss-workfile
+     2404                   , return-value
+     2405                   , error-status :get-message ( 1 ) ).
+     2406           end.
+     2407       end.
+     2408   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run rum-runa in g#library
+     2409     (input ?
+     2410     ,input this-procedure:handle
+     2411     ,input ?
+     2412     ,input 'event_shift':U
+     2413     ,input  buffer oldb:handle
+     2414     ,input  buffer ub.shift-obj:handle
+     2415     ,input ''
+     2416     ,input ''
+     2417     ) no-error .
+     2418       if error-status :error
+     2419           then
+     2420       do:
+     2421           return error substitute( "&2&1Ошибка маршрутизации записи в машину правил&1&3&1&4"
+     2422               , chr(10)
+     2423               , vss-workfile
+     2424               , return-value
+     2425               , error-status :get-message ( 1 ) ).
+     2426       end.
+     2427   end.
+     2428   if g#news <> yes
+     2429       then
+     2430   do:
+     2431       run trg/userlog.p (
+     2432           input 'update':U
+     2433           , input 'c-sht-hist':U
+     2434           , input ( buffer buf_c-sht-hist :handle )
+     2435           , input v-vid-action
+     2436           , input v-vid-param
+     2437           ) no-error.
+     2438       if error-status :error
+     2439           then
+     2440       do:
+     2441           undo, return error substitute( "&2&1Ошибка при записи истории пользователя&1&3&1&4"
+     2442               , chr(10)
+     2443               , vss-workfile
+     2444               , return-value
+     2445               , error-status :get-message ( 1 ) ).
+     2446       end.
+     2447   end.

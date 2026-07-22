@@ -1,0 +1,3097 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-db-num         as integer    no-undo.
+        3   define input parameter p-date-from      as date       no-undo.
+        4   define input parameter p-date-to        as date       no-undo.
+        5   define input parameter p-range          as integer    no-undo.
+        6   define input parameter p-obj-list       as character  no-undo.
+        7   define input parameter p-doc-type-list  as character  no-undo.
+        8   define input parameter p-pay-code       as logical    no-undo.
+        9   define input parameter p-cst            as logical    no-undo.
+       10   define input parameter p-parts          as logical    no-undo.
+       11   define input parameter p-chk-pay-code   as logical    no-undo.
+       12   define input parameter p-pay-desk       as logical    no-undo.
+       13   define input parameter p-pay-desk-cards as logical    no-undo.
+       14   define input parameter p-opened-docs    as logical    no-undo.
+       15   define input parameter p-doc-rvs        as logical    no-undo.
+       16   define input parameter hedt             as handle     no-undo.
+       17   define input parameter hcnt             as handle     no-undo.
+       18   define variable vss-revision    as character no-undo init "$Revision: a61e6bb0c7e0, 2871, rls $":U .
+       19   define variable vss-author      as character no-undo init "$Author: SSlivenko $":U .
+       20   define variable vss-date        as character no-undo init "$Date: Пн ноя 22 19:49:10 2021 +0300 $":U .
+       21   define variable vss-workfile    as character no-undo init "$Workfile: shd-docf.p $":U .
+       22   define variable vss-archive     as character no-undo init "$Archive: bge/shd-docf.p $":U .
+       23   define variable vss-description as character no-undo init "Экспорт во Внешнюю Бухгалтерию документов и суммарного расхода по чекам".
+       24   procedure vss-get-info :
+       25     define output parameter p-vss-revision    like vss-revision    no-undo .
+       26     define output parameter p-vss-author      like vss-author      no-undo .
+       27     define output parameter p-vss-date        like vss-date        no-undo .
+       28     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       29     define output parameter p-vss-archive     like vss-archive     no-undo .
+       30     define output parameter p-vss-description like vss-description no-undo .
+       31     assign
+       32       p-vss-revision    = vss-revision
+       33       p-vss-author      = vss-author
+       34       p-vss-date        = vss-date
+       35       p-vss-workfile    = vss-workfile
+       36       p-vss-archive     = vss-archive
+       37       p-vss-description = vss-description
+       38     .
+       39   end procedure.
+       40   procedure vss-get-parameters :
+       41     define output parameter p-vss-parameters as character no-undo .
+       42   end procedure.
+       43   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       44   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       45   define variable v-vssrevis-logger                   as handle    no-undo .
+       46   procedure vss-logevent :
+       47     define input  parameter p-extra-paramters as character no-undo .
+       48     define variable v-vssrevis-parameters as character no-undo .
+       49     do
+       50     on error undo, return error return-value
+       51     :
+       52       if  valid-handle(v-vssrevis-logger)
+       53       and v-vssrevis-logger :get-signature("logevent") <> ""
+       54       then do:
+       55         run vss-get-parameters in this-procedure
+       56           (output v-vssrevis-parameters
+       57           ).
+       58         run logevent in v-vssrevis-logger
+       59           (input vss-workfile
+       60           ,input vss-revision
+       61           ,input v-vssrevis-parameters
+       62           ,input p-extra-paramters
+       63           ).
+       64       end.
+       65     end.
+       66   end procedure.
+       67   assign
+       68     v-vssrevis-logger = g#vssrevis-logger
+       69   .
+       70   if  valid-handle(v-vssrevis-logger)
+       71   and v-vssrevis-logger :get-signature("logevent") <> ""
+       72   then do:
+       73     assign
+       74       v-vssrevis-logevent = true
+       75     .
+       76     run vss-logevent in this-procedure (input vss-description) .
+       77   end.
+       78   define new global shared variable g#language as character no-undo .
+       79   if g#language <> '' and g#language <> 'rus':U then do:
+       80     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       81   end.
+       82   define new global shared variable g#library  as handle no-undo .
+       83   define new global shared variable g#library2 as handle no-undo .
+       84   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       85   define  temp-table temp-host no-undo
+       86     field host-code like ub.store.host-code
+       87     index xpk host-code
+       88   .
+       89   define  temp-table temp-obj no-undo
+       90     field obj-type  like ub.clients.obj-type
+       91     field obj-code  like ub.clients.obj-code
+       92     field host-code like ub.store.host-code
+       93     field db-num    like ub.clients.db-num
+       94     index xpk  obj-type obj-code
+       95     index xie1 host-code
+       96     index xie2 db-num host-code
+       97   .
+       98   procedure init-temphost:
+       99     define buffer buf_store   for ub.store .
+      100     define buffer buf_shop    for ub.shop .
+      101     define buffer buf_clients for ub.clients .
+      102     define buffer buf_db for ub.db .
+      103     define buffer buf_temp-host for temp-host .
+      104     define buffer buf_temp-obj for temp-obj .
+      105     do
+      106     on error undo, return error return-value
+      107     :
+      108       for each buf_store
+      109       on error undo, return error
+      110       :
+      111         find first buf_temp-host
+      112           where buf_temp-host.host-code = buf_store.host-code
+      113           no-error .
+      114         if not available buf_temp-host
+      115         then do:
+      116           create buf_temp-host .
+      117           assign
+      118             buf_temp-host.host-code = buf_store.host-code
+      119           .
+      120         end.
+      121         find first buf_clients no-lock
+      122           where buf_clients.obj-type = 'скл':U
+      123             and buf_clients.obj-code = buf_store.obj-code
+      124           no-error .
+      125         if not available buf_clients
+      126         then do:
+      127           message
+      128             "Ошибка при поиске клиента" skip
+      129             "Клиент" 'скл':U buf_store.obj-code skip
+      130             view-as alert-box error .
+      131           undo, return error .
+      132         end.
+      133         create buf_temp-obj .
+      134         assign
+      135           buf_temp-obj.obj-type  = 'скл':U
+      136           buf_temp-obj.obj-code  = buf_store.obj-code
+      137           buf_temp-obj.host-code = buf_store.host-code
+      138           buf_temp-obj.db-num    = buf_clients.db-num
+      139         .
+      140       end.
+      141       for each buf_shop
+      142       on error undo, return error
+      143       :
+      144         find first buf_temp-host
+      145           where buf_temp-host.host-code = buf_shop.host-code
+      146           no-error .
+      147         if not available buf_temp-host
+      148         then do:
+      149           create buf_temp-host .
+      150           assign
+      151             buf_temp-host.host-code = buf_shop.host-code
+      152           .
+      153         end.
+      154         find first buf_clients no-lock
+      155           where buf_clients.obj-type = 'маг':U
+      156             and buf_clients.obj-code = buf_shop.obj-code
+      157           no-error .
+      158         if not available buf_clients then do:
+      159           message
+      160             "Ошибка при поиске клиента" skip
+      161             "Клиент" 'маг':U buf_shop.obj-code skip
+      162             view-as alert-box error .
+      163           undo, return error .
+      164         end.
+      165         create buf_temp-obj .
+      166         assign
+      167           buf_temp-obj.obj-type  = 'маг':U
+      168           buf_temp-obj.obj-code  = buf_shop.obj-code
+      169           buf_temp-obj.host-code = buf_shop.host-code
+      170           buf_temp-obj.db-num    = buf_clients.db-num
+      171         .
+      172       end.
+      173     end.
+      174   end.
+      175   define variable vss-include-info1 as character format "X(65)" no-undo
+      176   initial "@(#)$Workfile$ $Revision$".
+      177   DEF STREAM stmXMLOut.
+      178   DEF STREAM stmXMLLog.
+      179   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      180   procedure cur-time :
+      181      define output parameter p-today as date      no-undo .
+      182      define output parameter p-time  as integer   no-undo .
+      183     do
+      184     on error undo, return error
+      185     :
+      186       define variable v-date1 as date      no-undo .
+      187       define variable v-date2 as date      no-undo .
+      188       define variable v-time  as integer   no-undo .
+      189       assign
+      190         v-date1 = today
+      191         v-time  = time
+      192         v-date2 = today
+      193       .
+      194       if v-date1 <> v-date2
+      195       then do:
+      196         assign
+      197           v-date1 = today
+      198           v-time  = v-time
+      199         .
+      200       end.
+      201       assign
+      202         p-today = v-date1
+      203         p-time  = v-time
+      204       .
+      205     end.
+      206   end.
+      207   function cur-time-date returns character
+      208   :
+      209     return string(today, '99/99/9999':U) .
+      210   end.
+      211   function cur-time-mjd returns decimal
+      212   :
+      213     define variable v-date as date      no-undo .
+      214     define variable v-time as integer   no-undo .
+      215     run cur-time in this-procedure
+      216       (output v-date
+      217       ,output v-time
+      218       ) .
+      219     return integer(v-date) - 2400002 + (v-time / 86400) .
+      220   end.
+      221   function cur-time-get-ending-index returns integer
+      222   (input p-number as integer
+      223   )
+      224   :
+      225     if p-number < 0
+      226     or p-number = ?
+      227     then do:
+      228       return 1 .
+      229     end.
+      230     define variable v-rest as integer   no-undo .
+      231     assign
+      232       p-number = p-number modulo 100
+      233     .
+      234     if p-number < 20
+      235     then do:
+      236       assign
+      237         v-rest = p-number
+      238       .
+      239     end.
+      240     else do:
+      241       assign
+      242         v-rest = p-number modulo 10
+      243       .
+      244     end.
+      245     case v-rest :
+      246       when 1
+      247       then do:
+      248         return 2 .
+      249       end.
+      250       when 2 or
+      251       when 3 or
+      252       when 4
+      253       then do:
+      254         return 3 .
+      255       end.
+      256       otherwise do:
+      257         return 1 .
+      258       end.
+      259     end case .
+      260   end.
+      261   procedure cur-time-mjd-to-date :
+      262      define input  parameter i-mjd-diff as decimal no-undo.
+      263      define output parameter o-Date     as date    no-undo.
+      264      define output parameter o-Time     as integer no-undo.
+      265      define variable v-day-number as integer   no-undo .
+      266      if    i-mjd-diff < 0
+      267         or i-mjd-diff = ?
+      268      then do:
+      269         return "?" .
+      270      end.
+      271      assign
+      272         v-day-number = truncate(i-mjd-diff,0).
+      273         o-Date = date(v-day-number + 2400002).
+      274         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      275     .
+      276   end.
+      277   function cur-time-mjd-to-string returns character
+      278   (input p-mjd-diff as decimal
+      279   )
+      280   :
+      281     define variable v-day-number as integer   no-undo .
+      282     define variable v-seconds    as integer   no-undo .
+      283     define variable v-hour       as integer   no-undo .
+      284     define variable v-min        as integer   no-undo .
+      285     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      286     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      287     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      288     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      289     if p-mjd-diff < 0
+      290     or p-mjd-diff = ?
+      291     then do:
+      292       return "?" .
+      293     end.
+      294     assign
+      295       v-day-number = integer(truncate(p-mjd-diff,0))
+      296       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      297     .
+      298     if v-seconds > 86400
+      299     then do:
+      300       assign
+      301         v-seconds = 86400 - 1
+      302       .
+      303     end.
+      304     if v-seconds < 0
+      305     then do:
+      306       assign
+      307         v-seconds = 0
+      308       .
+      309     end.
+      310     assign
+      311       v-hour = truncate(v-seconds / 3600, 0)
+      312     .
+      313     assign
+      314       v-seconds = v-seconds modulo 3600
+      315     .
+      316     assign
+      317       v-min = truncate(v-seconds / 60, 0)
+      318     .
+      319     assign
+      320       v-seconds = v-seconds modulo 60
+      321     .
+      322     return
+      323         (if v-day-number <> 0
+      324           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      325           else ""
+      326         )
+      327       + (if v-day-number <> 0 or v-hour <> 0
+      328           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      329           else ""
+      330         )
+      331       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      332           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      333           else ""
+      334         )
+      335       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      336       .
+      337   end.
+      338   function cur-time-string returns character
+      339   :
+      340     define variable v-date as date      no-undo .
+      341     define variable v-time as integer   no-undo .
+      342     run cur-time in this-procedure
+      343       (output v-date
+      344       ,output v-time
+      345       ) .
+      346     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      347   end.
+      348   function cur-time-string-sec returns character
+      349   :
+      350     define variable v-date as date      no-undo .
+      351     define variable v-time as integer   no-undo .
+      352     run cur-time in this-procedure
+      353       (output v-date
+      354       ,output v-time
+      355       ) .
+      356     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      357   end.
+      358   function cur-time-custom  returns character
+      359   (input p-prefix as character
+      360   ,input p-date-format as character
+      361   ,input p-delimiter as character
+      362   ,input p-time-format as character
+      363   ,input p-suffix as character
+      364   )
+      365   :
+      366     define variable v-date as date      no-undo .
+      367     define variable v-time as integer   no-undo .
+      368     run cur-time in this-procedure
+      369       (output v-date
+      370       ,output v-time
+      371       ) .
+      372     return
+      373       p-prefix
+      374       + string(v-date, p-date-format)
+      375       + p-delimiter
+      376       + string(v-time, p-time-format)
+      377       + p-suffix
+      378       .
+      379   end.
+      380   function cur-time-print  returns character
+      381   :
+      382     define variable v-date as date      no-undo .
+      383     define variable v-time as integer   no-undo .
+      384     run cur-time in this-procedure
+      385       (output v-date
+      386       ,output v-time
+      387       ) .
+      388     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      389   end.
+      390   function cur-time-datetime returns datetime
+      391   :
+      392     define variable v-char as character no-undo .
+      393     define variable v-datetime as datetime no-undo .
+      394     v-char = cur-time-string().
+      395     v-datetime = datetime(v-char).
+      396     return  v-datetime.
+      397   end.
+      398   function cur-time-string-msec returns character
+      399   :
+      400     define variable v-date as datetime  no-undo .
+      401     v-date = now.
+      402     return string(v-date) .
+      403   end.
+      404   define variable vss-include-info3 as character format "X(65)" no-undo
+      405   initial "@(#)$Workfile$ $Revision$".
+      406   procedure xmlchar-test :
+      407   define input parameter p-in-string          as character        no-undo.
+      408   define output parameter p-out-string-enc    as character        no-undo.
+      409   define output parameter p-out-string-dec    as character        no-undo.
+      410   do
+      411   on error undo, return error
+      412   :
+      413          run xmlchar-encode in this-procedure
+      414       (
+      415             input p-in-string
+      416           , output p-out-string-enc
+      417       ).
+      418          run xmlchar-decode in this-procedure
+      419       (
+      420             input p-out-string-enc
+      421           , output p-out-string-dec
+      422       ).
+      423   end.
+      424   end .
+      425   procedure xmlchar-encode :
+      426   define input parameter p-in-string      as character        no-undo.
+      427   define output parameter p-out-string    as character        no-undo.
+      428       define variable v-position      as integer      no-undo.
+      429       define variable v-current-char  as character    no-undo.
+      430   do
+      431   on error undo, return error
+      432   :
+      433       assign
+      434           p-out-string = "":U
+      435       .
+      436       case p-in-string
+      437       :
+      438           when ?
+      439           then do:
+      440               assign
+      441                   p-out-string = "?":U
+      442               .
+      443           end.
+      444           when "?":U
+      445           then do:
+      446               assign
+      447                   p-out-string = "&#63;":U
+      448               .
+      449           end.
+      450           otherwise do:
+      451               do v-position = 1 to length( p-in-string )
+      452               :
+      453                   assign
+      454                       v-current-char = substring( p-in-string, v-position, 1 )
+      455                   .
+      456                   case v-current-char
+      457                   :
+      458                       when "&":U
+      459                       then do:
+      460                           assign
+      461                               p-out-string = p-out-string + "&amp;":U
+      462                           .
+      463                       end.
+      464                       when ">":U
+      465                       then do:
+      466                           assign
+      467                               p-out-string = p-out-string + "&gt;":U
+      468                           .
+      469                       end.
+      470                       when "<":U
+      471                       then do:
+      472                           assign
+      473                               p-out-string = p-out-string + "&lt;":U
+      474                           .
+      475                       end.
+      476                       when "'":U
+      477                       then do:
+      478                           assign
+      479                               p-out-string = p-out-string + "&apos;":U
+      480                           .
+      481                       end.
+      482                       when '"':U
+      483                       then do:
+      484                           assign
+      485                               p-out-string = p-out-string + "&quot;":U
+      486                           .
+      487                       end.
+      488                       when chr(1)
+      489                       then do:
+      490                           assign
+      491                               p-out-string = p-out-string + "":U
+      492                           .
+      493                       end.
+      494                       when chr(2)
+      495                       then do:
+      496                           assign
+      497                               p-out-string = p-out-string + "":U
+      498                           .
+      499                       end.
+      500                       when chr(3)
+      501                       then do:
+      502                           assign
+      503                               p-out-string = p-out-string + "":U
+      504                           .
+      505                       end.
+      506                       when chr(4)
+      507                       then do:
+      508                           assign
+      509                               p-out-string = p-out-string + "":U
+      510                           .
+      511                       end.
+      512                       when chr(5)
+      513                       then do:
+      514                           assign
+      515                               p-out-string = p-out-string + "":U
+      516                           .
+      517                       end.
+      518                       when chr(6)
+      519                       then do:
+      520                           assign
+      521                               p-out-string = p-out-string + "":U
+      522                           .
+      523                       end.
+      524                       when chr(7)
+      525                       then do:
+      526                           assign
+      527                               p-out-string = p-out-string + "":U
+      528                           .
+      529                       end.
+      530                       when chr(8)
+      531                       then do:
+      532                           assign
+      533                               p-out-string = p-out-string + "":U
+      534                           .
+      535                       end.
+      536                       when chr(9)
+      537                       then do:
+      538                           assign
+      539                               p-out-string = p-out-string + "":U
+      540                           .
+      541                       end.
+      542                       when chr(29)
+      543                       then do:
+      544                           assign
+      545                               p-out-string = p-out-string + "":U
+      546                           .
+      547                       end.
+      548                       when chr(10)
+      549                       then do:
+      550                           assign
+      551                               p-out-string = p-out-string + "&#10;":U
+      552                           .
+      553                       end.
+      554                       when chr(13)
+      555                       then do:
+      556                           assign
+      557                               p-out-string = p-out-string + "&#13;":U
+      558                           .
+      559                       end.
+      560                       otherwise do:
+      561                           assign
+      562                               p-out-string = p-out-string + v-current-char
+      563                           .
+      564                       end.
+      565                   end case.
+      566               end.
+      567           end.
+      568       end case.
+      569   end.
+      570   end .
+      571   procedure xmlchar-encode-1c :
+      572   define input parameter p-in-string      as character        no-undo.
+      573   define output parameter p-out-string    as character        no-undo.
+      574       define variable v-position      as integer      no-undo.
+      575       define variable v-current-char  as character    no-undo.
+      576   do
+      577   on error undo, return error
+      578   :
+      579       assign
+      580           p-out-string = "":U
+      581       .
+      582       case p-in-string
+      583       :
+      584           when ?
+      585           then do:
+      586               assign
+      587                   p-out-string = "?":U
+      588               .
+      589           end.
+      590           otherwise do:
+      591               do v-position = 1 to length( p-in-string )
+      592               :
+      593                   assign
+      594                       v-current-char = substring( p-in-string, v-position, 1 )
+      595                   .
+      596                   case v-current-char
+      597                   :
+      598                       when chr(1)
+      599                       then do:
+      600                           assign
+      601                               p-out-string = p-out-string + " ":U
+      602                           .
+      603                       end.
+      604                       when chr(2)
+      605                       then do:
+      606                           assign
+      607                               p-out-string = p-out-string + " ":U
+      608                           .
+      609                       end.
+      610                       when chr(3)
+      611                       then do:
+      612                           assign
+      613                               p-out-string = p-out-string + " ":U
+      614                           .
+      615                       end.
+      616                       when chr(4)
+      617                       then do:
+      618                           assign
+      619                               p-out-string = p-out-string + " ":U
+      620                           .
+      621                       end.
+      622                       when chr(5)
+      623                       then do:
+      624                           assign
+      625                               p-out-string = p-out-string + " ":U
+      626                           .
+      627                       end.
+      628                       when chr(6)
+      629                       then do:
+      630                           assign
+      631                               p-out-string = p-out-string + " ":U
+      632                           .
+      633                       end.
+      634                       when chr(7)
+      635                       then do:
+      636                           assign
+      637                               p-out-string = p-out-string + " ":U
+      638                           .
+      639                       end.
+      640                       when chr(8)
+      641                       then do:
+      642                           assign
+      643                               p-out-string = p-out-string + " ":U
+      644                           .
+      645                       end.
+      646                       when chr(9)
+      647                       then do:
+      648                           assign
+      649                               p-out-string = p-out-string + " ":U
+      650                           .
+      651                       end.
+      652                       when chr(29)
+      653                       then do:
+      654                           assign
+      655                               p-out-string = p-out-string + " ":U
+      656                           .
+      657                       end.
+      658                       when chr(10)
+      659                       then do:
+      660                           assign
+      661                               p-out-string = p-out-string + " ":U
+      662                           .
+      663                       end.
+      664                       when chr(13)
+      665                       then do:
+      666                           assign
+      667                               p-out-string = p-out-string + " ":U
+      668                           .
+      669                       end.
+      670                       otherwise do:
+      671                           assign
+      672                               p-out-string = p-out-string + v-current-char
+      673                           .
+      674                       end.
+      675                   end case.
+      676               end.
+      677           end.
+      678       end case.
+      679   end.
+      680   end .
+      681   procedure xmlchar-decode :
+      682   define input parameter p-in-string      as character        no-undo.
+      683   define output parameter p-out-string    as character        no-undo.
+      684       define variable v-position      as integer      no-undo.
+      685       define variable v-last-position as integer      no-undo.
+      686       define variable v-temp-integer  as integer      no-undo.
+      687       define variable v-current-char  as character    no-undo.
+      688       define variable v-next-char     as character    no-undo.
+      689       define variable v-success       as logical      no-undo.
+      690   do
+      691   on error undo, return error
+      692   :
+      693       assign
+      694           p-out-string = "":U
+      695           v-position   = 0
+      696       .
+      697       replace-cycle:
+      698       do while yes
+      699       on error undo, return error
+      700       :
+      701           assign
+      702               v-last-position = index( p-in-string, "&":U, v-position + 1 )
+      703           .
+      704           if v-last-position <= v-position
+      705           then do:
+      706               if v-position = 0
+      707               then do:
+      708                   assign
+      709                       p-out-string = p-in-string
+      710                   .
+      711               end.
+      712               else do:
+      713                   assign
+      714                       p-out-string = p-out-string + substring( p-in-string, v-position + 1 )
+      715                   .
+      716               end.
+      717               leave replace-cycle.
+      718           end.
+      719           else do:
+      720               assign
+      721                   p-out-string    = p-out-string + substring( p-in-string, v-position + 1, v-last-position - v-position - 1 )
+      722                   v-position      = v-last-position
+      723                   v-current-char  = substring( p-in-string, v-position + 1, 1 )
+      724               .
+      725               if v-current-char = "#":U
+      726               then do:
+      727                   assign
+      728                       v-last-position = index( p-in-string, ";":U, v-position + 2 )
+      729                   .
+      730                   if v-last-position > 0
+      731                   then do:
+      732                       run xmlchar-read-integer in this-procedure
+      733                        (
+      734                             input substring( p-in-string, v-position + 2, v-last-position - v-position - 2 )
+      735                           , output v-temp-integer
+      736                           , output v-success
+      737                       ).
+      738                       if v-success = yes
+      739                       and v-temp-integer >= 1
+      740                       and v-temp-integer <= 255
+      741                       then do:
+      742                           assign
+      743                               p-out-string = p-out-string + chr( v-temp-integer )
+      744                               v-position   = v-last-position + 1
+      745                           .
+      746                       end.
+      747                       else do:
+      748                           assign
+      749                               p-out-string = p-out-string + "&":U
+      750                               v-position   = v-position   + 1
+      751                           .
+      752                       end.
+      753                   end.
+      754                   else do:
+      755                       assign
+      756                           p-out-string = p-out-string + "&":U
+      757                           v-position   = v-position   + 1
+      758                       .
+      759                   end.
+      760               end.
+      761               else do:
+      762                   case substring( p-in-string, v-position + 1, 3 )
+      763                   :
+      764                       when "lt;":U
+      765                       then do:
+      766                           assign
+      767                               p-out-string = p-out-string + "<":U
+      768                               v-position   = v-position   + 3
+      769                           .
+      770                       end.
+      771                       when "gt;":U
+      772                       then do:
+      773                           assign
+      774                               p-out-string = p-out-string + ">":U
+      775                               v-position   = v-position   + 3
+      776                           .
+      777                       end.
+      778                       otherwise do:
+      779                           if substring( p-in-string, v-position + 1, 4 ) = "amp;":U
+      780                           then do:
+      781                               assign
+      782                                   p-out-string = p-out-string + "&":U
+      783                                   v-position   = v-position   + 4
+      784                               .
+      785                           end.
+      786                           else do:
+      787                               case substring( p-in-string, v-position + 1, 5 )
+      788                               :
+      789                                   when "quot;":U
+      790                                   then do:
+      791                                       assign
+      792                                           p-out-string = p-out-string + '"':U
+      793                                           v-position   = v-position   + 5
+      794                                       .
+      795                                   end.
+      796                                   when "apos;":U
+      797                                   then do:
+      798                                       assign
+      799                                           p-out-string = p-out-string + "'":U
+      800                                           v-position   = v-position   + 5
+      801                                       .
+      802                                   end.
+      803                                   otherwise do:
+      804                                       assign
+      805                                           p-out-string = p-out-string + "&":U
+      806                                       .
+      807                                   end.
+      808                               end case.
+      809                           end.
+      810                       end.
+      811                   end case.
+      812               end.
+      813           end.
+      814       end.
+      815   end.
+      816   end .
+      817   procedure xmlchar-read-integer :
+      818   define input parameter p-input-string      as character        no-undo.
+      819   define output parameter p-output-integer   as integer          no-undo.
+      820   define output parameter p-success       as logical          no-undo.
+      821   do
+      822   on error undo, return error
+      823   :
+      824       assign
+      825           p-output-integer = integer( p-input-string )
+      826       no-error.
+      827       if error-status :error
+      828       then do:
+      829           assign
+      830               p-success           = no
+      831               p-output-integer    = 0
+      832           .
+      833       end.
+      834       else do:
+      835           assign
+      836               p-success           = yes
+      837           .
+      838       end.
+      839   end.
+      840   end.
+      841   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      842   procedure strtdate :
+      843     define input  parameter p-str         as character no-undo .
+      844     define output parameter p-value       as date      no-undo .
+      845     define output parameter p-data-valid  as logical   no-undo .
+      846     define output parameter p-message     as character no-undo .
+      847   do
+      848   on error undo, return error return-value
+      849   :
+      850     define variable v-value       as date      no-undo .
+      851     define variable v-i           as integer   no-undo .
+      852     define variable v-num         as integer   no-undo .
+      853     define variable v-delim       as character no-undo .
+      854     define variable v-delim-list  as character no-undo .
+      855     define variable v-day         as integer   no-undo .
+      856     define variable v-month       as integer   no-undo .
+      857     define variable v-year        as integer   no-undo .
+      858     define variable v-day-str     as character no-undo .
+      859     define variable v-month-str   as character no-undo .
+      860     define variable v-year-str    as character no-undo .
+      861     assign
+      862       p-value       = ?
+      863       p-data-valid  = false
+      864     .
+      865     if p-str = ?
+      866     then do:
+      867       assign
+      868         p-message = substitute("Ошибка задания входных параметров. Не задана строка для преобразования. " )
+      869       .
+      870       return .
+      871     end.
+      872     if p-str = ""
+      873     then do:
+      874       assign
+      875         p-message = substitute("Ошибка задания входных параметров. Задана пустая строка для преобразования. " )
+      876       .
+      877       return .
+      878     end.
+      879     if length(p-str)  > 10
+      880     then do:
+      881       assign
+      882         p-message = substitute("Ошибка при преобразовании к дате. Неверная длина строки. " )
+      883       .
+      884       return .
+      885     end.
+      886     assign
+      887       v-delim-list = '/,-,.':U
+      888     .
+      889     _delim:
+      890     do v-i = 1 to num-entries( v-delim-list )
+      891     :
+      892       assign
+      893         v-delim = entry( v-i , v-delim-list )
+      894         v-num   = num-entries( p-str , v-delim )
+      895       .
+      896       if v-num <> 3
+      897       then do:
+      898         assign
+      899           v-delim = ''
+      900         .
+      901       end.
+      902       else do:
+      903         leave _delim.
+      904       end.
+      905     end.
+      906     if v-delim = ''
+      907     then do:
+      908       assign
+      909         p-message = substitute( "Ошибка при преобразовании к дате. Неправильный разделитель, либо ошибочное количество разделителей. " )
+      910       .
+      911       return .
+      912     end.
+      913     assign
+      914       v-day-str   = entry( 1, p-str , v-delim)
+      915       v-month-str = entry( 2, p-str , v-delim)
+      916       v-year-str  = entry( 3, p-str , v-delim)
+      917     .
+      918     if  length(v-day-str) > 2   or
+      919         length(v-day-str) < 1   or
+      920         length(v-month-str) > 2 or
+      921         length(v-month-str) < 1 or
+      922         (
+      923           length(v-year-str) <> 2 and
+      924           length(v-year-str) <> 4
+      925         )
+      926     then do:
+      927       assign
+      928         p-message = substitute("Ошибка при преобразовании к дате. Неправильное количество символов числа, месяца, либо года. " )
+      929       .
+      930       return .
+      931     end.
+      932     if length( v-year-str ) = 2
+      933     then do:
+      934       assign
+      935         v-year-str = substring( string( year(today) ), 1 , 2 ) + v-year-str
+      936       .
+      937     end.
+      938     assign
+      939       v-day   = integer( v-day-str )
+      940       v-month = integer( v-month-str)
+      941       v-year  = integer( v-year-str)
+      942     no-error .
+      943     if error-status :error
+      944     then do:
+      945       assign
+      946         p-message = substitute("Ошибка при преобразовании к дате. Неверный формат символов числа, месяца, либо года. " )
+      947       .
+      948       return .
+      949     end.
+      950     if v-day < 1  or
+      951        v-day > 31 or
+      952        v-month < 1 or
+      953        v-month > 12 or
+      954        v-year < 0   or
+      955        v-year > 5000
+      956     then do:
+      957       assign
+      958         p-message = substitute("Ошибка при преобразовании к дате. Неверный диапозон числа, месяца, года. " )
+      959       .
+      960       return .
+      961     end.
+      962     assign
+      963       v-value = date( v-month, v-day, v-year )
+      964     no-error .
+      965     if error-status :error
+      966     then do:
+      967       assign
+      968         p-message = substitute("Ошибка при преобразовании к дате. &1. " , error-status :get-message(1))
+      969       .
+      970       return .
+      971     end.
+      972     assign
+      973       p-value       = v-value
+      974       p-data-valid  = true
+      975     .
+      976   end.
+      977   end procedure.
+      978   define variable v-bge-xml-bgecliiv      as logical  init no  no-undo.
+      979   define variable v-bge-xml-bgeclall      as logical  init no  no-undo.
+      980   define variable v-bge-xml-bgedict       as logical  init no  no-undo.
+      981   define variable v-bge-xml-bgeflold      as character         no-undo.
+      982   define variable v-bge-xml-bgefmt        as character         no-undo.
+      983   define variable v-bge-xml-shift-mode    as logical           no-undo.
+      984   define variable v-bge-xml-bgeflnm-doc   as character         no-undo.
+      985   define variable v-bge-xml-bgeflnm-day   as character         no-undo.
+      986   define variable v-bge-xml-log-file-name as character    no-undo.
+      987   define variable v-bge-xml-dbf-file-name as character    no-undo.
+      988   define variable v-bge-xml-db-num-str    as character    no-undo .
+      989   define variable v-bge-xml-static-log-file-name as character    no-undo.
+      990   define temp-table temp_ext-doc-type no-undo
+      991       field edt-key               as integer
+      992       field ext-doc-type          as character
+      993       field ext-doc-type-label    as character
+      994       index pi is primary unique
+      995           edt-key
+      996   .
+      997   define temp-table temp_bge-xml_goods no-undo
+      998       field gds-code as integer
+      999       index pi is primary unique gds-code
+     1000   .
+     1001   define temp-table temp_bge-xml_clients no-undo
+     1002       field obj-type as character
+     1003       field obj-code as integer
+     1004       field shift-date    as date
+     1005       field shift-num     as integer
+     1006       index pi is primary unique
+     1007           obj-type
+     1008           obj-code
+     1009   .
+     1010   define temp-table temp_bge-xml_dis-card no-undo
+     1011       field d-card as character
+     1012       index pi is primary unique
+     1013           d-card
+     1014   .
+     1015   define temp-table temp_doc-code no-undo
+     1016       field doc-code as character
+     1017       index pi is primary unique
+     1018           doc-code
+     1019   .
+     1020   define temp-table temp_del-doc-code no-undo
+     1021       field doc-code as character
+     1022       index pi is primary unique
+     1023           doc-code
+     1024   .
+     1025   define temp-table temp_pr-doc-num no-undo
+     1026       field doc-num as character
+     1027       index pi is primary unique
+     1028           doc-num
+     1029   .
+     1030   define temp-table temp_fin-doc-code no-undo
+     1031       field host-code as integer
+     1032       field fin-doc-code as integer
+     1033       index pi is primary unique
+     1034           host-code
+     1035           fin-doc-code
+     1036   .
+     1037   define temp-table temp_del-fin-doc-code no-undo
+     1038       field host-code as integer
+     1039       field fin-doc-code as integer
+     1040       field corr-user-db-num as integer
+     1041       field chip-num as integer
+     1042       index pi is primary unique
+     1043           host-code
+     1044           fin-doc-code
+     1045           corr-user-db-num
+     1046           chip-num
+     1047   .
+     1048   define temp-table temp_fin-ob no-undo
+     1049       field host-code as integer
+     1050       field fin-doc-code as character
+     1051       index pi is primary unique
+     1052           host-code
+     1053           fin-doc-code
+     1054   .
+     1055   define temp-table temp_del-fin-ob no-undo
+     1056       field host-code as integer
+     1057       field fin-doc-code as character
+     1058       field corr-user-db-num as integer
+     1059       field chip-num as integer
+     1060       index pi is primary unique
+     1061           host-code
+     1062           fin-doc-code
+     1063           corr-user-db-num
+     1064           chip-num
+     1065   .
+     1066   define temp-table temp_ord-doc-code no-undo
+     1067     field doc-code as character
+     1068   index pi is primary unique
+     1069     doc-code
+     1070   .
+     1071   define temp-table tt-bge-xml-bgecliiv no-undo
+     1072     field obj-type  like ub.clients.obj-type
+     1073     field obj-code  like ub.clients.obj-code
+     1074   index pi is primary unique
+     1075     obj-type
+     1076     obj-code
+     1077   .
+     1078   FUNCTION w-XMLPutParamInTag RETURNS CHAR (INPUT sParName AS CHAR, INPUT sToPlace AS CHAR,
+     1079                                             INPUT iFlagEmpty AS INTEGER).
+     1080       DEF VAR sOut AS CHAR FORMAT "X(255)" NO-UNDO.
+     1081       IF sToPlace = "" OR sToPlace = ? OR sToPlace = "0" THEN
+     1082           DO:
+     1083               IF iFlagEmpty = 0                           THEN RETURN "".
+     1084               ELSE IF iFlagEmpty = 1                      THEN RETURN sParName + "=&#034;&#034;".
+     1085               ELSE IF iFlagEmpty = 2 AND sToPlace = "0"   THEN RETURN sParName + "=&#034;0&#034;".
+     1086               ELSE IF iFlagEmpty = 3 AND sToPlace = ""    THEN RETURN sParName + "=&#034;&#034;".
+     1087               ELSE RETURN "".
+     1088           END.
+     1089       ELSE DO:
+     1090           run xmlchar-encode in this-procedure (
+     1091                 input sToPlace
+     1092               , output sToPlace
+     1093           ).
+     1094           ASSIGN
+     1095               sToPlace = sParName + '="' + sToPlace + '"'
+     1096           .
+     1097           RETURN sToPlace.
+     1098       END.
+     1099   END FUNCTION.
+     1100   function bge-xml-date returns character
+     1101   ( input p-date as date )
+     1102   :
+     1103     define variable v-date-str as character no-undo .
+     1104     run bge-xml-date-to-str in this-procedure ( input   p-date
+     1105                                               , output  v-date-str
+     1106                                               ) .
+     1107     return v-date-str.
+     1108   end function.
+     1109   function bge-xml-str-date returns character
+     1110   ( input p-date-str as character )
+     1111   :
+     1112     define variable v-date-str as character no-undo .
+     1113     run bge-xml-date-str-to-str in this-procedure ( input   p-date-str
+     1114                                                   , output  v-date-str
+     1115                                                   ) .
+     1116     return v-date-str.
+     1117   end function.
+     1118   function bge-xml-normalize-dec returns decimal
+     1119   ( input p-val as decimal )
+     1120   :
+     1121     return (if p-val = ? then 0 else p-val) .
+     1122   end function.
+     1123   PROCEDURE wp-XMLTagOpen:
+     1124   DEF INPUT PARAM iTagLevel AS INTEGER NO-UNDO.
+     1125   DEF INPUT PARAM sTagName AS CHAR NO-UNDO.
+     1126   DEF INPUT PARAM sParValue AS CHAR NO-UNDO.
+     1127       define variable v-out-string    as character    no-undo.
+     1128   do
+     1129   on error undo, return error
+     1130   :
+     1131       if v-bge-xml-bgefmt = "dbf":U
+     1132       then do:
+     1133       end.
+     1134       else do:
+     1135           assign
+     1136               v-out-string = substitute( "&1&2<&3&4>"
+     1137                                       , chr(10)
+     1138                                       , fill( " ":U, 4 * iTagLevel)
+     1139                                       , sTagName
+     1140                                       , ( if sParValue = "":U or sParValue = ? then "":U else " " + sParValue )
+     1141                               )
+     1142           .
+     1143           put stream stmXMLOut unformatted
+     1144               v-out-string
+     1145           .
+     1146       end.
+     1147   end.
+     1148   END PROCEDURE.
+     1149   PROCEDURE wp-XMLTagPut:
+     1150     DEF INPUT PARAM iTagLevel AS INTEGER NO-UNDO.
+     1151     DEF INPUT PARAM sTagName AS CHAR NO-UNDO.
+     1152     DEF INPUT PARAM sParValue AS CHAR NO-UNDO.
+     1153     DEF INPUT PARAM iFlagEmpty AS INTEGER NO-UNDO.
+     1154       define variable v-out-string    as character    no-undo.
+     1155   do
+     1156   on error undo, return error
+     1157   :
+     1158       if v-bge-xml-bgefmt = "dbf":U
+     1159       then do:
+     1160           if v-bge-xml-dbf-file-name <> "":U
+     1161           then do:
+     1162               output stream stmXMLOut to value( v-bge-xml-dbf-file-name ) append.
+     1163               export stream stmXMLOut
+     1164                   sTagName
+     1165                   sParValue
+     1166               .
+     1167               output stream stmXMLOut close.
+     1168           end.
+     1169       end.
+     1170       else do:
+     1171           IF  iFlagEmpty = 1
+     1172           OR (iFlagEmpty = 0 AND (sParValue <> "" AND sParValue <> ?) )
+     1173           OR (iFlagEmpty = 2 AND (sParValue <> "" AND sParValue <> ? AND sParValue <> "0"))
+     1174           OR (iFlagEmpty = 3 AND (sParValue <> "" AND sParValue <> ? AND CAPS(sParValue) <> "NO"))
+     1175           THEN DO:
+     1176               run xmlchar-encode in this-procedure (
+     1177                   input sParValue
+     1178                   , output sParValue
+     1179               ).
+     1180               assign
+     1181                   v-out-string = substitute( "&1&2<&3>&4</&3>"
+     1182                                               , chr(10)
+     1183                                               , FILL(" ", 4 * iTagLevel)
+     1184                                               , sTagName
+     1185                                               , sParValue
+     1186                               )
+     1187               .
+     1188               PUT STREAM stmXMLOut UNFORMATTED
+     1189                   v-out-string
+     1190               .
+     1191           END.
+     1192       end.
+     1193   end.
+     1194   END PROCEDURE.
+     1195   PROCEDURE wp-XMLTagClose:
+     1196   DEF INPUT PARAM iTagLevel AS INTEGER NO-UNDO.
+     1197   DEF INPUT PARAM sTagName AS CHAR NO-UNDO.
+     1198       define variable v-out-string    as character    no-undo.
+     1199   do
+     1200   on error undo, return error
+     1201   :
+     1202       if v-bge-xml-bgefmt = "dbf":U
+     1203       then do:
+     1204       end.
+     1205       else do:
+     1206           assign
+     1207               v-out-string = substitute( "&1&2</&3>"
+     1208                                   , ( if iTagLevel=0 then "":U else chr(10) )
+     1209                                   , fill( " ", 4 * iTagLevel )
+     1210                                   , sTagName
+     1211                           )
+     1212           .
+     1213           PUT STREAM stmXMLOut UNFORMATTED
+     1214               v-out-string
+     1215           .
+     1216       end.
+     1217   end.
+     1218   END PROCEDURE.
+     1219   PROCEDURE wp-XMLWriteLog:
+     1220     DEF INPUT PARAMETER sFileName AS CHAR     NO-UNDO.
+     1221     DEF INPUT PARAMETER iLogLevel AS INTEGER  NO-UNDO.
+     1222     DEF INPUT PARAMETER sToWrite  AS CHAR     NO-UNDO.
+     1223   define variable v-str              as character no-undo .
+     1224   define variable v-error-append     as logical   no-undo .
+     1225   define variable v-error-append-msg as character no-undo .
+     1226   assign
+     1227     v-str = chr(10)
+     1228             + (if (iLogLevel = 0 or sToWrite = "&DLine" or sToWrite = "&Line") then "" else cur-time-string-sec() + " ")
+     1229             + (if sToWrite = "&Line" then fill("-", 80) else if sToWrite = "&DLine" then fill("=", 80) else sToWrite)
+     1230     v-str = replace(v-str, (chr(10) + chr(13)), chr(10) )
+     1231     v-str = replace(v-str, (chr(13) + chr(10)), chr(10) )
+     1232     v-str = replace(v-str, chr(10), (chr(13) + chr(10)) )
+     1233   .
+     1234   run bge/bge-log.p (input v-str) no-error .
+     1235   if error-status:error then do:
+     1236     assign
+     1237       v-error-append     = yes
+     1238       v-error-append-msg = return-value
+     1239     .
+     1240   end.
+     1241   run gbl/fileapnd.p
+     1242     ( input sFileName
+     1243     , input v-str
+     1244     , input 10
+     1245     ) no-error .
+     1246   if error-status:error then do:
+     1247     assign
+     1248       v-error-append     = yes
+     1249       v-error-append-msg = substitute( "&1&2&3"
+     1250                                       , v-error-append-msg
+     1251                                       , chr(10)
+     1252                                       , return-value
+     1253                                       )
+     1254     .
+     1255   end.
+     1256   if v-error-append
+     1257   then do:
+     1258     return error substitute( "&1" , v-error-append-msg ) .
+     1259   end.
+     1260   END PROCEDURE.
+     1261   PROCEDURE wp-XMLWriteEDT:
+     1262     DEF INPUT PARAMETER hEDT AS HANDLE NO-UNDO.
+     1263     DEF INPUT PARAMETER iLogLevel AS INTEGER  NO-UNDO.
+     1264     DEF INPUT PARAMETER sToWrite  AS CHAR     NO-UNDO.
+     1265       if valid-handle ( hEDT )
+     1266       then do:
+     1267           hEDT :move-to-eof().
+     1268           hEDT :insert-string(IF (iLogLevel = 0 OR sToWrite = "&DLine"
+     1269                                           OR sToWrite = "&Line") THEN "" ELSE
+     1270                                           cur-time-string-sec() + " ").
+     1271           hEDT :insert-string(IF sToWrite = "&Line" THEN FILL("-", 80)
+     1272                   ELSE IF sToWrite = "&DLine" THEN FILL("=", 80)
+     1273                   ELSE FILL(" ", iLogLevel) + sToWrite).
+     1274           hEDT :insert-string(chr(10)).
+     1275       end.
+     1276       process events.
+     1277       output to 'bgescn.txt' append.
+     1278           put unformatted
+     1279               chr(10) string( (IF (iLogLevel = 0 OR sToWrite = "&DLine"
+     1280                                           OR sToWrite = "&Line") THEN "" ELSE
+     1281                                           STRING(TODAY) + " " + STRING(TIME, "hh:mm:ss") + " ") )
+     1282               string( (IF sToWrite = "&Line" THEN FILL("-", 80)
+     1283                   ELSE IF sToWrite = "&DLine" THEN FILL("=", 80)
+     1284                   ELSE FILL(" ", iLogLevel) + sToWrite) )
+     1285           .
+     1286       output close.
+     1287   END PROCEDURE.
+     1288   PROCEDURE wp-XMLShowCNT:
+     1289     DEF INPUT PARAMETER hCNT     AS HANDLE   NO-UNDO.
+     1290       if valid-handle( hCNT )
+     1291       then do:
+     1292           ASSIGN hCNT :VISIBLE = TRUE.
+     1293       end.
+     1294   END PROCEDURE.
+     1295   PROCEDURE wp-XMLHideCNT:
+     1296     DEF INPUT PARAMETER hCNT     AS HANDLE   NO-UNDO.
+     1297       if valid-handle( hCNT )
+     1298       then do:
+     1299           ASSIGN hCNT :VISIBLE = FALSE.
+     1300       end.
+     1301   END PROCEDURE.
+     1302   PROCEDURE wp-XMLWriteCNT:
+     1303     DEF INPUT PARAMETER hCNT     AS HANDLE  NO-UNDO.
+     1304     DEF INPUT PARAMETER sCounter AS CHAR    NO-UNDO.
+     1305       if valid-handle( hCNT )
+     1306       then do:
+     1307           ASSIGN hCNT :SCREEN-VALUE = sCounter.
+     1308       end.
+     1309   END PROCEDURE.
+     1310   procedure bge-xml-write-header:
+     1311   do
+     1312   on error undo, return error
+     1313   :
+     1314   define input parameter p-xml-file-name  as character        no-undo.
+     1315   define input parameter p-doc-name       as character        no-undo.
+     1316   define input parameter p-version        as character        no-undo.
+     1317   define input parameter p-db-num         as integer          no-undo.
+     1318   define input parameter p-date-from      as date             no-undo.
+     1319   define input parameter p-shift-num-from as integer          no-undo.
+     1320   define input parameter p-date-to        as date             no-undo.
+     1321   define input parameter p-shift-num-to   as integer          no-undo.
+     1322   define input parameter p-obj-list       as character        no-undo.
+     1323   define input parameter p-doc-type-list  as character        no-undo.
+     1324   define input parameter p-pay-code       as logical          no-undo.
+     1325   define input parameter p-cst            as logical          no-undo.
+     1326   define input parameter p-parts          as logical          no-undo.
+     1327   define input parameter p-chk-pay-code   as logical          no-undo.
+     1328   define input parameter p-pay-desk       as logical          no-undo.
+     1329   define input parameter p-pay-desk-cards as logical          no-undo.
+     1330   define input parameter p-deleted        as logical          no-undo.
+     1331   define input parameter p-opened-docs    as logical          no-undo.
+     1332   define variable v-out-string    as character    no-undo.
+     1333   output stream stmXMLOut to value( p-xml-file-name + "xm1" ) convert target "1251".
+     1334   assign
+     1335       v-out-string = substitute( "&1&2&3"
+     1336                           , "<?xml version='1.0' encoding='windows-1251'?>":U
+     1337                           , chr(10)
+     1338                           , "<IBS_Trade_House>":U )
+     1339   .
+     1340   put stream stmXMLOut unformatted
+     1341       v-out-string
+     1342   .
+     1343   run wp-XMLTagOpen(1, "header","").
+     1344   if v-bge-xml-bgeflold = "oracle":u
+     1345   then do:
+     1346     run wp-XMLTagOpen in this-procedure  ( 2, "delivery", "").
+     1347     run wp-XMLTagput in this-procedure ( 3, "message","", 1).
+     1348     run wp-XMLTagput in this-procedure ( 3, "from","IBS Trade House", 1).
+     1349     run wp-XMLTagput in this-procedure ( 3, "to","Oracle Retail", 1).
+     1350     run wp-XMLTagClose in this-procedure ( 2, "delivery"    ).
+     1351   end.
+     1352   run wp-XMLTagOpen( 2, "manifest", "").
+     1353   run wp-XMLTagOpen( 3, "document", "").
+     1354   run wp-XMLTagput( 4, "name", p-doc-name, 0).
+     1355   run wp-XMLTagput( 4, "description", "", 0).
+     1356   run wp-XMLTagput( 4, "version", p-version, 0).
+     1357   run wp-XMLTagclose( 3, "document" ).
+     1358   run wp-XMLTagclose( 2, "manifest" ).
+     1359   run wp-XMLTagclose( 1, "header" ).
+     1360   run wp-XMLTagOpen(1, "options","").
+     1361   run wp-XMLTagput( 2, "exportDate",      string( today,              "99/99/9999" ), 0).
+     1362   run wp-XMLTagput( 2, "exportDateXml",   bge-xml-date( today )                     , 0).
+     1363   run wp-XMLTagput( 2, "exportTime",      string( time,               "HH:MM:SS"   ), 0).
+     1364   run wp-XMLTagput( 2, "baseNum",         string( p-db-num                         ), 0).
+     1365   run wp-XMLTagput( 2, "dateFrom",        string( p-date-from,        "99/99/9999" ), 0).
+     1366   run wp-XMLTagput( 2, "dateFromXml",     bge-xml-date( p-date-from )               , 0).
+     1367   run wp-XMLTagput( 2, "shiftNumFrom",    string( p-shift-num-from                 ), 2).
+     1368   run wp-XMLTagput( 2, "dateTo",          string( p-date-to,          "99/99/9999" ), 0).
+     1369   run wp-XMLTagput( 2, "dateToXml",       bge-xml-date( p-date-to )                 , 0).
+     1370   run wp-XMLTagput( 2, "shiftNumTo",      string( p-shift-num-to                   ), 2).
+     1371   run wp-XMLTagput( 2, "objList",                 p-obj-list                        , 0).
+     1372   run wp-XMLTagput( 2, "docTypeList",             p-doc-type-list                   , 0).
+     1373   run wp-XMLTagput( 2, "payCode",         string( p-pay-code                       ), 0).
+     1374   run wp-XMLTagput( 2, "cst",             string( p-cst                            ), 0).
+     1375   run wp-XMLTagput( 2, "parts",           string( p-parts                          ), 0).
+     1376   run wp-XMLTagput( 2, "chkPayCode",      string( p-chk-pay-code                   ), 0).
+     1377   run wp-XMLTagput( 2, "chkPayDesk",      string( p-pay-desk                       ), 0).
+     1378   run wp-XMLTagput( 2, "chkPayDeskCards", string( p-pay-desk-cards                 ), 0).
+     1379   run wp-XMLTagput( 2, "deletedDocs",     string( p-deleted                        ), 0).
+     1380   run wp-XMLTagput( 2, "openedDocs",      string( p-opened-docs                    ), 0).
+     1381   run wp-XMLTagClose(1, "options").
+     1382   run wp-XMLTagOpen( 1, "body", "" ).
+     1383   output stream stmXMLOut close.
+     1384   end.
+     1385   end procedure.
+     1386   procedure xml-bge-write-footer:
+     1387   do
+     1388   on error undo, return error return-value
+     1389   :
+     1390   define input parameter p-xml-file-name as character    no-undo.
+     1391   define variable v-error-num     as integer           no-undo.
+     1392   output stream stmXMLOut to value( p-xml-file-name + "xm1" ) convert target "1251" append.
+     1393   run wp-XMLTagClose( 1, "body" ).
+     1394   run wp-XMLTagClose( 0, "IBS_Trade_House" ).
+     1395   output stream stmXMLOut close.
+     1396   if v-bge-xml-bgeflold = "oracle":u
+     1397   then do:
+     1398     define variable v-tmp-file-name         as character no-undo .
+     1399     define variable v-zip-file-name         as character no-undo .
+     1400     define variable v-exch-file-name        as character no-undo .
+     1401     define variable v-heap-file-name        as character no-undo .
+     1402     define variable v-i                     as integer   no-undo .
+     1403     define variable v-file-name             as character no-undo .
+     1404     define variable v-arc                   as character no-undo .
+     1405     define variable v-str                   as character no-undo .
+     1406     define variable v-exch-tmp-file-name    as character no-undo .
+     1407     define variable v-bge-xml-tmp-exch-dir  as character no-undo .
+     1408     define variable v-bge-xml-exch-dir      as character no-undo .
+     1409     define variable v-bge-xml-heap-dir      as character no-undo .
+     1410     define variable v-bge-xml-compress-heap as logical   no-undo .
+     1411     define variable v-home-dir              as character no-undo .
+     1412     define variable v-os-command            as character no-undo .
+     1413     get-key-value section "BGE" key "Dirfrg-acc" value v-home-dir.
+     1414     if v-home-dir = ?
+     1415     then do:
+     1416       undo, return error substitute( "&1&2&3"
+     1417                                     , "Не найден параметр ini-файла, определяющий каталог экспорта.":u
+     1418                                     , chr(10)
+     1419                                     , "Обратитесь к администратору.":u
+     1420                                     ).
+     1421     end.
+     1422     assign
+     1423       v-home-dir = v-home-dir
+     1424     .
+     1425     run gbl/dir-cre.p ( input v-home-dir ) no-error.
+     1426     if error-status :error
+     1427     then do:
+     1428       undo, return error substitute( "&1&2&3"
+     1429                                     , "Неверно задан каталог экспорта.":u
+     1430                                     , chr(10)
+     1431                                     , "Обратитесь к администратору.":u
+     1432                                     ).
+     1433     end.
+     1434     get-key-value section "BGE" key "dir-exch" value v-bge-xml-exch-dir .
+     1435     if v-bge-xml-exch-dir = ?
+     1436     then do:
+     1437       undo, return error substitute( "&1&2&3"
+     1438                                     , "Не найден параметр ini-файла, определяющий каталог экспорта (exch).":u
+     1439                                     , chr(10)
+     1440                                     , "Обратитесь к администратору.":u
+     1441                                     ).
+     1442     end.
+     1443     run gbl/dir-cre.p ( input v-bge-xml-exch-dir ) no-error.
+     1444     if error-status :error
+     1445     then do:
+     1446       undo, return error substitute( "&1&2&3"
+     1447                                     , "Неверно задан каталог экспорта (exch).":u
+     1448                                     , chr(10)
+     1449                                     , "Обратитесь к администратору.":u
+     1450                                     ).
+     1451     end.
+     1452     get-key-value section "BGE" key "dir-heap" value v-bge-xml-heap-dir.
+     1453     if v-bge-xml-heap-dir = ?
+     1454     then do:
+     1455       undo, return error substitute( "&1&2&3"
+     1456                                     , "Не найден параметр ini-файла, определяющий каталог экспорта (heap).":u
+     1457                                     , chr(10)
+     1458                                     , "Обратитесь к администратору.":u
+     1459                                     ).
+     1460     end.
+     1461     run gbl/dir-cre.p ( input v-bge-xml-heap-dir ) no-error.
+     1462     if error-status :error
+     1463     then do:
+     1464       undo, return error substitute( "&1&2&3"
+     1465                                     , "Неверно задан каталог экспорта (heap).":u
+     1466                                     , chr(10)
+     1467                                     , "Обратитесь к администратору.":u
+     1468                                     ).
+     1469     end.
+     1470     get-key-value section "BGE" key "heap-compress" value v-str.
+     1471     assign
+     1472       v-i = int(v-str)
+     1473     no-error .
+     1474     if v-i = ? or v-i = 0
+     1475     then do:
+     1476       assign
+     1477         v-bge-xml-compress-heap = no
+     1478       .
+     1479     end.
+     1480     else do:
+     1481       assign
+     1482         v-bge-xml-compress-heap = yes
+     1483       .
+     1484     end.
+     1485     assign
+     1486       v-arc = search( "exe/7za.exe":u )
+     1487     .
+     1488     if v-arc = ? or v-arc = ""
+     1489     then do:
+     1490       undo, return error("Не найдена программа 7za.exe, невозможно упаковать файлы в архив.":u).
+     1491     end.
+     1492     assign
+     1493       v-file-name            = entry(num-entries( p-xml-file-name , chr(47) ) , p-xml-file-name , chr(47) )
+     1494       v-tmp-file-name        = session :temp-directory + v-file-name + "DAT":u
+     1495       v-zip-file-name        = session :temp-directory + v-file-name + "DAT.zip":u
+     1496       v-bge-xml-tmp-exch-dir = v-bge-xml-exch-dir + ".000"
+     1497       v-exch-tmp-file-name   = v-bge-xml-tmp-exch-dir + chr(47) + v-file-name + "tmp":u
+     1498       v-exch-file-name       = v-bge-xml-exch-dir + chr(47) + v-file-name + "DAT.zip":u
+     1499       v-heap-file-name       = v-bge-xml-heap-dir + chr(47) + v-file-name + "DAT":u
+     1500     .
+     1501     run gbl/del-file.p (input v-tmp-file-name) .
+     1502     run gbl/del-file.p (input v-zip-file-name) .
+     1503     run bge/os_copy.p ("M", p-xml-file-name + "xm1":u, v-tmp-file-name, output v-error-num ).
+     1504     if v-error-num > 0
+     1505     then do:
+     1506         undo, return error substitute( "Ошибка переноса из &1 в &2. Код ошибки: &3"
+     1507                                      , p-xml-file-name + "xm1":u
+     1508                                      , v-tmp-file-name
+     1509                                      , v-error-num
+     1510                                      ).
+     1511     end.
+     1512     assign
+     1513       v-os-command     = substitute( "&1 a -tzip &2 &3"
+     1514                                    , v-arc
+     1515                                    , v-zip-file-name
+     1516                                    , v-tmp-file-name
+     1517                                    )
+     1518     .
+     1519     os-command silent value ( v-os-command ) .
+     1520     run gbl/del-file.p (input v-heap-file-name) .
+     1521     if v-bge-xml-compress-heap = no
+     1522     then do:
+     1523       run bge/os_copy.p ("C", v-tmp-file-name, v-heap-file-name, output v-error-num ).
+     1524       if v-error-num > 0
+     1525       then do:
+     1526           undo, return error substitute( "Ошибка копирования из &1 в &2. Код ошибки: &3"
+     1527                                        , v-tmp-file-name
+     1528                                        , v-heap-file-name
+     1529                                        , v-error-num
+     1530                                        ) .
+     1531       end.
+     1532     end.
+     1533     else do:
+     1534       run bge/os_copy.p ("C", v-zip-file-name, v-heap-file-name + ".zip", output v-error-num ).
+     1535       if v-error-num > 0
+     1536       then do:
+     1537           undo, return error substitute( "Ошибка копирования из &1 в &2. Код ошибки: &3"
+     1538                                        , v-zip-file-name
+     1539                                        , v-heap-file-name
+     1540                                        , v-error-num
+     1541                                        ) .
+     1542       end.
+     1543     end.
+     1544     run gbl/del-file.p (input v-tmp-file-name) .
+     1545     run gbl/dir-cre.p ( input v-bge-xml-tmp-exch-dir ) no-error.
+     1546     if error-status :error then do:
+     1547       undo, return error substitute( "&1&2&3"
+     1548                                     , substitute( "Не удалось создать каталог &1.", v-bge-xml-tmp-exch-dir )
+     1549                                     , chr(10)
+     1550                                     , "Обратитесь к администратору."
+     1551                                     ).
+     1552     end.
+     1553     run gbl/del-file.p (input v-exch-file-name) .
+     1554     run gbl/del-file.p (input v-exch-tmp-file-name ) .
+     1555     run bge/os_copy.p ("M", v-zip-file-name, v-exch-tmp-file-name, output v-error-num ).
+     1556     if v-error-num > 0
+     1557     then do:
+     1558       undo, return error substitute( "Ошибка копирования из &1 в &2. Код ошибки: &3"
+     1559                                     , v-zip-file-name
+     1560                                     , v-exch-tmp-file-name
+     1561                                     , v-error-num
+     1562                                     ) .
+     1563     end.
+     1564     run bge/os_copy.p ("M", v-exch-tmp-file-name, v-exch-file-name , output v-error-num ).
+     1565     if v-error-num > 0
+     1566     then do:
+     1567       undo, return error substitute( "Ошибка копирования из &1 в &2. Код ошибки: &3"
+     1568                                     , v-exch-tmp-file-name
+     1569                                     , v-exch-file-name
+     1570                                     , v-error-num
+     1571                                     ) .
+     1572     end.
+     1573     run gbl/del-file.p (input v-bge-xml-tmp-exch-dir ) .
+     1574   end.
+     1575   else do:
+     1576     run bge/os_copy.p ("M", p-xml-file-name + "xm1", p-xml-file-name + "xml", output v-error-num ).
+     1577     if v-error-num > 0
+     1578     then do:
+     1579       undo, return error substitute( "Ошибка копирования из &1 в &2. Код ошибки: &3"
+     1580                                     , p-xml-file-name + "xm1"
+     1581                                     , p-xml-file-name + "xml"
+     1582                                     , v-error-num
+     1583                                     ) .
+     1584     end.
+     1585   end.
+     1586   if opsys = "unix"
+     1587   then do:
+     1588       os-command silent chmod 666 value (p-xml-file-name + "xml") 2>/dev/null.
+     1589   end.
+     1590   end.
+     1591   end procedure.
+     1592   procedure xml-bge-filename0:
+     1593   define input parameter p-prefix   as character no-undo .
+     1594   define input parameter p-name     as character no-undo .
+     1595   define input parameter p-shared-process as logical no-undo .
+     1596   define input parameter p-home-dir as character no-undo . // из ini-параметра [BGE] Dirfrg-acc
+     1597   define output parameter p-xml-file-name  as character no-undo .
+     1598   // define output parameter p-fullfnamenoext as character no-undo .
+     1599   define output parameter p-locked         as logical      no-undo.
+     1600   define variable v-fullfnamenoext as character no-undo .
+     1601   define variable v-fileext        as character no-undo .
+     1602   define variable v-fullfname      as character no-undo .
+     1603   define variable v-error-num      as integer   no-undo .
+     1604   do
+     1605   on error undo, return error
+     1606   :
+     1607     case v-bge-xml-bgeflold :
+     1608       when "old" then do:
+     1609         v-fullfnamenoext = substitute ("&1&2&3&4", p-home-dir, chr(47), p-name, v-bge-xml-db-num-str) .
+     1610         v-fileext       = ".xml":U .
+     1611         v-fullfname     = v-fullfnamenoext + v-fileext .
+     1612         p-xml-file-name = v-fullfname .
+     1613         run bge/os_copy.p ("D", p-xml-file-name, "", output v-error-num ).
+     1614         if v-error-num > 0 then do:
+     1615           return error.
+     1616         end.
+     1617       end.
+     1618       when "var" then do:
+     1619         case p-prefix :
+     1620           when "doc" then do:
+     1621             v-fullfnamenoext = substitute ("&1&2&3&4", p-home-dir, chr(47), p-name, v-bge-xml-bgeflnm-doc) .
+     1622             v-fileext       = ".xml":U .
+     1623             v-fullfname     = v-fullfnamenoext + v-fileext .
+     1624             p-xml-file-name = v-fullfname .
+     1625           end.
+     1626           when "day" then do:
+     1627             v-fullfnamenoext = substitute ("&1&2&3&4", p-home-dir, chr(47), p-name, v-bge-xml-bgeflnm-day) .
+     1628             v-fileext       = ".xml":U .
+     1629             v-fullfname     = v-fullfnamenoext + v-fileext .
+     1630             p-xml-file-name = v-fullfname .
+     1631           end.
+     1632           otherwise do:
+     1633             v-fullfnamenoext = substitute ("&1&2&3", p-home-dir, chr(47), p-name) .
+     1634             v-fileext       = ".xml":U .
+     1635             v-fullfname     = v-fullfnamenoext + v-fileext .
+     1636             p-xml-file-name = v-fullfname .
+     1637           end.
+     1638         end case.
+     1639         run bge/os_copy.p ("D", p-xml-file-name, "", output v-error-num ).
+     1640         if v-error-num > 0 then do:
+     1641           return error.
+     1642         end.
+     1643       end.
+     1644       when "new" then do:
+     1645                   run bge/genfname.p (
+     1646                       input p-home-dir
+     1647                       , input p-prefix
+     1648                       , input ""
+     1649                       , input "xml"
+     1650                       , input ""
+     1651                       , output p-xml-file-name
+     1652                   ).
+     1653       end.
+     1654       when "no-parameter" then do:
+     1655         if p-shared-process then do:
+     1656                       run bge/genfname.p (
+     1657                           input p-home-dir
+     1658                           , input "d"
+     1659                           , input ""
+     1660                           , input "xml"
+     1661                           , input ""
+     1662                           , output p-xml-file-name
+     1663                       ).
+     1664         end.
+     1665         else do:
+     1666           v-fullfnamenoext = substitute ("&1&2&3", p-home-dir, chr(47), p-name) .
+     1667           v-fileext       = ".xml":U .
+     1668           v-fullfname     = v-fullfnamenoext + v-fileext .
+     1669           p-xml-file-name = v-fullfname .
+     1670           run bge/os_copy.p ("D", p-xml-file-name, "", output v-error-num ).
+     1671           if v-error-num > 0 then do:
+     1672             return error.
+     1673           end.
+     1674         end.
+     1675       end.
+     1676     end case.
+     1677     assign
+     1678       p-xml-file-name = substring( p-xml-file-name, 1, length( p-xml-file-name ) - 3 )
+     1679       p-locked = ( search ( p-xml-file-name + "lk" ) <> ? )
+     1680     .
+     1681   end .
+     1682   end procedure .
+     1683   procedure xml-bge-filename :
+     1684   do
+     1685   on error undo, return error
+     1686   :
+     1687   define input parameter p-prefix             as character    no-undo.
+     1688   define input parameter p-name               as character    no-undo.
+     1689   define input parameter p-shared-process     as logical      no-undo.
+     1690   define output parameter p-xml-file-name     as character    no-undo.
+     1691   define output parameter p-log-file-name     as character    no-undo.
+     1692   define output parameter p-locked            as logical      no-undo.
+     1693   define variable v-home-dir          as character no-undo .
+     1694   define variable v-error-num         as integer   no-undo .
+     1695   define variable v-bge-xml-heap-dir  as character no-undo .
+     1696       get-key-value section "BGE" key "Dirfrg-acc" value v-home-dir.
+     1697       if v-home-dir = ?
+     1698       then do:
+     1699           message
+     1700             skip "Не найден параметр ini-файла, определяющий каталог экспорта."
+     1701             skip(1)
+     1702             skip "Обратитесь к администратору."
+     1703           view-as alert-box error.
+     1704           undo, return error .
+     1705       end.
+     1706       if v-bge-xml-bgeflold <> "oracle"
+     1707       then do:
+     1708         assign
+     1709             v-home-dir = v-home-dir + chr(47) + "exp-acc"
+     1710         .
+     1711       end.
+     1712       run gbl/dir-cre.p ( input v-home-dir ) no-error.
+     1713       if error-status :error
+     1714       then do:
+     1715           message
+     1716             skip "Неверно задан каталог экспорта."
+     1717             skip(1)
+     1718             skip "Обратитесь к администратору."
+     1719           view-as alert-box error.
+     1720           undo, return error .
+     1721       end.
+     1722       if v-bge-xml-bgefmt = "dbf":U
+     1723       then do:
+     1724           assign
+     1725               p-xml-file-name = v-home-dir
+     1726               p-locked        = no
+     1727           .
+     1728       end.
+     1729       else do:
+     1730           run xml-bge-filename0 in this-procedure (p-prefix, p-name, p-shared-process, v-home-dir,
+     1731             output p-xml-file-name, output p-locked) .
+     1732       end.
+     1733       if v-bge-xml-bgeflold = "oracle"
+     1734       then do:
+     1735         get-key-value section "BGE" key "dir-heap" value v-bge-xml-heap-dir.
+     1736         if v-bge-xml-heap-dir = ?
+     1737         then do:
+     1738           undo, return error substitute( "&1&2&3"
+     1739                                         , "Не найден параметр ini-файла, определяющий каталог экспорта (heap).":u
+     1740                                         , chr(10)
+     1741                                         , "Обратитесь к администратору.":u
+     1742                                         ).
+     1743         end.
+     1744         run gbl/dir-cre.p ( input v-bge-xml-heap-dir ) no-error.
+     1745         if error-status :error
+     1746         then do:
+     1747           undo, return error substitute( "&1&2&3"
+     1748                                         , "Неверно задан каталог экспорта (heap).":u
+     1749                                         , chr(10)
+     1750                                         , "Обратитесь к администратору.":u
+     1751                                         ).
+     1752         end.
+     1753         if r-index( v-bge-xml-heap-dir, chr(47) ) > r-index( v-bge-xml-heap-dir, chr(92) ) then do:
+     1754           assign
+     1755             p-log-file-name = substring( v-bge-xml-heap-dir, 1, r-index( v-bge-xml-heap-dir, chr(47) ) ) + chr(47) + "actions.log"
+     1756           .
+     1757         end.
+     1758         else do:
+     1759           assign
+     1760             p-log-file-name = substring( v-bge-xml-heap-dir, 1, r-index( v-bge-xml-heap-dir, chr(92) ) ) + chr(47) + "actions.log"
+     1761           .
+     1762         end.
+     1763       end.
+     1764       else do:
+     1765         assign
+     1766             p-log-file-name = v-home-dir + chr(47) + "actions.log"
+     1767         .
+     1768       end.
+     1769       assign
+     1770          v-bge-xml-static-log-file-name = p-log-file-name
+     1771       .
+     1772   end.
+     1773   end procedure.
+     1774   procedure bge-xml-read-config :
+     1775   do
+     1776   on error undo, return error return-value
+     1777   :
+     1778   define input  parameter p-last-date as date      no-undo .
+     1779   define input  parameter p-db-num    as integer   no-undo .
+     1780       define variable v-bgeclall      as character     no-undo.
+     1781       define variable v-bgedict       as character     no-undo.
+     1782       define variable v-bgeshift      as character     no-undo.
+     1783       define variable v-par-type      as character     no-undo.
+     1784       define variable v-bgeflnm       as character     no-undo.
+     1785       define variable v-bgecliiv      as character     no-undo .
+     1786       define variable v-date-chars    as character case-sensitive  init "DD"      no-undo.
+     1787       define variable v-month-chars   as character case-sensitive  init "MM"      no-undo.
+     1788       define variable v-year-chars    as character case-sensitive  init "YY"      no-undo.
+     1789       define variable v-db-num-chars  as character case-sensitive  init "BBBBB"   no-undo.
+     1790       define variable v-db-num-str    as character     no-undo .
+     1791       define variable v-param-type      as character  no-undo .
+     1792       define variable v-value-character as character  no-undo .
+     1793       define variable v-value-date      as date       no-undo .
+     1794       define variable v-value-decimal   as decimal    no-undo .
+     1795       define variable v-value-integer   as integer    no-undo .
+     1796       define variable v-value-logical   as logical    no-undo .
+     1797       define variable v-tth             as handle      no-undo .
+     1798       run adm/shattri.p ( input "get":U
+     1799                         , input  '':u
+     1800                         , input  0
+     1801                         , input  'bge-export':U
+     1802                         , input  'bgeclall':U
+     1803                         , output v-bgecliiv
+     1804                         , output v-value-date
+     1805                         , output v-value-decimal
+     1806                         , output v-value-integer
+     1807                         , output v-value-logical
+     1808                         , output v-param-type
+     1809                         , input-output table-handle v-tth
+     1810                         ) no-error .
+     1811       if error-status :error
+     1812       then do:
+     1813         assign
+     1814           v-bge-xml-bgecliiv = no
+     1815         .
+     1816       end.
+     1817       else do:
+     1818         run bge-xml-fill-tt-bgecliiv in this-procedure ( input v-bgecliiv ).
+     1819       end.
+     1820       delete object v-tth.
+     1821       assign
+     1822           v-bge-xml-bgeclall = no
+     1823           v-bge-xml-bgedict  = no
+     1824       .
+     1825       run adm/shattri.p ( input "get":U
+     1826                         , input  '':u
+     1827                         , input  0
+     1828                         , input  'bge-export':U
+     1829                         , input  'bgeclall':U
+     1830                         , output v-value-character
+     1831                         , output v-value-date
+     1832                         , output v-value-decimal
+     1833                         , output v-value-integer
+     1834                         , output v-value-logical
+     1835                         , output v-param-type
+     1836                         , input-output table-handle v-tth
+     1837                         ) no-error .
+     1838       if error-status :error
+     1839       then do:
+     1840         assign
+     1841           v-bge-xml-bgeclall = no
+     1842         .
+     1843       end.
+     1844       else do:
+     1845         assign
+     1846           v-bge-xml-bgeclall = v-value-logical
+     1847         .
+     1848       end.
+     1849       delete object v-tth.
+     1850       run adm/shattri.p ( input "get":U
+     1851                         , input  '':u
+     1852                         , input  0
+     1853                         , input  'bge-export':U
+     1854                         , input  'bgedict':U
+     1855                         , output v-value-character
+     1856                         , output v-value-date
+     1857                         , output v-value-decimal
+     1858                         , output v-value-integer
+     1859                         , output v-value-logical
+     1860                         , output v-param-type
+     1861                         , input-output table-handle v-tth
+     1862                         ) no-error .
+     1863       if error-status :error
+     1864       then do:
+     1865         assign
+     1866           v-bge-xml-bgedict = no
+     1867         .
+     1868       end.
+     1869       else do:
+     1870         assign
+     1871           v-bge-xml-bgedict = v-value-logical
+     1872         .
+     1873       end.
+     1874       delete object v-tth.
+     1875       run adm/shattri.p ( input "get":U
+     1876                         , input  '':u
+     1877                         , input  0
+     1878                         , input  'bge-export':U
+     1879                         , input  'bgefmt':U
+     1880                         , output v-value-character
+     1881                         , output v-value-date
+     1882                         , output v-value-decimal
+     1883                         , output v-value-integer
+     1884                         , output v-value-logical
+     1885                         , output v-param-type
+     1886                         , input-output table-handle v-tth
+     1887                         ) no-error .
+     1888       if error-status :error
+     1889       then do:
+     1890         assign
+     1891           v-bge-xml-bgefmt  = "xml":U
+     1892         .
+     1893       end.
+     1894       else do:
+     1895         assign
+     1896           v-bge-xml-bgefmt  = v-value-character
+     1897         .
+     1898       end.
+     1899       delete object v-tth.
+     1900       run adm/shattri.p ( input "get":U
+     1901                         , input  '':u
+     1902                         , input  0
+     1903                         , input  'bge-export':U
+     1904                         , input  'bgeshift':U
+     1905                         , output v-value-character
+     1906                         , output v-value-date
+     1907                         , output v-value-decimal
+     1908                         , output v-value-integer
+     1909                         , output v-value-logical
+     1910                         , output v-param-type
+     1911                         , input-output table-handle v-tth
+     1912                         ) no-error .
+     1913       if error-status :error
+     1914       then do:
+     1915         assign
+     1916             v-bge-xml-shift-mode = no
+     1917         .
+     1918       end.
+     1919       else do:
+     1920         assign
+     1921             v-bge-xml-shift-mode = ( v-value-character = "distinct":U )
+     1922         .
+     1923       end.
+     1924       delete object v-tth.
+     1925       run adm/shattri.p ( input "get":U
+     1926                         , input  '':u
+     1927                         , input  0
+     1928                         , input  'bge-export':U
+     1929                         , input  'bgeflold':U
+     1930                         , output v-value-character
+     1931                         , output v-value-date
+     1932                         , output v-value-decimal
+     1933                         , output v-value-integer
+     1934                         , output v-value-logical
+     1935                         , output v-param-type
+     1936                         , input-output table-handle v-tth
+     1937                         ) no-error .
+     1938       if error-status :error
+     1939       then do:
+     1940         assign
+     1941           v-bge-xml-bgeflold = "no-parameter":U
+     1942         .
+     1943       end.
+     1944       else do:
+     1945         assign
+     1946           v-bge-xml-bgeflold  = v-value-character
+     1947         .
+     1948       end.
+     1949       delete object v-tth.
+     1950       assign
+     1951         v-db-num-str          = ( if p-db-num <> ? then string(p-db-num ,"99999") else "":u )
+     1952         v-bge-xml-db-num-str  = v-db-num-str
+     1953       .
+     1954       if p-last-date <> ?
+     1955       then do:
+     1956           run adm/shattri.p ( input "get":U
+     1957                             , input  '':u
+     1958                             , input  0
+     1959                             , input  'bge-export':U
+     1960                             , input  'bgeflnm':U
+     1961                             , output v-value-character
+     1962                             , output v-value-date
+     1963                             , output v-value-decimal
+     1964                             , output v-value-integer
+     1965                             , output v-value-logical
+     1966                             , output v-param-type
+     1967                             , input-output table-handle v-tth
+     1968                             ) no-error .
+     1969           if error-status :error
+     1970           then do:
+     1971             assign
+     1972               v-bgeflnm = '':U
+     1973             .
+     1974           end.
+     1975           else do:
+     1976             assign
+     1977               v-bgeflnm = v-value-character
+     1978             .
+     1979           end.
+     1980           delete object v-tth.
+     1981           if v-bge-xml-bgeflold = "var"
+     1982           then do:
+     1983               if v-bgeflnm = ?
+     1984               or num-entries( v-bgeflnm ) < 2
+     1985               then do:
+     1986                   assign
+     1987                       v-bge-xml-bgeflold = "new"
+     1988                   .
+     1989               end.
+     1990               else do:
+     1991                   assign
+     1992                       v-bge-xml-bgeflnm-doc = entry( 1, v-bgeflnm )
+     1993                       v-bge-xml-bgeflnm-day = entry( 2, v-bgeflnm )
+     1994                   .
+     1995                   assign
+     1996                       v-bge-xml-bgeflnm-doc = replace( v-bge-xml-bgeflnm-doc, v-date-chars , string( day( p-last-date ), "99" ) )
+     1997                       v-bge-xml-bgeflnm-doc = replace( v-bge-xml-bgeflnm-doc, v-month-chars, string( month( p-last-date ), "99" ) )
+     1998                       v-bge-xml-bgeflnm-doc = replace( v-bge-xml-bgeflnm-doc, v-year-chars , substring( string( year( p-last-date ), "9999" ), 3, 2 ) )
+     1999                       v-bge-xml-bgeflnm-doc = replace( v-bge-xml-bgeflnm-doc, v-db-num-chars, v-db-num-str )
+     2000                       v-bge-xml-bgeflnm-day = replace( v-bge-xml-bgeflnm-day, v-date-chars , string( day( p-last-date ), "99" ) )
+     2001                       v-bge-xml-bgeflnm-day = replace( v-bge-xml-bgeflnm-day, v-month-chars, string( month( p-last-date ), "99" ) )
+     2002                       v-bge-xml-bgeflnm-day = replace( v-bge-xml-bgeflnm-day, v-year-chars , substring( string( year( p-last-date ), "9999" ), 3, 2 ) )
+     2003                       v-bge-xml-bgeflnm-day = replace( v-bge-xml-bgeflnm-day, v-db-num-chars, v-db-num-str )
+     2004                   .
+     2005               end.
+     2006           end.
+     2007       end.
+     2008   end.
+     2009   end procedure.
+     2010   procedure bge-xml-get-ref-filename :
+     2011   define input parameter p-in-file-name       as character        no-undo.
+     2012   define output parameter p-home-dir          as character        no-undo.
+     2013   define output parameter p-out-file-name     as character        no-undo.
+     2014   define output parameter p-locked            as logical          no-undo.
+     2015       define variable v-counter       as integer      no-undo.
+     2016       define variable v-error-level   as integer      no-undo.
+     2017   do
+     2018   on error undo, return error
+     2019   :
+     2020       run bge/bge-ini.p (
+     2021             input "bge"
+     2022           , output p-home-dir
+     2023       ).
+     2024       if return-value <> "OK"
+     2025       then do:
+     2026           undo, return error.
+     2027       end.
+     2028       assign
+     2029           p-home-dir = p-home-dir + "\dict":U
+     2030       .
+     2031       run bge/dir_cd.p (
+     2032           input p-home-dir
+     2033           , input "CA"
+     2034       ).
+     2035       if return-value = "ERROR"
+     2036       then do:
+     2037           undo, return error.
+     2038       end.
+     2039       assign
+     2040           p-out-file-name = substitute( "&1\&2.", p-home-dir, p-in-file-name )
+     2041       .
+     2042       assign
+     2043           p-locked = ( search( p-out-file-name + "xml" ) <> ? ).
+     2044       .
+     2045       wait-lock:
+     2046       do v-counter = 1 TO 3
+     2047       :
+     2048           p-locked = ( search( p-out-file-name + "lk" ) <> ? ).
+     2049           if p-locked = no
+     2050           then do:
+     2051               leave wait-lock.
+     2052           end.
+     2053           else do:
+     2054               readkey pause 1.
+     2055           end.
+     2056       END.
+     2057       if p-locked = yes
+     2058       then do:
+     2059           undo, return error.
+     2060       end.
+     2061       run bge/os_copy.p (
+     2062             input "D":U
+     2063           , input p-out-file-name + "xml":U
+     2064           , input "":U
+     2065           , output v-error-level
+     2066       ).
+     2067       if v-error-level > 0
+     2068       then do:
+     2069           undo, return error.
+     2070       end.
+     2071   end.
+     2072   end procedure.
+     2073   procedure bge-xml-write-ref-header :
+     2074   define input parameter p-bge-name as character        no-undo.
+     2075   define input parameter p-file-name as character        no-undo.
+     2076       define variable v-out-string    as character    no-undo.
+     2077   do
+     2078   on error undo, return error
+     2079   :
+     2080       output stream stmXMLOut to value( p-file-name + "xm1") convert target "1251".
+     2081       put stream stmXMLOut unformatted
+     2082           "<?xml version='1.0' encoding='windows-1251'?>":U
+     2083       .
+     2084       assign
+     2085           v-out-string = substitute( "&1&2"
+     2086                               , chr(10)
+     2087                               , "<IBS_Trade_House>":U )
+     2088       .
+     2089       put stream stmXMLOut unformatted
+     2090           v-out-string
+     2091       .
+     2092       run wp-XMLTagOpen( 1, "header", "" ).
+     2093       if v-bge-xml-bgeflold = "oracle":u
+     2094       then do:
+     2095         run wp-XMLTagOpen in this-procedure  ( 2, "delivery", "").
+     2096         run wp-XMLTagput in this-procedure ( 3, "message","", 1).
+     2097         run wp-XMLTagput in this-procedure ( 3, "from","IBS Trade House", 1).
+     2098         run wp-XMLTagput in this-procedure ( 3, "to","Oracle Retail", 1).
+     2099         run wp-XMLTagClose in this-procedure ( 2, "delivery"    ).
+     2100       end.
+     2101       else do:
+     2102         run wp-XMLTagOpen( 2, "delivery", "" ).
+     2103         run wp-XMLTagOpen( 3, "to", "" ).
+     2104         run wp-XMLTagClose( 3, "to" ).
+     2105         run wp-XMLTagOpen( 3, "from", "" ).
+     2106         run wp-XMLTagClose( 3, "from" ).
+     2107         run wp-XMLTagClose( 2, "delivery" ).
+     2108       end.
+     2109       run wp-XMLTagOpen( 2, "manifest", "" ).
+     2110       run wp-XMLTagOpen( 3, "document", "" ).
+     2111       run wp-XMLTagPut( 4, "name", p-bge-name, 0 ).
+     2112       run wp-XMLTagPut( 4, "description", "", 0 ).
+     2113       run wp-XMLTagClose( 3, "document" ).
+     2114       run wp-XMLTagClose( 2, "manifest" ).
+     2115       run wp-XMLTagClose( 1, "header" ).
+     2116       run wp-XMLTagOpen( 1, "body", "" ).
+     2117   end.
+     2118   end procedure.
+     2119   procedure bge-xml-write-ref-footer :
+     2120   define input parameter p-file-name as character        no-undo.
+     2121       define variable v-error-level   as integer      no-undo.
+     2122   do
+     2123   on error undo, return error
+     2124   :
+     2125       run wp-XMLTagClose in this-procedure ( input 1, input "body":U ).
+     2126       run wp-XMLTagClose in this-procedure ( input 0, input "IBS_Trade_House":U ).
+     2127       output stream stmXMLOut close.
+     2128       run bge/os_copy.p (
+     2129             input "M":U
+     2130           , input p-file-name + "xm1":U
+     2131           , input p-file-name + "xml":U
+     2132           , output v-error-level
+     2133       ).
+     2134       if v-error-level > 0
+     2135       then do:
+     2136           undo, return error.
+     2137       end.
+     2138   end.
+     2139   end procedure.
+     2140   procedure bge-xml-out-dir :
+     2141   define output parameter p-out-dir       as character    no-undo.
+     2142   define output parameter p-log-file-name as character    no-undo.
+     2143   do
+     2144   on error undo, return error
+     2145   :
+     2146       p-out-dir = ibs.th.gbl.gbl-inipar:dirfrgAcc .
+     2147       if p-out-dir = ?
+     2148       then do:
+     2149           message
+     2150             skip substitute("Не найден параметр ini-файла, определяющий каталог экспорта (&1)."
+     2151                           , ibs.th.gbl.gbl-inipar:dirfrgAccKeyName)
+     2152             skip(1)
+     2153             skip "Обратитесь к администратору."
+     2154           view-as alert-box error.
+     2155           undo, return error .
+     2156       end.
+     2157       if v-bge-xml-bgeflold <> "oracle" then assign
+     2158         p-out-dir = substitute( "&1&2exp-acc":U, p-out-dir, chr(47) )
+     2159       .
+     2160       run gbl/dir-cre.p ( input p-out-dir ) no-error.
+     2161       if error-status :error  then do:
+     2162           run wp-XMLWriteLog in this-procedure (
+     2163                 input p-log-file-name
+     2164               , input 0
+     2165               , input substitute( "Ошибка проверки или создания каталога &1. &2. &3."
+     2166                                   , p-out-dir
+     2167                                   , return-value
+     2168                                   , trim( error-status :get-message( 1 ) )
+     2169                                   )
+     2170           ).
+     2171           undo, return error.
+     2172       end.
+     2173       assign
+     2174           v-bge-xml-static-log-file-name = substitute( "&1&2actions.log":U, p-out-dir, chr(47) )
+     2175           p-log-file-name                = substitute( "&1&2actions.log":U, p-out-dir, chr(47) )
+     2176       .
+     2177   end.
+     2178   end procedure.
+     2179   procedure bge-xml-out-dir2 :
+     2180   define output parameter p-out-dir       as character    no-undo.
+     2181   define output parameter p-out-dirR      as character    no-undo.
+     2182   define output parameter p-log-file-name as character    no-undo.
+     2183   do
+     2184   on error undo, return error
+     2185   :
+     2186       p-out-dir = ibs.th.gbl.gbl-inipar:dirfrgAcc .
+     2187       if p-out-dir = ?
+     2188       then do:
+     2189           message
+     2190             skip substitute("Не найден параметр ini-файла, определяющий каталог экспорта (&1)."
+     2191                           , ibs.th.gbl.gbl-inipar:dirfrgAccKeyName)
+     2192             skip(1)
+     2193             skip "Обратитесь к администратору."
+     2194           view-as alert-box error.
+     2195           undo, return error .
+     2196       end.
+     2197       if v-bge-xml-bgeflold <> "oracle" then assign
+     2198             p-out-dirR = substitute( "&1&2exp-reestr":U, p-out-dir, chr(47) )
+     2199             p-out-dir  = substitute( "&1&2exp-acc":U,    p-out-dir, chr(47) )
+     2200         .
+     2201       else p-out-dirR = p-out-dir .
+     2202       run gbl/dir-cre.p ( input p-out-dir ) no-error.
+     2203       if error-status :error  then do:
+     2204           run wp-XMLWriteLog in this-procedure (
+     2205                 input p-log-file-name
+     2206               , input 0
+     2207               , input substitute( "Ошибка проверки или создания каталога &1. &2. &3."
+     2208                                   , p-out-dir
+     2209                                   , return-value
+     2210                                   , error-status :get-message( 1 )
+     2211                                   )
+     2212           ).
+     2213           undo, return error.
+     2214       end.
+     2215       if p-out-dirR <> p-out-dir then do:
+     2216         run gbl/dir-cre.p ( input p-out-dirR ) no-error.
+     2217         if error-status :error then do:
+     2218           run wp-XMLWriteLog in this-procedure (
+     2219                 input p-log-file-name
+     2220               , input 0
+     2221               , input substitute( "Ошибка проверки или создания каталога &1. &2. &3."
+     2222                                   , p-out-dirR
+     2223                                   , return-value
+     2224                                   , error-status :get-message( 1 )
+     2225                                   )
+     2226           ).
+     2227           p-out-dirR = p-out-dir .
+     2228         end.
+     2229       end .
+     2230       assign
+     2231         v-bge-xml-static-log-file-name = substitute( "&1&2actions.log":U, p-out-dir, chr(47) )
+     2232         p-log-file-name                = substitute( "&1&2actions.log":U, p-out-dir, chr(47) )
+     2233       .
+     2234   end.
+     2235   end procedure.
+     2236   procedure bge-xml-out-file :
+     2237   do
+     2238   on error undo, return error
+     2239   :
+     2240   define input parameter p-out-dir            as character        no-undo.
+     2241   define input parameter p-prefix             as character        no-undo.
+     2242   define input parameter p-sheduled           as logical          no-undo.
+     2243   define output parameter p-xml-file-name     as character        no-undo.
+     2244   define output parameter p-locked            as logical          no-undo.
+     2245   define variable v-home-dir      as character     no-undo.
+     2246   define variable v-error-num     as integer       no-undo.
+     2247   define variable v-today             as date         no-undo.
+     2248   define variable v-time              as integer      no-undo.
+     2249       if v-bge-xml-bgefmt = "dbf":U
+     2250       then do:
+     2251           assign
+     2252               p-xml-file-name = p-out-dir
+     2253               p-locked        = no
+     2254           .
+     2255       end.
+     2256       else do:
+     2257           if v-bge-xml-bgeflold = "firm":U
+     2258           then do:
+     2259               run bge/genfname.p (
+     2260                     input p-out-dir
+     2261                   , input p-prefix
+     2262                   , input "":U
+     2263                   , input "arj":U
+     2264                   , input "":U
+     2265                   , output p-xml-file-name
+     2266               ).
+     2267           end.
+     2268           else do:
+     2269               run bge/genfname.p (
+     2270                     input p-out-dir
+     2271                   , input p-prefix
+     2272                   , input "":U
+     2273                   , input "xml":U
+     2274                   , input "":U
+     2275                   , output p-xml-file-name
+     2276               ).
+     2277           end.
+     2278           assign
+     2279               p-xml-file-name = substring( p-xml-file-name, 1, length( p-xml-file-name ) - 3 )
+     2280               p-locked = ( search ( p-xml-file-name + "lk":U ) <> ? )
+     2281           .
+     2282       end.
+     2283   end.
+     2284   end procedure.
+     2285   procedure bge-xml-init-ext-doc-type :
+     2286       define variable v-counter    as integer      no-undo.
+     2287       define buffer buf_temp_ext-doc-type     for temp_ext-doc-type.
+     2288   do
+     2289   for buf_temp_ext-doc-type
+     2290   on error undo, return error
+     2291   :
+     2292       empty temp-table buf_temp_ext-doc-type.
+     2293       do v-counter = 1 to num-entries( 'ie,ee,ep,es,re,rs,we,vt,vp,iv,ev,rv,em,wm,im,ot,ap,mp,pc,io,eo':U )
+     2294       :
+     2295           create buf_temp_ext-doc-type.
+     2296           assign
+     2297               buf_temp_ext-doc-type.edt-key               = v-counter
+     2298               buf_temp_ext-doc-type.ext-doc-type          = entry( v-counter, 'ie,ee,ep,es,re,rs,we,vt,vp,iv,ev,rv,em,wm,im,ot,ap,mp,pc,io,eo':U )
+     2299               buf_temp_ext-doc-type.ext-doc-type-label    = entry( v-counter, 'приход внешний,расход внешний,возврат пост.,касса продажа,возврат внешний,касса возврат,списание,инвентаризация,пересортица,приход внутренний,расход внутренний,возврат внутренний,расход  произв.,списан. произв.,приход  произв.,переоценка,коррекция учетных цен,корректировка отрицательных партий,смена типа приобретения,приход внутриобъектный,расход внутриобъектный':U )
+     2300           .
+     2301       end.
+     2302   end.
+     2303   end procedure.
+     2304   procedure bge-xml-get-decimal-shift-num :
+     2305   define input parameter p-shift-date     as date             no-undo.
+     2306   define input parameter p-shift-num      as integer          no-undo.
+     2307   define output parameter p-shift-decimal as decimal          no-undo.
+     2308   do
+     2309   on error undo, return error
+     2310   :
+     2311       assign
+     2312           p-shift-decimal = ( p-shift-date - 01/01/1990 ) + truncate( p-shift-num / 1000, 3 )
+     2313       .
+     2314   end.
+     2315   end procedure.
+     2316   procedure bge-xml-ora-exp-filename :
+     2317     define input  parameter p-table-name  as character no-undo .
+     2318     define input  parameter p-doc-code    as character no-undo .
+     2319     define input  parameter p-obj-code    as integer   no-undo .
+     2320     define output parameter p-filename    as character no-undo .
+     2321     define output parameter p-seq-num     as integer   no-undo .
+     2322     define variable v-ora-exp-seq     as integer   no-undo .
+     2323     define variable v-ora-exp-seq-str as character no-undo .
+     2324     define variable v-home-dir        as character no-undo.
+     2325   do
+     2326   on error undo, return error return-value
+     2327   :
+     2328     if v-bge-xml-bgeflold = "oracle":u
+     2329     then do:
+     2330       get-key-value section "BGE" key "Dirfrg-acc" value v-home-dir.
+     2331       if v-home-dir = ?
+     2332       then do:
+     2333         undo, return error substitute( "&1&2&3":U
+     2334                                       , "Не найден параметр ini-файла, определяющий каталог экспорта.":U
+     2335                                       , chr(10)
+     2336                                       , "Обратитесь к администратору.":U
+     2337                                       ).
+     2338       end.
+     2339       assign
+     2340           v-home-dir = v-home-dir
+     2341       .
+     2342       run gbl/dir-cre.p ( input v-home-dir ) no-error.
+     2343       if error-status :error
+     2344       then do:
+     2345         undo, return error substitute( "&1&2&3":U
+     2346                                       , "Неверно задан каталог экспорта.":U
+     2347                                       , chr(10)
+     2348                                       , "Обратитесь к администратору.":U
+     2349                                       ).
+     2350       end.
+     2351       assign
+     2352         v-ora-exp-seq = ?
+     2353       .
+     2354       if  p-table-name <> ? and
+     2355           p-doc-code <> ?
+     2356       then do:
+     2357         run bge/get-oesq.p ( input p-table-name
+     2358                            , input p-doc-code
+     2359                            , output v-ora-exp-seq
+     2360                            ) no-error .
+     2361         if error-status :error = yes
+     2362         then do:
+     2363           undo, return error return-value .
+     2364         end.
+     2365       end.
+     2366       if v-ora-exp-seq = ?
+     2367       then do:
+     2368         run bge/oesq-get.p ( output v-ora-exp-seq ) no-error .
+     2369         if error-status :error
+     2370         then do:
+     2371           undo, return error return-value .
+     2372         end.
+     2373       end.
+     2374       if p-table-name <> ? and
+     2375          p-doc-code   <> ?
+     2376       then do:
+     2377         run bge/oesqdoc.p ( input p-table-name
+     2378                           , input p-doc-code
+     2379                           , input v-ora-exp-seq
+     2380                           ) no-error .
+     2381         if error-status :error = yes
+     2382         then do:
+     2383           undo, return error return-value .
+     2384         end.
+     2385       end.
+     2386       assign
+     2387         p-seq-num  = v-ora-exp-seq
+     2388         p-filename = substitute("&1/&2-000_&3."
+     2389                                , v-home-dir
+     2390                                , ( if p-obj-code < 1000 then string( p-obj-code, "999") else string(p-obj-code))
+     2391                                , string(v-ora-exp-seq , "999999999")
+     2392                                )
+     2393       .
+     2394     end.
+     2395   end.
+     2396   end procedure.
+     2397   procedure bge-xml-date-to-str :
+     2398     define input  parameter p-date  as date      no-undo .
+     2399     define output parameter p-str   as character no-undo .
+     2400   do
+     2401   on error undo, return error return-value
+     2402   :
+     2403     if p-date <> ?
+     2404     then do:
+     2405       assign
+     2406         p-str = substitute( "&1-&2-&3"
+     2407                           , string( year(p-date)  , "9999")
+     2408                           , string( month(p-date) , "99"  )
+     2409                           , string( day(p-date)   , "99"  )
+     2410                           )
+     2411       .
+     2412     end.
+     2413     else do:
+     2414       assign
+     2415         p-str = ?
+     2416       .
+     2417     end.
+     2418   end.
+     2419   end procedure.
+     2420   procedure bge-xml-date-str-to-str :
+     2421     define input  parameter p-date-str  as character no-undo .
+     2422     define output parameter p-str       as character no-undo .
+     2423     define variable v-date          as date      no-undo .
+     2424     define variable v-date-valid    as logical   no-undo .
+     2425     define variable v-error-message as character no-undo .
+     2426   do
+     2427   on error undo, return error return-value
+     2428   :
+     2429     assign
+     2430       p-str = ?
+     2431     .
+     2432     if p-date-str = ? or p-date-str = ""
+     2433     then do:
+     2434       return .
+     2435     end.
+     2436     run strtdate in this-procedure ( input  p-date-str
+     2437                                    , output v-date
+     2438                                    , output v-date-valid
+     2439                                    , output v-error-message
+     2440                                    ).
+     2441     if v-date-valid <> true
+     2442     then do:
+     2443       return .
+     2444     end.
+     2445     assign
+     2446       p-str = substitute( "&1-&2-&3"
+     2447                         , string( year(v-date)  , "9999")
+     2448                         , string( month(v-date) , "99"  )
+     2449                         , string( day(v-date)   , "99"  )
+     2450                         )
+     2451     .
+     2452   end.
+     2453   end procedure.
+     2454   procedure bge-xml-fill-tt-bgecliiv :
+     2455     define input  parameter p-str as character no-undo .
+     2456     define buffer buf_tt-bge-xml-bgecliiv for tt-bge-xml-bgecliiv.
+     2457     define buffer buf_clients             for ub.clients.
+     2458     define variable v-i         as integer   no-undo .
+     2459     define variable v-count     as integer   no-undo .
+     2460     define variable v-cli-count as integer   no-undo .
+     2461     define variable v-client    as character no-undo .
+     2462     define variable v-obj-type  as character no-undo .
+     2463     define variable v-obj-code  as integer   no-undo .
+     2464   do
+     2465   on error undo, return error return-value
+     2466   :
+     2467     empty temp-table buf_tt-bge-xml-bgecliiv.
+     2468     assign
+     2469       v-bge-xml-bgecliiv = no
+     2470       v-cli-count        = num-entries(p-str,';')
+     2471     .
+     2472     if v-cli-count > 0
+     2473     then do:
+     2474       _cli-cycle:
+     2475       do v-i = 1 to v-cli-count
+     2476       :
+     2477         assign
+     2478           v-client = entry(v-i , p-str, ';')
+     2479         .
+     2480         if num-entries(v-client) <> 2
+     2481         then do:
+     2482           undo, return error substitute("Неправильный формат записи контрагента в параметре 'bgecliiv'. Позиция записи &1." , v-i).
+     2483         end.
+     2484         assign
+     2485           v-obj-type = entry(1, v-client)
+     2486         .
+     2487         assign
+     2488           v-obj-code = integer(entry(2, v-client))
+     2489         no-error .
+     2490         if error-status :error
+     2491         then do:
+     2492           undo, return error substitute("Неправильный формат записи кода контрагента в параметре 'bgecliiv'. Позиция записи &1." , v-i).
+     2493         end.
+     2494         find first buf_clients no-lock
+     2495           where buf_clients.obj-type = v-obj-type
+     2496             and buf_clients.obj-code = v-obj-code
+     2497         no-error.
+     2498         if not available buf_clients
+     2499         then do:
+     2500           next _cli-cycle.
+     2501         end.
+     2502         find first buf_tt-bge-xml-bgecliiv no-lock
+     2503           where buf_tt-bge-xml-bgecliiv.obj-type = buf_clients.obj-type
+     2504             and buf_tt-bge-xml-bgecliiv.obj-code = buf_clients.obj-code
+     2505         no-error .
+     2506         if available buf_tt-bge-xml-bgecliiv
+     2507         then do:
+     2508           next _cli-cycle.
+     2509         end.
+     2510         create buf_tt-bge-xml-bgecliiv.
+     2511         assign
+     2512           buf_tt-bge-xml-bgecliiv.obj-type = buf_clients.obj-type
+     2513           buf_tt-bge-xml-bgecliiv.obj-code = buf_clients.obj-code
+     2514         .
+     2515       end.
+     2516     end.
+     2517     else do:
+     2518       assign
+     2519         v-bge-xml-bgecliiv = no
+     2520       .
+     2521       return .
+     2522     end.
+     2523     find first buf_tt-bge-xml-bgecliiv no-lock no-error .
+     2524     if available buf_tt-bge-xml-bgecliiv
+     2525     then do:
+     2526       assign
+     2527         v-bge-xml-bgecliiv = yes
+     2528       .
+     2529     end.
+     2530   end.
+     2531   end procedure.
+     2532   procedure bge-xml-resolve-ext-doc-type :
+     2533     define input  parameter p-ext-doc-type      as character no-undo .
+     2534     define input  parameter p-obj-type          as character no-undo .
+     2535     define input  parameter p-obj-code          as integer   no-undo .
+     2536     define output parameter p-out-ext-doc-type  as character no-undo .
+     2537     define buffer buf_tt-bge-xml-bgecliiv for tt-bge-xml-bgecliiv.
+     2538   do
+     2539   on error undo, return error return-value
+     2540   :
+     2541     assign
+     2542       p-out-ext-doc-type = p-ext-doc-type
+     2543     .
+     2544     if p-ext-doc-type <> 'ie':U
+     2545     then do:
+     2546       return .
+     2547     end.
+     2548     if v-bge-xml-bgecliiv = yes
+     2549     then do:
+     2550       find first buf_tt-bge-xml-bgecliiv no-lock
+     2551         where buf_tt-bge-xml-bgecliiv.obj-type = p-obj-type
+     2552           and buf_tt-bge-xml-bgecliiv.obj-code = p-obj-code
+     2553       no-error .
+     2554       if available buf_tt-bge-xml-bgecliiv
+     2555       then do:
+     2556         assign
+     2557           p-out-ext-doc-type = 'iv':U
+     2558         .
+     2559       end.
+     2560     end.
+     2561   end.
+     2562   end procedure.
+     2563   procedure safe-wp-xmltagput :
+     2564     define input  parameter pTagLevel   as integer   no-undo .
+     2565     define input  parameter pTagName    as character no-undo .
+     2566     define input  parameter pParValue   as character no-undo .
+     2567     define input  parameter pFlagEmpty  as integer   no-undo .
+     2568   do
+     2569   on error undo, return error return-value
+     2570   :
+     2571     if v-bge-xml-bgeflold = "oracle":u
+     2572     then do:
+     2573       return .
+     2574     end.
+     2575     run wp-xmltagput in this-procedure ( input pTagLevel
+     2576                                        , input pTagName
+     2577                                        , input pParValue
+     2578                                        , input pFlagEmpty
+     2579                                        ).
+     2580   end.
+     2581   end procedure.
+     2582   define new shared variable to-arm        as character           no-undo.
+     2583   define new shared variable g#host-code   as integer             no-undo.
+     2584   define temp-table temp_firm no-undo
+     2585       field host-code  as integer
+     2586       field enabled    as logical
+     2587       index pi is primary unique
+     2588           host-code
+     2589   .
+     2590       define variable v-xml-file-name     as character            no-undo.
+     2591       define variable v-log-file-name     as character            no-undo.
+     2592       define variable v-locked            as logical              no-undo.
+     2593       define variable v-fact-order-from   like ub.stk-tot.fact-order no-undo.
+     2594       define variable v-fact-order-to     like ub.stk-tot.fact-order no-undo.
+     2595       define variable v-docs-exists       as logical              no-undo.
+     2596       define variable v-obj-counter       as integer              no-undo.
+     2597       define variable v-xml-home-dir      as character    no-undo.
+     2598       define variable v-xml-out-dir       as character    no-undo.
+     2599       define variable v-prefix            as character    no-undo.
+     2600       define variable v-today             as date         no-undo.
+     2601       define variable v-time              as integer      no-undo.
+     2602       define variable v-command           as character    no-undo.
+     2603       define variable v-bat-file-path     as character    no-undo.
+     2604       define variable v-obj-type          as character    no-undo.
+     2605       define variable v-obj-code          as integer      no-undo.
+     2606       define variable v-host-code         as integer      no-undo.
+     2607       define variable v-yesno             as logical      no-undo.
+     2608       define buffer buf_temp_firm     for temp_firm.
+     2609   do
+     2610   for buf_temp_firm
+     2611   on error undo, return error
+     2612   :
+     2613       run bge-xml-out-dir in this-procedure ( output v-xml-home-dir
+     2614                                             , output v-log-file-name
+     2615                                             ).
+     2616       run bge-xml-init-ext-doc-type in this-procedure .
+     2617       run bge-xml-read-config in this-procedure ( input p-date-to
+     2618                                                 , input p-db-num
+     2619                                                 ) no-error.
+     2620       if error-status :error
+     2621       then do:
+     2622           run wp-XMLWriteLog in this-procedure (
+     2623                 input v-log-file-name
+     2624               , input 1
+     2625               , input substitute( "Ошибка чтения параметров экспорта. &1. &2. Для экспорта данных будут приняты параметры по умолчанию."
+     2626                                   , return-value, trim( error-status :get-message( 1 ) ) )
+     2627           ).
+     2628       end.
+     2629       run wp-XMLWriteLog in this-procedure (
+     2630             input v-log-file-name
+     2631           , input 1
+     2632           , input substitute( "Начало выгрузки в каталог &1", v-xml-home-dir )
+     2633       ).
+     2634       run wp-XMLWriteLog in this-procedure (
+     2635             input v-log-file-name
+     2636           , input 1
+     2637           , input substitute( "................с параметрами: Номер базы: &1, дата с: &2, дата по: &3"
+     2638                                                         , p-db-num
+     2639                                                         , p-date-from
+     2640                                                         , p-date-to
+     2641                                                         )
+     2642       ).
+     2643       run wp-XMLWriteLog in this-procedure (
+     2644             input v-log-file-name
+     2645           , input 1
+     2646           , input substitute( "................с параметрами: ... список объектов: &1", p-obj-list )
+     2647       ).
+     2648       run wp-XMLWriteLog in this-procedure (
+     2649             input v-log-file-name
+     2650           , input 1
+     2651           , input substitute( "................с параметрами: ... типы документов: &1", p-doc-type-list )
+     2652       ).
+     2653       run wp-XMLWriteLog in this-procedure (
+     2654             input v-log-file-name
+     2655           , input 1
+     2656           , input substitute( "................с параметрами: ... надо ли виды платежей: &1, ГТД: &2, партии: &3, типы кассовых платежей: &4, кассы: &5, преф.карт: &6, незакр.документы: &7"
+     2657                                                         , p-pay-code
+     2658                                                         , p-cst
+     2659                                                         , p-parts
+     2660                                                         , p-chk-pay-code
+     2661                                                         , p-pay-desk
+     2662                                                         , p-pay-desk-cards
+     2663                                                         , p-opened-docs  )
+     2664       ).
+     2665       if v-locked = yes
+     2666       then do:
+     2667           run wp-XMLWriteLog in this-procedure (
+     2668                 input v-log-file-name
+     2669               , input 1
+     2670               , input "*** Ошибка выгрузки: Файл выгрузки заблокирован другим процессом."
+     2671           ).
+     2672           undo, return error .
+     2673       end.
+     2674       RUN init-temphost.
+     2675       if p-range <> 3
+     2676       then do:
+     2677           run wp-XMLWriteLog in this-procedure (
+     2678                 input v-log-file-name
+     2679               , input 1
+     2680               , input "Неверно заданы объекты для выгрузки."
+     2681           ).
+     2682           undo, return error .
+     2683       end.
+     2684       for each temp-obj
+     2685       :
+     2686           delete temp-obj.
+     2687       end.
+     2688       object-of-user:
+     2689       do
+     2690       v-obj-counter = 1 to num-entries ( p-obj-list ) / 2
+     2691       :
+     2692           assign
+     2693               v-obj-type = entry( v-obj-counter * 2 - 1, p-obj-list )
+     2694               v-obj-code = integer( entry( v-obj-counter * 2, p-obj-list ) )
+     2695           no-error.
+     2696           if error-status :error
+     2697           then do:
+     2698               run wp-XMLWriteLog in this-procedure (
+     2699                     input v-log-file-name
+     2700                   , input 1
+     2701                   , input substitute( "Ошибка чтения списка объектов. &1."
+     2702                                       , trim( error-status :get-message( 1 ) ) )
+     2703               ).
+     2704               undo, return error .
+     2705           end.
+     2706   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2707   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+     2708     (input  v-obj-type
+     2709     ,input  v-obj-code
+     2710     ,output v-host-code
+     2711     ) no-error .
+     2712           if error-status :error
+     2713           then do:
+     2714               run wp-XMLWriteLog in this-procedure (
+     2715                     input v-log-file-name
+     2716                   , input 1
+     2717                   , input substitute( "*** Ошибка заданных параметров: Не найдена фирма для объекта &1 &2. &3. &4"
+     2718                                   , temp-obj.obj-type
+     2719                                   , temp-obj.obj-code
+     2720                                   , trim( error-status :get-message( 1 ) )
+     2721                                   , trim( error-status :get-message( 2 ) ) )
+     2722               ).
+     2723               next object-of-user.
+     2724           end.
+     2725           find first buf_temp_firm
+     2726                where buf_temp_firm.host-code = v-host-code
+     2727           no-error.
+     2728           if not available buf_temp_firm
+     2729           then do:
+     2730               create buf_temp_firm.
+     2731               assign
+     2732                   buf_temp_firm.host-code = v-host-code
+     2733                   g#host-code             = v-host-code
+     2734                   buf_temp_firm.enabled   = yes
+     2735               .
+     2736           end.
+     2737           if buf_temp_firm.enabled = no
+     2738           then do:
+     2739               run wp-XMLWriteLog in this-procedure (
+     2740                     input v-log-file-name
+     2741                   , input 1
+     2742                   , input substitute( "*** Недостаточно прав на фирме &1 для экспорта объекта &2 &3."
+     2743                                   , v-host-code
+     2744                                   , v-obj-type
+     2745                                   , v-obj-code )
+     2746               ).
+     2747           end.
+     2748           else do:
+     2749               create temp-obj.
+     2750               assign
+     2751                   temp-obj.obj-type   = v-obj-type
+     2752                   temp-obj.obj-code   = v-obj-code
+     2753                   temp-obj.host-code  = v-host-code
+     2754               .
+     2755           end.
+     2756       end.
+     2757       export-by-firm:
+     2758       for each buf_temp_firm
+     2759          where buf_temp_firm.enabled = yes
+     2760       on error undo, return error
+     2761       :
+     2762           run wp-XMLWriteLog in this-procedure (
+     2763                 input v-log-file-name
+     2764               , input 1
+     2765               , input substitute( "  Экспорт по фирме: &1 "
+     2766                               , buf_temp_firm.host-code )
+     2767           ).
+     2768           run cur-time in this-procedure (
+     2769                 output v-today
+     2770               , output v-time
+     2771           ).
+     2772           assign
+     2773               v-xml-out-dir   = substitute( "&1/&2" , v-xml-home-dir, trim( string( buf_temp_firm.host-code ) ) )
+     2774               v-prefix        = substitute( "d&1_&2&3&4_"
+     2775                                           , trim( string( buf_temp_firm.host-code ) )
+     2776                                           , string( year( v-today ), "9999" )
+     2777                                           , string( month( v-today ), "99"  )
+     2778                                           , string( day( v-today ), "99" )
+     2779                                           )
+     2780           .
+     2781           run gbl/dir-cre.p (
+     2782               input v-xml-out-dir
+     2783           ) no-error.
+     2784           if error-status :error
+     2785           then do:
+     2786               run wp-XMLWriteLog in this-procedure (
+     2787                     input v-log-file-name
+     2788                   , input 1
+     2789                   , input substitute( "*** Ошибка создания каталога. &1. &2. &3. &4."
+     2790                                       , v-xml-out-dir
+     2791                                       , return-value
+     2792                                       , trim( error-status :get-message( 1 ) )
+     2793                                       , trim( error-status :get-message( 2 ) )
+     2794                                     )
+     2795               ).
+     2796               undo export-by-firm, next export-by-firm.
+     2797           end.
+     2798           run bge-xml-out-file in this-procedure (
+     2799                 input v-xml-out-dir
+     2800               , input v-prefix
+     2801               , input no
+     2802               , output v-xml-file-name
+     2803               , output v-locked
+     2804           ).
+     2805           if v-locked = yes
+     2806           then do:
+     2807               run wp-XMLWriteLog in this-procedure (
+     2808                     input v-log-file-name
+     2809                   , input 1
+     2810                   , input "*** Ошибка выгрузки: Файл выгрузки заблокирован другим процессом."
+     2811               ).
+     2812               undo export-by-firm, next export-by-firm.
+     2813           end.
+     2814           run bge-xml-write-header in this-procedure (
+     2815                 input v-xml-file-name
+     2816               , input v-xml-file-name + "xml"
+     2817               , input "15.0 " + replace( vss-revision + vss-date, "$", " " )
+     2818               , input p-db-num
+     2819               , input p-date-from
+     2820               , input 0
+     2821               , input p-date-to
+     2822               , input 0
+     2823               , input p-obj-list
+     2824               , input p-doc-type-list
+     2825               , input p-pay-code
+     2826               , input p-cst
+     2827               , input p-parts
+     2828               , input p-chk-pay-code
+     2829               , input p-pay-desk
+     2830               , input p-pay-desk-cards
+     2831               , input yes
+     2832               , input p-opened-docs
+     2833           ).
+     2834           object-of-list:
+     2835           for each temp-obj
+     2836              where temp-obj.host-code = buf_temp_firm.host-code
+     2837           on error undo object-of-list, next object-of-list
+     2838           :
+     2839               run export-docs-by-object (
+     2840                     input temp-obj.host-code
+     2841                   , input temp-obj.obj-type
+     2842                   , input temp-obj.obj-code
+     2843               ) no-error.
+     2844               if error-status :error
+     2845               then do:
+     2846                   run wp-XMLWriteLog in this-procedure (
+     2847                         input v-log-file-name
+     2848                       , input 1
+     2849                       , input "Ошибка экспорта документов по объекту " + temp-obj.obj-type + string( temp-obj.obj-code )
+     2850                   ).
+     2851                   next object-of-list.
+     2852               end.
+     2853           end.
+     2854           run xml-bge-write-footer in this-procedure ( input v-xml-file-name ).
+     2855           run wp-XMLWriteLog in this-procedure (
+     2856               input v-log-file-name
+     2857               , input 1
+     2858               , input substitute( "Данные выгружены в файл &1 " , replace( v-xml-file-name, "/", "\" ) + "xml" )
+     2859           ).
+     2860           assign
+     2861               v-bat-file-path = search( "expfirm.bat" )
+     2862           .
+     2863           if v-bat-file-path = ?
+     2864           then do:
+     2865               run wp-XMLWriteLog in this-procedure (
+     2866                     input v-log-file-name
+     2867                   , input 1
+     2868                   , input substitute( "*** Не найден файл expfirm.bat. Окончательная обработка выгруженного файла невозможна. Могут быть ошибки при последующих выгрузках." )
+     2869               ).
+     2870           end.
+     2871           else do:
+     2872               assign
+     2873                   file-info :file-name    = v-bat-file-path
+     2874               .
+     2875               assign
+     2876                   v-command       = substitute( '&1 "&2arj" "&2xml"':U
+     2877                                           , trim( file-info :full-pathname )
+     2878                                           , replace( v-xml-file-name, "/":U, "\":U ) )
+     2879               .
+     2880               os-command value( v-command ).
+     2881           end.
+     2882       end.
+     2883   end.
+     2884   procedure export-docs-by-object :
+     2885   define input parameter p-host-code  as integer      no-undo.
+     2886   define input parameter p-obj-type   as character    no-undo.
+     2887   define input parameter p-obj-code   as integer      no-undo.
+     2888       define variable v-archive-ok        as logical      no-undo.
+     2889       define variable v-comment           as character    no-undo.
+     2890   do
+     2891   on error undo, return error
+     2892   :
+     2893       run wp-XMLWriteLog in this-procedure (
+     2894             input v-log-file-name
+     2895           , input 1
+     2896           , input " > Экспорт документов по объекту " + p-obj-type + string( p-obj-code )
+     2897       ).
+     2898       run wp-XMLWriteLog in this-procedure (
+     2899             input v-log-file-name
+     2900           , input 2
+     2901           , input "Расчет архивов"
+     2902       ).
+     2903       run bge/shd-ahz.p (
+     2904             input p-obj-type
+     2905           , input p-obj-code
+     2906           , input yes
+     2907           , input yes
+     2908           , input no
+     2909           , input p-date-from
+     2910           , input p-date-to
+     2911           , output v-archive-ok
+     2912           , output v-comment
+     2913       ) no-error.
+     2914       if error-status :error
+     2915       then do:
+     2916           message
+     2917           vss-workfile vss-revision vss-description
+     2918           skip "Ошибка проверки архивов на объекте."
+     2919           skip "Тип объекта:" p-obj-type
+     2920           skip "Код объекта:" p-obj-code
+     2921           skip return-value
+     2922           skip trim(error-status :get-message(1))
+     2923               trim(error-status :get-message(2))
+     2924               trim(error-status :get-message(3))
+     2925           view-as alert-box error.
+     2926           undo, return error .
+     2927       end.
+     2928       if v-archive-ok = no
+     2929       then do:
+     2930           run wp-XMLWriteLog in this-procedure (
+     2931                 input v-log-file-name
+     2932               , input 1
+     2933               , input substitute( "*** Документы по объекту &1 &2 в интервале дат &3 - &4 не будут выгружены. Архивы по объекту в заданном интервале дат не целостные. &5."
+     2934                                       , p-obj-type
+     2935                                       , p-obj-code
+     2936                                       , p-date-from
+     2937                                       , p-date-to
+     2938                                       , v-comment       )
+     2939           ).
+     2940           undo, return error .
+     2941       end.
+     2942       run rep/get-fo.p (
+     2943             input  p-obj-type
+     2944           , input  p-obj-code
+     2945           , input  p-date-from
+     2946           , input  p-date-to
+     2947           , output v-fact-order-from
+     2948           , output v-fact-order-to
+     2949           , output v-docs-exists
+     2950           ) no-error .
+     2951       if error-status :error
+     2952       then do:
+     2953           run wp-XMLWriteLog in this-procedure (
+     2954                 input v-log-file-name
+     2955               , input 1
+     2956               , input "*** Ошибка определения границ fact-order для поиска по архивам. " + return-value + ". Объект " + p-obj-type + string( p-obj-code )
+     2957           ).
+     2958           undo, return error .
+     2959       end.
+     2960       if v-docs-exists = no
+     2961       then do:
+     2962           run wp-XMLWriteLog in this-procedure (
+     2963                 input v-log-file-name
+     2964               , input 2
+     2965               , input "В заданном диапазоне дат нет закрытых документов."
+     2966           ).
+     2967           if p-opened-docs = yes
+     2968           then do:
+     2969               run bge/doc-opnd.p (
+     2970                     input p-host-code
+     2971                   , input p-obj-type
+     2972                   , input p-obj-code
+     2973                   , input p-cst
+     2974                   , input p-parts
+     2975                   , input v-xml-file-name
+     2976                   , input v-log-file-name
+     2977                   , input this-procedure
+     2978                   , input hEDT
+     2979                   , input hCNT
+     2980               ) no-error.
+     2981               if error-status :error
+     2982               then do:
+     2983                   run wp-XMLWriteLog in this-procedure (
+     2984                         input v-log-file-name
+     2985                       , input 1
+     2986                       , input "*** Ошибка экспорта незакрытых документов. " + return-value
+     2987                   ).
+     2988               end.
+     2989           end.
+     2990       end.
+     2991       else do:
+     2992           for each temp_ext-doc-type
+     2993           :
+     2994               if lookup( temp_ext-doc-type.ext-doc-type, p-doc-type-list ) <> 0
+     2995               or p-doc-type-list = "":U
+     2996               then do:
+     2997                   run bge/doc-oper.p (
+     2998                         input p-host-code
+     2999                       , input p-obj-type
+     3000                       , input p-obj-code
+     3001                       , input temp_ext-doc-type.ext-doc-type
+     3002                       , input temp_ext-doc-type.ext-doc-type-label
+     3003                       , input v-fact-order-from
+     3004                       , input v-fact-order-to
+     3005                       , input p-date-from
+     3006                       , input p-date-to
+     3007                       , input p-pay-code
+     3008                       , input p-cst
+     3009                       , input p-parts
+     3010                       , input p-chk-pay-code
+     3011                       , input p-pay-desk
+     3012                       , input p-pay-desk-cards
+     3013                       , input no
+     3014                       , input p-doc-rvs
+     3015                       , input v-xml-file-name
+     3016                       , input v-log-file-name
+     3017                       , input this-procedure
+     3018                       , input hEDT
+     3019                       , input hCNT
+     3020                   ) no-error.
+     3021                   if error-status :error
+     3022                   then do:
+     3023                       run wp-XMLWriteLog in this-procedure (
+     3024                             input v-log-file-name
+     3025                           , input 1
+     3026                           , input "*** Ошибка экспорта документов. " + return-value + "." + trim( error-status :get-message( 1 ) ) + "." + trim( error-status :get-message( 2 ) )
+     3027                       ).
+     3028                   end.
+     3029               end.
+     3030           end.
+     3031           run bge/doc-deld.p (
+     3032                 input p-host-code
+     3033               , input p-obj-type
+     3034               , input p-obj-code
+     3035               , input p-date-from
+     3036               , input p-date-to
+     3037               , input v-xml-file-name
+     3038               , input v-log-file-name
+     3039               , input hEDT
+     3040               , input hCNT
+     3041           ) no-error.
+     3042           if error-status :error
+     3043           then do:
+     3044               run wp-XMLWriteLog in this-procedure (
+     3045                     input v-log-file-name
+     3046                   , input 1
+     3047                   , input "*** Ошибка экспорта удаленных документов. " + return-value + "." + trim( error-status :get-message( 1 ) ) + "." + trim( error-status :get-message( 2 ) )
+     3048               ).
+     3049           end.
+     3050           if p-opened-docs = yes
+     3051           then do:
+     3052               run bge/doc-opnd.p (
+     3053                     input p-host-code
+     3054                   , input p-obj-type
+     3055                   , input p-obj-code
+     3056                   , input p-cst
+     3057                   , input p-parts
+     3058                   , input v-xml-file-name
+     3059                   , input v-log-file-name
+     3060                   , input this-procedure
+     3061                   , input hEDT
+     3062                   , input hCNT
+     3063               ) no-error.
+     3064               if error-status :error
+     3065               then do:
+     3066                   run wp-XMLWriteLog in this-procedure (
+     3067                         input v-log-file-name
+     3068                       , input 1
+     3069                       , input "*** Ошибка экспорта незакрытых документов. " + return-value
+     3070                   ).
+     3071               end.
+     3072           end.
+     3073       end.
+     3074       run wp-XMLWriteLog in this-procedure (
+     3075             input v-log-file-name
+     3076           , input 1
+     3077           , input " < Экспорт документов по объекту " + p-obj-type + string( p-obj-code ) + " завершен."
+     3078       ).
+     3079   end.
+     3080   end procedure.
+     3081   procedure cb-fill_bge-xml_goods :
+     3082   define input parameter p-gds-code   as integer          no-undo.
+     3083   do
+     3084   on error undo, return error
+     3085   :
+     3086       find first temp_bge-xml_goods
+     3087            where temp_bge-xml_goods.gds-code = p-gds-code
+     3088       no-error.
+     3089       if not available temp_bge-xml_goods
+     3090       then do:
+     3091           create temp_bge-xml_goods.
+     3092           assign
+     3093               temp_bge-xml_goods.gds-code = p-gds-code
+     3094           .
+     3095       end.
+     3096   end.
+     3097   end procedure.

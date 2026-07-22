@@ -1,0 +1,108 @@
+block-level on error undo, throw.
+define input  parameter parParentProc as widget-handle no-undo .
+define input  parameter p-list-mode   as character no-undo .
+define input  parameter p-status      as character no-undo .
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+define variable vss-author      as character no-undo init "$Author: expertek $":U .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: prdoclst.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: gbl/prdoclst.p $":U .
+define variable vss-description as character no-undo init "Вызвать список переоценок".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+    assign
+      p-vss-parameters = substitute('&1|&2',p-list-mode,p-status)
+    .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  define variable v-cntxt-db-num        as integer   no-undo .
+  define variable v-cntxt-userid        as character no-undo .
+  define variable v-cntxt-level         as character no-undo .
+  define variable v-cntxt-host-code-obj as integer   no-undo .
+  define variable v-cntxt-obj-type      as character no-undo .
+  define variable v-cntxt-obj-code      as integer   no-undo .
+  define variable v-cntxt-db-num-obj    as integer   no-undo .
+  define variable v-cntxt-is-admin      as logical   no-undo .
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  run mainmenu_getcntxt in parparentproc
+    (output v-cntxt-db-num
+    ,output v-cntxt-userid
+    ,output v-cntxt-level
+    ,output v-cntxt-host-code-obj
+    ,output v-cntxt-obj-type
+    ,output v-cntxt-obj-code
+    ,output v-cntxt-db-num-obj
+    ,output v-cntxt-is-admin
+    ) .
+do
+on error undo, return error return-value
+:
+  define variable loc-ref-list as character no-undo .
+  run str/pr-docs.w
+    (input parparentproc
+    ,input "b-mark":U
+    ,input p-list-mode
+    ,input p-status
+    ,input v-cntxt-obj-type
+    ,input v-cntxt-obj-code
+    ,input ""
+    ,output loc-ref-list
+    ) .
+end.

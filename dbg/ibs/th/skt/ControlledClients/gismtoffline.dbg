@@ -1,0 +1,563 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.skt.Commands.*.
+        3   using ibs.th.skt.Adapters.LogWrite.
+        4   using ibs.th.gbl.propmap.
+        5   using ibs.th.gbl.sys.objsrv.
+        6   using ibs.th.gbl.sys.objth.
+        7   using Progress.Lang.*.
+        8   block-level on error undo, throw.
+        9   class ibs.th.skt.ControlledClients.GisMtOffline inherits objth :
+       10     define override public property vss-revision    as character no-undo init "$Revision:$":U get .
+       11     define override public property vss-author      as character no-undo init "$Author:$":U get.
+       12     define override public property vss-date        as character no-undo init "$Date:$":U get.
+       13     define override public property vss-workfile    as character no-undo init "$Workfile:$":U get.
+       14     define override public property vss-archive     as character no-undo init "$Archive:$":U get.
+       15     define override public property vss-description as character no-undo init "Работа с офлайн модулем ГИС МТ" get.
+       16     define temp-table ttstatus-body  no-undo
+       17     xml-node-name "body"
+       18      field f_version        as character XML-NODE-NAME "version"
+       19      field f_status         as character XML-NODE-NAME "status"
+       20      field operationMode    as character
+       21      field name             as character
+       22      field lastSync         as character
+       23      field inst             as character
+       24      field errorcode        as character
+       25      field reason           as character
+       26      field lastUpdate       as character
+       27      field vers             as character XML-NODE-NAME "dbVersion"
+       28      field reqid            as recid     serialize-hidden
+       29      index reqidpar reqid
+       30      .
+       31     define temp-table ttstatus no-undo
+       32     xml-node-name "dbState"
+       33      field reqid        as recid serialize-hidden
+       34      field cis     as char
+       35      field blocked_series     as char
+       36      field blocked_gtin as char
+       37      field blocked_cis as char
+       38      index reqidpar reqid
+       39      .
+       40     define temp-table ttcis no-undo
+       41     xml-node-name "cis"
+       42      field s-reqid        as recid serialize-hidden
+       43      field timeLag as char
+       44      field localDocCount as char
+       45      index reqidpar s-reqid
+       46      .
+       47     define temp-table ttblocked_series no-undo
+       48     xml-node-name "blocked_series"
+       49      field s-reqid        as recid serialize-hidden
+       50      field timeLag as char
+       51      field localDocCount as char
+       52      index reqidpar s-reqid
+       53      .
+       54     define temp-table ttblocked_gtin no-undo
+       55     xml-node-name "blocked_gtin"
+       56      field s-reqid        as recid serialize-hidden
+       57      field timeLag as char
+       58      field localDocCount as char
+       59      index reqidpar s-reqid
+       60      .
+       61     define temp-table ttblocked_cis no-undo
+       62     xml-node-name "blocked_cis"
+       63      field s-reqid        as recid serialize-hidden
+       64      field timeLag as char
+       65      field localDocCount as char
+       66      index reqidpar s-reqid
+       67      .
+       68     define dataset gismt-mark-body  xml-node-name "bodys" for ttstatus-body, ttstatus, ttcis, ttblocked_series, ttblocked_gtin, ttblocked_cis
+       69     data-relation gismt-mark-cis for ttstatus-body, ttstatus relation-fields (reqid,reqid) nested
+       70     .
+       71     define stream out_data.
+       72   method public character objExists
+       73   (input  ifolder as character,
+       74    input  iType   as character  ):
+       75       define variable vFileType as character no-undo init "D,F".
+       76       define variable vi        as integer no-undo.
+       77       define variable vtype as character no-undo.
+       78       if iType ne ?
+       79       then
+       80          vFileType = iType.
+       81       do vi = 1 to num-entries(vFileType):
+       82          file-information:file-name = ".\" + right-trim(replace(ifolder,"/","\"),"\").
+       83          vtype = file-information:file-type.
+       84          if entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+       85             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+       86             index(vtype , entry(vi,vFileType )) > 0
+       87          then return file-information:full-pathname .
+       88          file-information:file-name = right-trim(replace(ifolder,"/","\"),"\").
+       89          vtype = file-information:file-type.
+       90          if file-information:file-name <> "" and
+       91             entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+       92             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+       93             index( vtype, entry(vi,vFileType )) > 0
+       94          then return file-information:full-pathname .
+       95       end.
+       96       return ? .
+       97   end.
+       98   method public character SearchFile
+       99   (input  ifile as character):
+      100      return objExists(ifile,?).
+      101   end.
+      102   method public character SearchPFile
+      103   (input inFile as char):
+      104        define variable oFile       as character no-undo.
+      105        define variable vFileSearch as character no-undo.
+      106        define variable vNumEntry   as integer no-undo.
+      107        if inFile = "" then return ?.
+      108        vNumEntry = num-entries(inFile,".").
+      109        vFileSearch = inFile.
+      110        if    vNumEntry > 0
+      111           and (   entry(vNumEntry,inFile,".") eq "p"
+      112                or entry(vNumEntry,inFile,".") eq "w")
+      113        then do:
+      114           entry(vNumEntry,vFileSearch, ".") = "r".
+      115           oFile = search(vFileSearch ).
+      116           if oFile eq ?
+      117           then
+      118              oFile = search(inFile).
+      119        end.
+      120        else
+      121           oFile = search(vFileSearch).
+      122        return oFile.
+      123     end.
+      124    define variable gismt-AdressPort   as character no-undo.
+      125    define variable gismt-DopParam     as character no-undo.
+      126    define variable gismt-GisAdress    as character no-undo.
+      127    define variable gismt-ProxyLogin   as character no-undo.
+      128    define variable gismt-ProxyPswd    as character no-undo.
+      129    define variable gismt-MaxTime      as integer   no-undo.
+      130    define variable gismt-RegKey       as character no-undo.
+      131    define variable gismt-TimeFalStart as integer   no-undo.
+      132    define variable gismt-WaitTime     as decimal   no-undo.
+      133    define variable gismt-WaitTimePlus as decimal   no-undo.
+      134    define variable gismt-CrashSituat  as logical   no-undo.
+      135    define variable gismt-BanDate      as integer   no-undo.
+      136    define variable gismt-cdnTurnOn    as logical   no-undo.
+      137    define variable gismt-cdnAdress    as character no-undo.
+      138    define variable gismt-cdnRepeat    as logical   no-undo.
+      139    define variable gismt-cdnChange    as logical   no-undo.
+      140    define variable gismt-cdnTimeUpd   as integer   no-undo.
+      141    define variable gismt-UpdateRequest as logical   no-undo.
+      142    define variable gismt-OflineAdress  as character no-undo.
+      143    define variable gismt-OflineAutoriz as character no-undo.
+      144    define variable gismt-OflineLogin   as character no-undo.
+      145    define variable gismt-OflinePswd    as character no-undo.
+      146    define variable gismt-OflineDate    as date      no-undo.
+      147   method public character ConvBase64
+      148   (input iString as char):
+      149     define variable vSize       as integer   no-undo.
+      150     define variable vDataDc1    as memptr    no-undo.
+      151     define variable vDataDc2    as memptr    no-undo.
+      152     define variable vEnCode     as character no-undo.
+      153     define variable vBase64Str  as character no-undo.
+      154     do
+      155     on error undo, return error return-value
+      156     :
+      157       if iString = ?
+      158       then return "".
+      159       vSize  = length(iString).
+      160       SET-SIZE(vDataDc1 ) = vSize + 1.
+      161       SET-SIZE(vDataDc2 ) = vSize.
+      162       put-string(vDataDc1, 1, vSize) = iString.
+      163       copy-lob from vDataDc1 starting at 1 for vSize to vDataDc2 no-convert.
+      164       vEnCode =  base64-encode (vDataDc2).
+      165       vBase64Str = substring(vEnCode,1).
+      166       SET-SIZE(vDataDc1)  = 0 no-error.
+      167       SET-SIZE(vDataDc2)  = 0 no-error.
+      168     end.
+      169     return vBase64Str.
+      170   end.
+      171   method public character get-thbj-attr-prop
+      172   (input p-obj-type as char,
+      173    input p-obj-code as int,
+      174    input p-upper-prop-code as char,
+      175    input p-prop-code as char
+      176    ):
+      177       define buffer buf_thbj-attr for ub.thbj-attr.
+      178       define variable v-reg-code as integer no-undo.
+      179       find first buf_thbj-attr no-lock where
+      180                  buf_thbj-attr.obj-type = p-obj-type
+      181              and buf_thbj-attr.obj-code = p-obj-code
+      182              and buf_thbj-attr.upper-prop-code = p-upper-prop-code
+      183              and buf_thbj-attr.prop-code = p-prop-code
+      184       no-error.
+      185       if not available buf_thbj-attr and p-obj-type = 'БД':U then
+      186       do:
+      187   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      188   run regcode in ibs.th.gbl.gbl-hndllib:g#library
+      189     (input  p-obj-type
+      190     ,input  p-obj-code
+      191     ,output v-reg-code
+      192     )  .
+      193          if v-reg-code <> ? and v-reg-code <> 0 then do:
+      194              find first buf_thbj-attr no-lock where
+      195                         buf_thbj-attr.obj-type = 'регион':U
+      196                     and buf_thbj-attr.obj-code = v-reg-code
+      197                     and buf_thbj-attr.upper-prop-code = p-upper-prop-code
+      198                     and buf_thbj-attr.prop-code = p-prop-code
+      199              no-error.
+      200          end.
+      201       end.
+      202       if not available buf_thbj-attr and p-obj-type <> ""
+      203       then do:
+      204          find first buf_thbj-attr no-lock where
+      205                     buf_thbj-attr.obj-type = ""
+      206                 and buf_thbj-attr.obj-code = 0
+      207                 and buf_thbj-attr.upper-prop-code = p-upper-prop-code
+      208                 and buf_thbj-attr.prop-code = p-prop-code
+      209          no-error.
+      210       end.
+      211       if avail buf_thbj-attr then do:
+      212           case buf_thbj-attr.prop-value-type:
+      213               when "character"
+      214                  then return buf_thbj-attr.property-value-character.
+      215               when "integer"
+      216                  then return string(buf_thbj-attr.property-value-integer).
+      217               when "decimal"
+      218                  then return string(buf_thbj-attr.property-value-decimal).
+      219               when "logical"
+      220                  then return string(buf_thbj-attr.property-value-logical).
+      221           end case.
+      222       end.
+      223       return "".
+      224   end.
+      225   method public character get-gismt-prop
+      226   (input p-obj-type as char,
+      227    input p-obj-code as int):
+      228       define buffer buf_code for ub.code.
+      229       define buffer buf_thbj-attr for ub.thbj-attr.
+      230       assign
+      231          gismt-AdressPort = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'adressPort':U)
+      232          gismt-DopParam   = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'dopParam':U)
+      233          gismt-GisAdress  = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'gisAdress':U)
+      234          gismt-ProxyLogin = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'proxyLogin':U)
+      235          gismt-ProxyPswd  = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'proxyPswd':U)
+      236          gismt-MaxTime    = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'maxTime':U))
+      237          gismt-RegKey     = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'regKey':U)
+      238          gismt-TimeFalStart = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'timeFalStart':U))
+      239          gismt-WaitTime    = decimal(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'waitTime':U))
+      240          gismt-CrashSituat = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'crashSituat':U))
+      241          gismt-BanDate     = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'banDate':U))
+      242          gismt-cdnTurnOn   = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnTurnOn':U))
+      243          gismt-cdnAdress   = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnAdress':U)
+      244          gismt-cdnRepeat   = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnRepeat':U))
+      245          gismt-cdnChange   = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnChange':U))
+      246          gismt-cdnTimeUpd  = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnTimeUpdate':U))
+      247          gismt-UpdateRequest = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'UpdateRequest':U))
+      248          gismt-OflineAdress  = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'OflineAdress':U)
+      249          gismt-OflineLogin   = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'OflineLogin':U)
+      250          gismt-OflinePswd    = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'OflinePswd':U)
+      251          .
+      252       if gismt-OflineLogin <> "" and gismt-OflinePswd <> ""
+      253       then gismt-OflineAutoriz = ConvBase64(gismt-OflineLogin + ":" + gismt-OflinePswd).
+      254       find first buf_code no-lock where
+      255                  buf_code.parent eq "GisMtOffline"
+      256              and buf_code.code   eq string(p-obj-code)
+      257          no-error.
+      258       if not avail buf_code then
+      259       find first buf_code no-lock where
+      260                  buf_code.parent eq "GisMtOffline"
+      261              and buf_code.code   eq "0"
+      262          no-error.
+      263       if avail buf_code then  gismt-OflineDate = date(buf_code.CodeValue) no-error.
+      264       else gismt-OflineDate = today.
+      265     return "".
+      266   end.
+      267      method public character GetParam ():
+      268        define variable vRetProp as character no-undo.
+      269        define buffer buf_sys-ctrl for ub.sys-ctrl .
+      270        find first buf_sys-ctrl no-lock no-error.
+      271        if available buf_sys-ctrl and buf_sys-ctrl.db-num <> 0
+      272        then do:
+      273            vRetProp = get-gismt-prop ('БД':U,
+      274                                       buf_sys-ctrl.db-num) no-error.
+      275        end.
+      276        return "".
+      277      end method.
+      278      method public void ChkStsOffline ():
+      279          RunChkStsAndInit(yes, yes).
+      280          EmptyTempTable().
+      281      end method.
+      282      method public character GetChkStsOffline (
+      283          output oVersion as character,
+      284          output oTimeLag as character,
+      285          output olastUpdate as character,
+      286          output oLastSync as character,
+      287          output oInst as character,
+      288          output odbVersion as character
+      289          ):
+      290          define variable vStatus as character no-undo.
+      291          define variable vTimeLag as int64   no-undo.
+      292          define variable vTimeDec as decimal no-undo.
+      293          define variable vSync as int64 no-undo.
+      294          define variable vTimeSync as datetime-tz no-undo.
+      295          define variable vTz as integer no-undo.
+      296          vTimeLag = 0.
+      297          RunChkStsAndInit(yes, no).
+      298          find first ttstatus-body no-error.
+      299          if avail ttstatus-body and
+      300             ttstatus-body.errorcode > ""
+      301          then do:
+      302              assign
+      303                vStatus     = ttstatus-body.reason
+      304                oVersion    = "Не определена"
+      305                oInst       = "Не определена"
+      306                odbVersion  = "Не определена"
+      307                olastUpdate = "0"
+      308                oLastSync   = "0"
+      309                .
+      310          end.
+      311          else if avail ttstatus-body
+      312          then do:
+      313              assign
+      314                vStatus     = ttstatus-body.f_status
+      315                oVersion    = ttstatus-body.f_version
+      316                oInst       = ttstatus-body.inst
+      317                odbVersion  = ttstatus-body.vers
+      318                olastUpdate = ttstatus-body.lastUpdate
+      319                oLastSync   = ttstatus-body.lastSync
+      320                .
+      321              vSync = int64(ttstatus-body.lastSync) no-error.
+      322              if not error-status:error
+      323                 and vSync <> 0
+      324              then do:
+      325                  vTz = TIMEZONE (now).
+      326                  vTimeSync = DateTime("01/01/1970") + vSync + vTz * 60000.
+      327                  vTimeDec = (now - vTimeSync) / 3600000 no-error.
+      328                  if vTimeDec <> 0 and vTimeDec <> ? then do:
+      329                     vTimeLag  = Round(vTimeDec, 0).
+      330                     if  vTimeLag < vTimeDec then vTimeLag = vTimeLag + 1.
+      331                  end.
+      332              end.
+      333          end.
+      334          else
+      335             assign
+      336                vStatus     = "Нет связи с ЛМ ЧЗ"
+      337                oVersion    = "Не определена"
+      338                oInst       = "Не определена"
+      339                odbVersion  = "Не определена"
+      340                olastUpdate = "0"
+      341                oLastSync   = "0"
+      342                .
+      343          if vTimeLag <> ?
+      344          then oTimeLag = string(vTimeLag).
+      345          else oTimeLag = "0".
+      346          if oInst = "" then
+      347             oInst = "Не определена".
+      348          if odbVersion = "" then
+      349             odbVersion  = "Не определена".
+      350          EmptyTempTable().
+      351          return vStatus.
+      352      end method.
+      353      method public void RunChkStsAndInit (
+      354        iStartInit as log,
+      355        iWriteLog as log
+      356        ):
+      357        define variable vTimeStart   as datetime-tz no-undo.
+      358        define variable vlongJson    as longchar no-undo.
+      359        define variable vlongJsonCh  as longchar no-undo.
+      360        define variable hDS          as handle no-undo.
+      361        define variable vRetOk       as logical no-undo.
+      362        define variable cmd          as character   no-undo.
+      363        define variable vFileResult  as character   no-undo.
+      364        define variable vFileResXml  as character   no-undo.
+      365        define variable vFileErr     as character   no-undo.
+      366        define variable vFileCmd     as character   no-undo.
+      367        define variable vParam       as character no-undo.
+      368        define variable vReqSts      as logical no-undo.
+      369        vParam = GetParam().
+      370        assign
+      371           vlongJson = ""
+      372           vTimeStart = now
+      373           vReqSts = no
+      374           .
+      375        EmptyTempTable().
+      376        run gbl/_tmpfile.p ( "StsOffGisMTRes", ".txt", output vFileResult ) .
+      377        run gbl/_tmpfile.p ( "StsOffGisMTErr", ".txt", output vFileErr ) .
+      378        run gbl/_tmpfile.p ( "StsOffGisMTResXml", ".xml", output vFileResXml ) .
+      379        if session:debug-alert then run gbl/_tmpfile.p ( "StsOfflineCmd", ".txt", output vFileCmd ) .
+      380        do transaction
+      381        on error undo, return error:
+      382            cmd = substitute ('&1 --connect-timeout &6 --max-time &6 -X GET -H "Accept: application/json" -H &2 &3 >&4 --stderr &5',
+      383                             search ("exe/curl.exe"),
+      384                             quoter("Authorization: Basic " + gismt-OflineAutoriz),
+      385                             quoter(gismt-OflineAdress + "/status"),
+      386                             vFileResult,
+      387                             vFileErr,
+      388                             trim(replace(string(gismt-WaitTime, "zzzz9.99999"),".",","),"")).
+      389            if session:debug-alert then
+      390            do:
+      391                OUTPUT STREAM out_data TO value(vFileCmd).
+      392                PUT STREAM out_data UNFORMATTED
+      393                 cmd .
+      394                OUTPUT STREAM out_data CLOSE.
+      395            end.
+      396            os-command silent value(cmd).
+      397            if searchFile(vfileresult) <> ? then do:
+      398               file-info:file-name = searchFile(vfileresult).
+      399               if file-info:file-size <> 0 then do:
+      400                  copy-lob from file vFileResult to vlongJson no-error.
+      401                  vlongJsonCh = REPLACE(vlongJson, 'null', '"unknown"').
+      402                  vlongJsonCh = REPLACE(vlongJsonCh, '"replicationStatus":~{}', '"replicationStatus":""') no-error.
+      403                  vlongJsonCh = REPLACE(vlongJsonCh, '"dbState":~{}', '"dbState":""') no-error.
+      404                  copy-lob from vlongJsonCh to file vFileResult no-error.
+      405                  cmd = substitute ('&1 -file=&2 >&3',
+      406                                         search("exe/json2xml.exe"),
+      407                                         vFileResult,
+      408                                         vFileResXml).
+      409                  os-command silent value (cmd).
+      410                  copy-lob from file vFileResXml to vlongJson no-error.
+      411                  vRetOk = dataset gismt-mark-body:read-xml("FILE":U, vFileResXml, "EMPTY":U, ?, ?) no-error.
+      412                  find first ttstatus-body no-error.
+      413                  if avail ttstatus-body  and
+      414                     ttstatus-body.f_status = "not_configured" and
+      415                     iStartInit
+      416                  then do:
+      417                     RunInitOffline() no-error.
+      418                     vReqSts = yes.
+      419                  end.
+      420               end.
+      421            end.
+      422        end.
+      423        if iWriteLog then WriteLogOffLine(vlongJson, vReqSts) no-error.
+      424        if not session:debug-alert
+      425        then do:
+      426            os-delete silent value(vFileResult)     no-error.
+      427            os-delete silent value(vFileErr)        no-error.
+      428            os-delete silent value(vFileResXml)     no-error.
+      429        end.
+      430      end method.
+      431      method public void RunInitOffline():
+      432           define variable vlongJson as longchar no-undo.
+      433           define variable hDS as handle no-undo.
+      434           define variable vRetOk as logical no-undo.
+      435           define variable vCdnAdr as character no-undo.
+      436           define variable cmd as character   no-undo.
+      437           define variable vFileResult    as character   no-undo.
+      438           define variable vFileErr as character   no-undo.
+      439           define variable vTimeCur as datetime-tz no-undo.
+      440           def var vReqTime as int64 no-undo.
+      441           define variable vFlagOk as log no-undo.
+      442           define variable vTokenFile as char no-undo.
+      443           define variable vFileCmd as char no-undo.
+      444           assign
+      445              vlongJson = ""
+      446              vFlagOk = no
+      447              .
+      448           run gbl/_tmpfile.p ( "InitOfflineGisMTRes", ".txt", output vFileResult ) .
+      449           run gbl/_tmpfile.p ( "InitOfflineGisMTErr", ".txt", output vFileErr ) .
+      450           run gbl/_tmpfile.p ( "InitOfflineToken", ".txt", output vTokenFile ) .
+      451           if session:debug-alert then run gbl/_tmpfile.p ( "InitOfflineCmd", ".txt", output vFileCmd ) .
+      452           OUTPUT STREAM out_data TO value(vTokenFile).
+      453           PUT STREAM out_data UNFORMATTED
+      454             '~{"token":"' gismt-RegKey '"~}' .
+      455           OUTPUT STREAM out_data CLOSE.
+      456           cmd = substitute ('&1 --connect-timeout &6 --max-time &6 -X POST -H "Accept: application/json" -H &2 --data @&7 &3 >&4 --stderr &5',
+      457                             search ("exe/curl.exe"),
+      458                             quoter("Authorization: Basic " + gismt-OflineAutoriz),
+      459                             quoter(gismt-OflineAdress + "/init"),
+      460                             vFileResult,
+      461                             vFileErr,
+      462                             trim(replace(string(gismt-WaitTime, "zzzz9.99999"),".",","),""),
+      463                             searchfile(vTokenFile)
+      464                             ).
+      465            if session:debug-alert then
+      466            do:
+      467                OUTPUT STREAM out_data TO value(vFileCmd).
+      468                PUT STREAM out_data UNFORMATTED
+      469                 cmd .
+      470                OUTPUT STREAM out_data CLOSE.
+      471            end.
+      472            os-command silent value(cmd).
+      473            if searchFile(vfileresult) <> ? then do:
+      474               file-info:file-name = searchFile(vfileresult).
+      475               if file-info:file-size = 0 then vFlagOk = yes.
+      476            end.
+      477            if not session:debug-alert
+      478            then do:
+      479                os-delete silent value(vFileResult)     no-error.
+      480                os-delete silent value(vFileErr)        no-error.
+      481                os-delete silent value(vTokenFile)      no-error.
+      482            end.
+      483      end method.
+      484      method  private void WriteLogOffLine
+      485          (iResultJson as longchar,
+      486           iFlagOk as logical):
+      487           define variable vFileName as character no-undo.
+      488           define variable vCh as character no-undo.
+      489           define variable vFullCh as character no-undo.
+      490           define variable vWork as character no-undo.
+      491           define variable vNum as integer no-undo.
+      492           define variable vStrLong as longchar no-undo.
+      493           define variable vStatus as character no-undo.
+      494           define variable vTimeLag as datetime-tz no-undo.
+      495           vFileName = "GisMtOffLine-" + replace(string(today),"/","-") +  ".log".
+      496           assign
+      497              vWork = ""
+      498              vCh = "param.txt"
+      499              .
+      500           vFullCh = searchfile(vCh).
+      501           if vFullCh <> ? and vFullCh <> ""
+      502           then vNum = index(vFullCh,"\pid_").
+      503           if vNum <> 0 then vWork = substring(vFullCh, 1, vNum).
+      504           vFileName =  vWork + vFileName.
+      505           find first ttstatus-body
+      506              no-lock no-error.
+      507           if avail ttstatus-body then
+      508           do:
+      509              vTimeLag = GetStatusTime(ttstatus-body.lastSync).
+      510              vStatus =  substitute("Статус модуля ЛМ ЧЗ:&1&2&1Дата и время синхронизации:&1&3",
+      511                                    chr(9),
+      512                                    ttstatus-body.f_status,
+      513                                    vTimeLag).
+      514           end.
+      515           else vStatus =  "Ошибка получения статуса ЛМ ЧЗ".
+      516           if iResultJson = "" then vStatus = "Не получен ответ от ЛМ ЧЗ.".
+      517           vCh = "".
+      518           if searchfile(vFileName) <> ?
+      519           then do:
+      520              file-info:file-name = searchfile(vFileName).
+      521              if file-info:file-size <> 0 then vCh = " ".
+      522           end.
+      523           OUTPUT STREAM out_data TO value(vFileName) APPEND.
+      524           PUT STREAM out_data UNFORMATTED
+      525             vCh skip now chr(9) vStatus skip .
+      526           OUTPUT STREAM out_data CLOSE.
+      527           copy-lob from iResultJson to file vFileName append no-error.
+      528           if iFlagOk then do:
+      529               OUTPUT STREAM out_data TO value(vFileName) APPEND.
+      530               PUT STREAM out_data UNFORMATTED
+      531                 skip "Запущена инициализация модуля ЛМ ЧЗ".
+      532               OUTPUT STREAM out_data CLOSE.
+      533           end.
+      534      end method.
+      535      method  private datetime-tz GetStatusTime
+      536          (iLastSync as char):
+      537          define variable vSync as int64 no-undo.
+      538          define variable vTimeSync as datetime-tz no-undo.
+      539          define variable vTz as integer no-undo.
+      540          vSync = int64(iLastSync).
+      541          vTz = TIMEZONE (now).
+      542          vTimeSync = DateTime("01/01/1970") + vSync + vTz * 60000.
+      543          return vTimeSync.
+      544      end method.
+      545      method public void ProcInit ():
+      546        define variable vParam       as character no-undo.
+      547        define variable vReqSts      as logical no-undo.
+      548        vParam = GetParam().
+      549        RunInitOffline() no-error.
+      550      end method.
+      551      method  private void EmptyTempTable ():
+      552         empty temp-table ttstatus-body.
+      553         empty temp-table ttstatus.
+      554         empty temp-table ttblocked_series.
+      555         empty temp-table ttblocked_gtin.
+      556         empty temp-table ttblocked_cis.
+      557      end method.
+      558      constructor public GisMtOffline (  ):
+      559         super ().
+      560      end constructor.
+      561      destructor public GisMtOffline ( ):
+      562      end destructor.
+      563   end class.

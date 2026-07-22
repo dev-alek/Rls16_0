@@ -1,0 +1,707 @@
+        1   block-level on error undo, throw.
+        2   define temp-table x_obj-group no-undo like ub.clients  .
+        3   define input parameter  p-price-type as character no-undo .
+        4   define input parameter  table for x_obj-group .
+        5   define input  parameter p-b-code as integer   no-undo .
+        6   define input parameter  p-artic      like ub.gds-obj.artic      no-undo .
+        7   define input parameter  p-prod-type  like ub.gds-obj.prod-type  no-undo .
+        8   define input parameter  p-prod-code  like ub.gds-obj.prod-code  no-undo .
+        9   define output parameter p-price-base like ub.gds-obj.avrg-base no-undo .
+       10   define output parameter p-price-rubl like ub.gds-obj.avrg-rubl no-undo .
+       11   define output parameter p-tax-road-base like ub.gds-obj.avrg-base no-undo .
+       12   define output parameter p-tax-road-rubl like ub.gds-obj.avrg-rubl no-undo .
+       13   def var vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+       14   def var vss-author      as character no-undo init "$Author: expertek $":U .
+       15   def var vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+       16   def var vss-workfile    as character no-undo init "$Workfile: sgdsavrg.p $":U .
+       17   def var vss-archive     as character no-undo init "$Archive: str/sgdsavrg.p $":U .
+       18   def var vss-description as character no-undo init "Процедура определения средней учетной цены товара по различным схемам".
+       19   procedure vss-get-info :
+       20     define output parameter p-vss-revision    like vss-revision    no-undo .
+       21     define output parameter p-vss-author      like vss-author      no-undo .
+       22     define output parameter p-vss-date        like vss-date        no-undo .
+       23     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       24     define output parameter p-vss-archive     like vss-archive     no-undo .
+       25     define output parameter p-vss-description like vss-description no-undo .
+       26     assign
+       27       p-vss-revision    = vss-revision
+       28       p-vss-author      = vss-author
+       29       p-vss-date        = vss-date
+       30       p-vss-workfile    = vss-workfile
+       31       p-vss-archive     = vss-archive
+       32       p-vss-description = vss-description
+       33     .
+       34   end procedure.
+       35   procedure vss-get-parameters :
+       36     define output parameter p-vss-parameters as character no-undo .
+       37   end procedure.
+       38   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       39   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       40   define variable v-vssrevis-logger                   as handle    no-undo .
+       41   procedure vss-logevent :
+       42     define input  parameter p-extra-paramters as character no-undo .
+       43     define variable v-vssrevis-parameters as character no-undo .
+       44     do
+       45     on error undo, return error return-value
+       46     :
+       47       if  valid-handle(v-vssrevis-logger)
+       48       and v-vssrevis-logger :get-signature("logevent") <> ""
+       49       then do:
+       50         run vss-get-parameters in this-procedure
+       51           (output v-vssrevis-parameters
+       52           ).
+       53         run logevent in v-vssrevis-logger
+       54           (input vss-workfile
+       55           ,input vss-revision
+       56           ,input v-vssrevis-parameters
+       57           ,input p-extra-paramters
+       58           ).
+       59       end.
+       60     end.
+       61   end procedure.
+       62   assign
+       63     v-vssrevis-logger = g#vssrevis-logger
+       64   .
+       65   if  valid-handle(v-vssrevis-logger)
+       66   and v-vssrevis-logger :get-signature("logevent") <> ""
+       67   then do:
+       68     assign
+       69       v-vssrevis-logevent = true
+       70     .
+       71     run vss-logevent in this-procedure (input vss-description) .
+       72   end.
+       73   define new global shared variable g#language as character no-undo .
+       74   if g#language <> '' and g#language <> 'rus':U then do:
+       75     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       76   end.
+       77   define new global shared variable g#library  as handle no-undo .
+       78   define new global shared variable g#library2 as handle no-undo .
+       79   define   shared variable g#auto as logical no-undo.
+       80   define   shared variable g#news as logical no-undo.
+       81   define   shared variable g#oxml as logical no-undo.
+       82   define   shared variable g#esys as logical no-undo.
+       83   define   shared variable g#news-source-db as integer no-undo.
+       84   define   shared variable g#esys-source-esys as integer no-undo.
+       85   define   shared variable g#db-num as integer   no-undo .
+       86   define   shared variable g#userid as character no-undo .
+       87   define   shared variable g#passwd as character no-undo .
+       88   define new global shared variable g#lib-trn  as handle no-undo .
+       89   define new global shared variable g#lib-trn2 as handle no-undo .
+       90   define new global shared variable g#lib-trn3 as handle no-undo .
+       91   define new global shared variable g#lib-trn4 as handle no-undo .
+       92   function cross-list returns logical (
+       93     input parfirst-stream  as character,
+       94     input parsecond-stream as character,
+       95     input pardelim         as character).
+       96     if pardelim = ""
+       97     or pardelim = ?
+       98     then do:
+       99       assign
+      100         pardelim = ","
+      101       .
+      102     end.
+      103     define variable vari            as integer no-undo .
+      104     define variable varresult-cross as logical no-undo .
+      105     assign
+      106       varresult-cross = no
+      107     .
+      108     def var v-num-parfirst-stream as integer no-undo .
+      109     assign
+      110       v-num-parfirst-stream = num-entries(parfirst-stream, pardelim)
+      111     .
+      112     do vari = 1 to v-num-parfirst-stream
+      113     :
+      114       if lookup(entry(vari, parfirst-stream, pardelim)
+      115                ,parsecond-stream
+      116                ,pardelim
+      117                ) > 0 then do:
+      118         assign
+      119           varresult-cross = yes
+      120         .
+      121         leave.
+      122       end.
+      123     end.
+      124     return varresult-cross .
+      125   end function.
+      126   function hvrdtax return logical (input parrecid as recid):
+      127   define variable varresult as logical no-undo.
+      128   run hvrdtax-proc (input parrecid, output varresult).
+      129   return varresult.
+      130   end function.
+      131   procedure hvrdtax-proc:
+      132   define input  parameter parrecid  as recid   no-undo.
+      133   define output parameter parresult as logical no-undo.
+      134   define buffer bf_goods for ub.goods.
+      135   define buffer bf_units for ub.units.
+      136   define buffer rt_tax   for ub.tax.
+      137   find first rt_tax   where rt_tax.tax-code    = integer('3':U) no-lock no-error.
+      138   find first bf_goods where recid(bf_goods)    = parrecid              no-lock.
+      139   find first bf_units where bf_units.unit-name = bf_goods.unit-base    no-lock.
+      140   if available rt_tax and
+      141       can-find(first ub.tax-units No-LOCK WHERE
+      142                      ub.tax-units.tax-code = rt_tax.tax-code AND
+      143                      LOOKUP(ub.tax-units.type, bf_units.type) > 0) then assign parresult = yes.
+      144                                                       else assign parresult = no.
+      145   end procedure.
+      146   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      147   procedure last-incom-S :
+      148   define input parameter  p-artic      like ub.gds-obj.artic      no-undo .
+      149   define input parameter  p-prod-type  like ub.gds-obj.prod-type  no-undo .
+      150   define input parameter  p-prod-code  like ub.gds-obj.prod-code  no-undo .
+      151   define output parameter p-in-code   as character no-undo .
+      152   define output parameter p-obj-type  as character no-undo .
+      153   define output parameter p-obj-code  as integer   no-undo .
+      154     do
+      155     on error undo, return error return-value
+      156     :
+      157     define buffer buf_trn-doc for ub.trn-doc .
+      158     define buffer buf_gds-obj for ub.gds-obj  .
+      159     do
+      160     on error undo, return error
+      161     :
+      162       assign
+      163         p-in-code  = ""
+      164         p-obj-type = ""
+      165         p-obj-code = 0
+      166       .
+      167        for each x_obj-group ,
+      168         each buf_gds-obj no-lock
+      169         where buf_gds-obj.obj-type  = x_obj-group.obj-type
+      170           and buf_gds-obj.obj-code  = x_obj-group.obj-code
+      171           and buf_gds-obj.artic     = p-artic
+      172           and buf_gds-obj.prod-type = p-prod-type
+      173           and buf_gds-obj.prod-code = p-prod-code
+      174       , first buf_trn-doc no-lock
+      175         where buf_trn-doc.doc-code = buf_gds-obj.in-code
+      176           and buf_trn-doc.status_  = 'факт':U
+      177       on error undo, return error
+      178       by buf_trn-doc.fact-order descending
+      179       :
+      180         assign
+      181           p-in-code  = buf_gds-obj.in-code
+      182           p-obj-type = buf_gds-obj.obj-type
+      183           p-obj-code = buf_gds-obj.obj-code
+      184         .
+      185         leave .
+      186       end.
+      187     end.
+      188     end.
+      189   end procedure.
+      190   procedure main-road-tax :
+      191   def input param p-obj-type  like ub.gds-obj.obj-type  no-undo .
+      192   def input param p-obj-code  like ub.gds-obj.obj-code  no-undo .
+      193   def input param p-artic     like ub.gds-obj.artic     no-undo .
+      194   def input param p-prod-type like ub.gds-obj.prod-type no-undo .
+      195   def input param p-prod-code like ub.gds-obj.prod-code no-undo .
+      196   def input-output param p-road-tax-base as decimal no-undo .
+      197   def input-output param p-road-tax-rubl as decimal no-undo .
+      198   define buffer     buff-goods    for ub.goods   .
+      199   define buffer     buf_gds-obj   for ub.gds-obj .
+      200   define buffer     buf_parts     for ub.parts   .
+      201       define buffer   in-vatp-trn-doc  for ub.trn-doc .
+      202       define buffer   in-vatp-parts    for ub.parts   .
+      203       define buffer   in-vatp-doc      for ub.trn-doc .
+      204       define buffer   in-vatp-goods    for ub.goods   .
+      205       define buffer   in-vatp-sysconf  for ub.sysconf .
+      206       define buffer   in-vatp_doc-attr for ub.doc-attr.
+      207       define variable in-vatp-have-vat-slt       as   logical initial yes    no-undo.
+      208       define variable vat-pc-loc                 like ub.doc-line.vat-pc     no-undo.
+      209       define variable varinvprb                  as   character              no-undo.
+      210       define variable slt-pc-loc                 like ub.doc-line.slt-pc     no-undo.
+      211       define variable cli-base-rate              as   decimal                no-undo.
+      212       define variable price-rubl-with-tax-loc    like ub.doc-line.price-rubl no-undo.
+      213       define variable price-base-with-tax-loc    like ub.doc-line.price-base no-undo.
+      214       define variable price-cli-with-tax-loc     like ub.doc-line.price-cli  no-undo.
+      215       define variable price-rubl-without-tax-loc like ub.doc-line.price-rubl no-undo.
+      216       define variable price-base-without-tax-loc like ub.doc-line.price-base no-undo.
+      217       define variable price-cli-without-tax-loc  like ub.doc-line.price-base no-undo.
+      218       define variable vat-base-loc               like ub.doc-line.price-base no-undo.
+      219       define variable vat-rubl-loc               like ub.doc-line.price-rubl no-undo.
+      220       define variable vat-cli-loc                like ub.doc-line.price-rubl no-undo.
+      221       define variable slt-base-loc               like ub.doc-line.price-base no-undo.
+      222       define variable slt-rubl-loc               like ub.doc-line.price-rubl no-undo.
+      223       define variable slt-cli-loc                like ub.doc-line.price-rubl no-undo.
+      224       define variable road-tax-base-loc          like ub.doc-line.road-tax   no-undo.
+      225       define variable road-tax-rubl-loc          like ub.doc-line.road-tax   no-undo.
+      226       define variable road-tax-cli-loc           like ub.doc-line.road-tax   no-undo.
+      227       define variable transport-base-loc         like ub.doc-line.price-base no-undo.
+      228       define variable transport-rubl-loc         like ub.doc-line.price-rubl no-undo.
+      229       define variable transport-cli-loc          like ub.doc-line.price-rubl no-undo.
+      230       define variable other-base-loc             like ub.doc-line.price-base no-undo.
+      231       define variable other-rubl-loc             like ub.doc-line.price-rubl no-undo.
+      232       define variable other-cli-loc              like ub.doc-line.price-rubl no-undo.
+      233       define variable exch-rate-cli-loc          like ub.trn-doc.exch-rate   no-undo.
+      234       define variable varinvatp-envd             as   character              no-undo.
+      235       define variable varinvatp-type             as   character              no-undo.
+      236   define buffer buf_trn-doc for ub.trn-doc  .
+      237   define buffer buf_doc-line for ub.doc-line .
+      238   define variable   is-petrolium  as logical             no-undo.
+      239   define variable   is-pieces     as logical             no-undo.
+      240   define variable v-last-in-code  like ub.gds-obj.in-code  no-undo .
+      241   define variable v-last-obj-type like ub.gds-obj.obj-type no-undo .
+      242   define variable v-last-obj-code like ub.gds-obj.obj-code no-undo .
+      243   def var v-rec as recid no-undo.
+      244   def var t-ret as logical no-undo .
+      245   def var v-total-avrg-base as decimal no-undo .
+      246   def var v-total-avrg-rubl as decimal no-undo .
+      247   def var v-total-avrg-qnty as decimal no-undo .
+      248   def var v-total-road-tax-base     as decimal no-undo .
+      249   def var v-total-road-tax-rubl     as decimal no-undo .
+      250   def var v-all-total-road-tax-base as decimal no-undo .
+      251   def var v-all-total-road-tax-rubl as decimal no-undo .
+      252   assign
+      253     p-road-tax-base = ?
+      254     p-road-tax-rubl = ?
+      255     .
+      256     Find first buff-goods no-lock where
+      257           buff-goods.artic     = p-artic and
+      258           buff-goods.prod-type = p-prod-type and
+      259           buff-goods.prod-code = p-prod-code
+      260           no-error .
+      261         if available buff-goods then do:
+      262              v-rec = recid (buff-goods).
+      263              t-ret =  session:SET-WAIT-STATE("GENERAL") .
+      264   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_is-petrl in g#lib-trn
+      265     (
+      266        input p-artic
+      267     ,  input p-prod-type
+      268     ,  input p-prod-code
+      269     , output is-petrolium
+      270     , output is-pieces
+      271     ) .
+      272              t-ret =  session:SET-WAIT-STATE("") .
+      273              if not ( hvrdtax( v-rec ) = true and  is-petrolium = false  )   then  do:
+      274                 assign
+      275                   p-road-tax-base = ?
+      276                   p-road-tax-rubl = ?
+      277                   .
+      278                 return.
+      279              end.
+      280         end.
+      281         assign
+      282             v-total-avrg-qnty = 0
+      283             v-total-road-tax-base =  0
+      284             v-total-road-tax-rubl =  0
+      285             v-all-total-road-tax-base =  0
+      286             v-all-total-road-tax-rubl =  0
+      287             .
+      288         for each x_obj-group,
+      289            each buf_parts no-lock
+      290           where buf_parts.obj-type  = x_obj-group.obj-type
+      291             and buf_parts.obj-code  = x_obj-group.obj-code
+      292             and buf_parts.artic     = p-artic
+      293             and buf_parts.prod-type = p-prod-type
+      294             and buf_parts.prod-code = p-prod-code
+      295             and buf_parts.status_   = no
+      296             and buf_parts.out-code  = 'free-zone':U
+      297             and buf_parts.qnty      > 0
+      298         on error undo, return error
+      299         :
+      300            v-total-avrg-qnty = v-total-avrg-qnty + buf_parts.fact-qnty.
+      301   assign
+      302     price-rubl-with-tax-loc = buf_parts.price-rubl
+      303     price-base-with-tax-loc = buf_parts.price-base
+      304   .
+      305   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+      306   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+      307     (output varinvprb
+      308     )  .
+      309     if buf_parts.out-code = 'free-zone':U     or
+      310        buf_parts.out-code = 'out-zone':U   or
+      311        buf_parts.doc-type = 'акт':U then do:
+      312       assign
+      313         in-vatp-have-vat-slt = yes.
+      314     end.
+      315     else do:
+      316       find first in-vatp_doc-attr no-lock
+      317         where in-vatp_doc-attr.doc-code  = buf_parts.out-code
+      318           and in-vatp_doc-attr.attr-code = 'envd':U
+      319         no-error .
+      320       if not available in-vatp_doc-attr then do:
+      321         assign
+      322           in-vatp-have-vat-slt = yes.
+      323       end.
+      324       else do:
+      325            in-vatp-have-vat-slt = no.
+      326       end.
+      327     end.
+      328     assign
+      329      price-cli-with-tax-loc = buf_parts.price-cli
+      330      cli-base-rate          = buf_parts.cli-base-rate.
+      331     ASSIGN   road-tax-base-loc  = (if buf_parts.road-tax-base  = ? then 0 else buf_parts.road-tax-base)
+      332              road-tax-rubl-loc  = (if buf_parts.road-tax-rubl  = ? then 0 else buf_parts.road-tax-rubl).
+      333     ASSIGN  transport-base-loc = (if buf_parts.transport-base = ? then 0 else buf_parts.transport-base)
+      334             transport-rubl-loc = (if buf_parts.transport-rubl = ? then 0 else buf_parts.transport-rubl)
+      335             other-base-loc     = (if buf_parts.other-base     = ? then 0 else buf_parts.other-base)
+      336             other-rubl-loc     = (if buf_parts.other-rubl     = ? then 0 else buf_parts.other-rubl)
+      337             vat-pc-loc         = (if buf_parts.vat-pc         = ? then 0 else buf_parts.vat-pc)
+      338             slt-pc-loc         = (if buf_parts.slt-pc         = ? then 0 else buf_parts.slt-pc).
+      339             ASSIGN   slt-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      340       ASSIGN   slt-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      341     assign
+      342       exch-rate-cli-loc = (buf_parts.price-rubl - transport-rubl-loc - other-rubl-loc - road-tax-rubl-loc - (if buf_parts.vat-type <> 'в т. ч.':U then vat-rubl-loc else 0) - (if buf_parts.slt-type <> 'в т. ч.':U then slt-rubl-loc else 0)) / buf_parts.price-cli .
+      343     assign
+      344       slt-cli-loc        = slt-rubl-loc       / exch-rate-cli-loc
+      345       vat-cli-loc        = vat-rubl-loc       / exch-rate-cli-loc
+      346       road-tax-cli-loc   = road-tax-rubl-loc  / exch-rate-cli-loc
+      347       transport-cli-loc  = 0
+      348       other-cli-loc      = 0
+      349     .
+      350   ASSIGN
+      351             price-base-without-tax-loc = price-base-with-tax-loc - vat-base-loc - slt-base-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))
+      352       price-rubl-without-tax-loc = price-rubl-with-tax-loc - vat-rubl-loc - slt-rubl-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))
+      353   .
+      354           assign
+      355             v-all-total-road-tax-base =  v-all-total-road-tax-base + (road-tax-base-loc * buf_parts.fact-qnty)
+      356             v-all-total-road-tax-rubl =  v-all-total-road-tax-rubl + (road-tax-rubl-loc * buf_parts.fact-qnty)
+      357            .
+      358         end.
+      359             if v-total-avrg-qnty > 0 then  DO :
+      360                 assign
+      361                   p-road-tax-base =  v-all-total-road-tax-base  / v-total-avrg-qnty
+      362                   p-road-tax-rubl =  v-all-total-road-tax-rubl  / v-total-avrg-qnty
+      363                   .
+      364             end.
+      365               if v-total-avrg-qnty <= 0 then do :
+      366                   run last-incom-S in this-procedure
+      367                   ( input   p-artic ,
+      368                     input   p-prod-type,
+      369                     input   p-prod-code ,
+      370                     output  v-last-in-code,
+      371                     output  v-last-obj-type,
+      372                     output  v-last-obj-code ).
+      373                         find buf_trn-doc where buf_trn-doc.doc-code  = v-last-in-code no-lock no-error .
+      374                         find buf_doc-line where     buf_doc-line.doc-code  = v-last-in-code
+      375                                         and buf_doc-line.artic     = p-artic
+      376                                         and buf_doc-line.prod-type = p-prod-type
+      377                                         and buf_doc-line.prod-code = p-prod-code no-lock no-error.
+      378                         if avail buf_doc-line then do :
+      379   assign
+      380     price-rubl-with-tax-loc = buf_doc-line.price-rubl
+      381     price-base-with-tax-loc = buf_doc-line.price-base
+      382   .
+      383   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+      384   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+      385     (output varinvprb
+      386     )  .
+      387      find first in-vatp_doc-attr no-lock
+      388       where in-vatp_doc-attr.doc-code  = buf_trn-doc.doc-code
+      389         and in-vatp_doc-attr.attr-code = 'envd':U
+      390       no-error .
+      391       if available in-vatp_doc-attr
+      392          then do:
+      393          assign
+      394            in-vatp-have-vat-slt = no.
+      395      end.
+      396      else do:
+      397        assign
+      398          in-vatp-have-vat-slt = yes.
+      399      end.
+      400      find first in-vatp-goods where in-vatp-goods.artic     = buf_doc-line.artic     and
+      401                                        in-vatp-goods.prod-type = buf_doc-line.prod-type and
+      402                                        in-vatp-goods.prod-code = buf_doc-line.prod-code no-lock.
+      403      if (not buf_trn-doc.internal and
+      404              buf_trn-doc.doc-type = 'при':U) or
+      405         in-vatp-goods.gds-type = 'у':U then do:
+      406         if varinvprb = "base":u then do:
+      407           assign
+      408             road-tax-base-loc = buf_doc-line.road-tax
+      409             road-tax-rubl-loc = buf_doc-line.road-tax * buf_trn-doc.base-rate / buf_trn-doc.base-scale.
+      410         end.
+      411         else do:
+      412           ASSIGN
+      413             road-tax-rubl-loc = buf_doc-line.road-tax
+      414             road-tax-base-loc = buf_doc-line.road-tax / buf_trn-doc.base-rate * buf_trn-doc.base-scale.
+      415         end.
+      416         if road-tax-base-loc = ? then road-tax-base-loc = 0.
+      417         if road-tax-rubl-loc = ? then road-tax-rubl-loc = 0.
+      418         assign
+      419           road-tax-cli-loc = ?.
+      420         ASSIGN
+      421           transport-base-loc = (if buf_doc-line.transport-base = ? then 0 else buf_doc-line.transport-base)
+      422           transport-rubl-loc = (if buf_doc-line.transport-rubl = ? then 0 else buf_doc-line.transport-rubl)
+      423           transport-cli-loc  = 0
+      424           other-base-loc     = (if buf_doc-line.other-base     = ? then 0 else buf_doc-line.other-base)
+      425           other-rubl-loc     = (if buf_doc-line.other-rubl     = ? then 0 else buf_doc-line.other-rubl)
+      426           other-cli-loc      = 0
+      427           vat-pc-loc         = (if buf_doc-line.vat-pc         = ? then 0 else buf_doc-line.vat-pc)
+      428           slt-pc-loc         = (if buf_doc-line.slt-pc         = ? then 0 else buf_doc-line.slt-pc).
+      429                                 ASSIGN   slt-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      430               ASSIGN   slt-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+      431         assign
+      432           vat-cli-loc            = ?
+      433           slt-cli-loc            = ?
+      434           price-cli-with-tax-loc = ?.
+      435      end.
+      436      else do:
+      437                                                   for each in-vatp-parts where in-vatp-parts.out-code  = buf_doc-line.doc-code  and
+      438                                         in-vatp-parts.obj-type  = buf_doc-line.obj-type  and
+      439                                         in-vatp-parts.obj-code  = buf_doc-line.obj-code  and
+      440                                         in-vatp-parts.artic     = buf_doc-line.artic     and
+      441                                         in-vatp-parts.prod-type = buf_doc-line.prod-type and
+      442                                         in-vatp-parts.prod-code = buf_doc-line.prod-code
+      443                            use-index out-code no-lock:
+      444             accumulate  in-vatp-parts.road-tax-base  * in-vatp-parts.fact-qnty (total)
+      445                         in-vatp-parts.road-tax-rubl  * in-vatp-parts.fact-qnty (total)
+      446                         in-vatp-parts.transport-base * in-vatp-parts.fact-qnty (total)
+      447                         in-vatp-parts.transport-rubl * in-vatp-parts.fact-qnty (total)
+      448                         in-vatp-parts.other-base     * in-vatp-parts.fact-qnty (total)
+      449                         in-vatp-parts.other-rubl     * in-vatp-parts.fact-qnty (total)
+      450                                                                                                                 (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-base - ((if in-vatp-parts.road-tax-base  = ? then 0 else in-vatp-parts.road-tax-base) + (if in-vatp-parts.transport-base = ? then 0 else in-vatp-parts.transport-base) + (if in-vatp-parts.other-base = ? then 0 else in-vatp-parts.other-base)))   * in-vatp-parts.fact-qnty                     * in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))  (total)
+      451                         (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-base - ((if in-vatp-parts.road-tax-base  = ? then 0 else in-vatp-parts.road-tax-base) + (if in-vatp-parts.transport-base = ? then 0 else in-vatp-parts.transport-base) + (if in-vatp-parts.other-base = ? then 0 else in-vatp-parts.other-base)))   * in-vatp-parts.fact-qnty                      / (100 + in-vatp-parts.slt-pc))  (total)
+      452                         (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-base - ((if in-vatp-parts.road-tax-base  = ? then 0 else in-vatp-parts.road-tax-base) + (if in-vatp-parts.transport-base = ? then 0 else in-vatp-parts.transport-base) + (if in-vatp-parts.other-base = ? then 0 else in-vatp-parts.other-base)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc)) * in-vatp-parts.vat-pc / (100 + in-vatp-parts.vat-pc))  (total)
+      453                         (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-base - ((if in-vatp-parts.road-tax-base  = ? then 0 else in-vatp-parts.road-tax-base) + (if in-vatp-parts.transport-base = ? then 0 else in-vatp-parts.transport-base) + (if in-vatp-parts.other-base = ? then 0 else in-vatp-parts.other-base)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))  / (100 + in-vatp-parts.vat-pc))  (total)
+      454                                               (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty                     * in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))  (total)
+      455                         (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty                      / (100 + in-vatp-parts.slt-pc))  (total)
+      456                         (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc)) * in-vatp-parts.vat-pc / (100 + in-vatp-parts.vat-pc))  (total)
+      457                         (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))  / (100 + in-vatp-parts.vat-pc))  (total)
+      458                         .
+      459         end.
+      460         ASSIGN
+      461           road-tax-base-loc   = if buf_doc-line.fact-qnty <> 0 then (accum total in-vatp-parts.road-tax-base  * in-vatp-parts.fact-qnty) / buf_doc-line.fact-qnty  else 0
+      462           road-tax-rubl-loc   = if buf_doc-line.fact-qnty <> 0 then (accum total in-vatp-parts.road-tax-rubl  * in-vatp-parts.fact-qnty) / buf_doc-line.fact-qnty  else 0
+      463           transport-base-loc  = if buf_doc-line.fact-qnty <> 0 then (accum total in-vatp-parts.transport-base * in-vatp-parts.fact-qnty) / buf_doc-line.fact-qnty  else 0
+      464           transport-rubl-loc  = if buf_doc-line.fact-qnty <> 0 then (accum total in-vatp-parts.transport-rubl * in-vatp-parts.fact-qnty) / buf_doc-line.fact-qnty  else 0
+      465           other-base-loc      = if buf_doc-line.fact-qnty <> 0 then (accum total in-vatp-parts.other-base     * in-vatp-parts.fact-qnty) / buf_doc-line.fact-qnty  else 0
+      466           other-rubl-loc      = if buf_doc-line.fact-qnty <> 0 then (accum total in-vatp-parts.other-rubl     * in-vatp-parts.fact-qnty) / buf_doc-line.fact-qnty  else 0
+      467                                           vat-base-loc        = if buf_doc-line.fact-qnty <> 0 then (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-base - ((if in-vatp-parts.road-tax-base  = ? then 0 else in-vatp-parts.road-tax-base) + (if in-vatp-parts.transport-base = ? then 0 else in-vatp-parts.transport-base) + (if in-vatp-parts.other-base = ? then 0 else in-vatp-parts.other-base)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc)) * in-vatp-parts.vat-pc / (100 + in-vatp-parts.vat-pc))) / buf_doc-line.fact-qnty   else 0
+      468           slt-base-loc        = if buf_doc-line.fact-qnty <> 0 then (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-base - ((if in-vatp-parts.road-tax-base  = ? then 0 else in-vatp-parts.road-tax-base) + (if in-vatp-parts.transport-base = ? then 0 else in-vatp-parts.transport-base) + (if in-vatp-parts.other-base = ? then 0 else in-vatp-parts.other-base)))   * in-vatp-parts.fact-qnty                     * in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))) / buf_doc-line.fact-qnty   else 0
+      469                   vat-rubl-loc        = if buf_doc-line.fact-qnty <> 0 then (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc)) * in-vatp-parts.vat-pc / (100 + in-vatp-parts.vat-pc))) / buf_doc-line.fact-qnty   else 0
+      470           slt-rubl-loc        = if buf_doc-line.fact-qnty <> 0 then (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty                     * in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))) / buf_doc-line.fact-qnty   else 0
+      471           vat-pc-loc          = (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc)) * in-vatp-parts.vat-pc / (100 + in-vatp-parts.vat-pc))) / (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty * (1 - in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))  / (100 + in-vatp-parts.vat-pc)))
+      472           slt-pc-loc          = (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty                     * in-vatp-parts.slt-pc / (100 + in-vatp-parts.slt-pc))) / (accum total (if in-vatp-have-vat-slt = no then 0 else (in-vatp-parts.price-rubl - ((if in-vatp-parts.road-tax-rubl  = ? then 0 else in-vatp-parts.road-tax-rubl) + (if in-vatp-parts.transport-rubl = ? then 0 else in-vatp-parts.transport-rubl) + (if in-vatp-parts.other-rubl = ? then 0 else in-vatp-parts.other-rubl)))   * in-vatp-parts.fact-qnty                      / (100 + in-vatp-parts.slt-pc))).
+      473         if road-tax-base-loc  = ? then road-tax-base-loc  = 0.
+      474         if road-tax-rubl-loc  = ? then road-tax-rubl-loc  = 0.
+      475         if transport-base-loc = ? then transport-base-loc = 0.
+      476         if transport-rubl-loc = ? then transport-rubl-loc = 0.
+      477         if other-base-loc     = ? then other-base-loc     = 0.
+      478         if other-rubl-loc     = ? then other-rubl-loc     = 0.
+      479         assign
+      480           transport-cli-loc      = 0
+      481           other-cli-loc          = 0
+      482           road-tax-cli-loc       = ?
+      483           vat-cli-loc            = ?
+      484           slt-cli-loc            = ?
+      485           price-cli-with-tax-loc = ?.
+      486      end.
+      487   ASSIGN
+      488             price-base-without-tax-loc = price-base-with-tax-loc - vat-base-loc - slt-base-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))
+      489       price-rubl-without-tax-loc = price-rubl-with-tax-loc - vat-rubl-loc - slt-rubl-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))
+      490   .
+      491                         Assign
+      492                             p-road-tax-rubl =  road-tax-rubl-loc
+      493                             p-road-tax-base =  road-tax-base-loc
+      494                             .
+      495                         end.
+      496       end.
+      497   end procedure.
+      498   define buffer buf_goods   for ub.goods .
+      499   define buffer buf_gds-obj for ub.gds-obj .
+      500   def var v-total-avrg-base as decimal no-undo .
+      501   def var v-total-avrg-rubl as decimal no-undo .
+      502   def var v-total-avrg-qnty as decimal no-undo .
+      503   def var v-last-in-code  like ub.gds-obj.in-code  no-undo .
+      504   def var v-last-obj-type like ub.gds-obj.obj-type no-undo .
+      505   def var v-last-obj-code like ub.gds-obj.obj-code no-undo .
+      506   find first buf_goods no-lock
+      507     where buf_goods.artic     = p-artic
+      508       and buf_goods.prod-type = p-prod-type
+      509       and buf_goods.prod-code = p-prod-code
+      510     no-error .
+      511   if not available buf_goods then do:
+      512     message
+      513       vss-workfile vss-revision vss-description skip
+      514       "Не найден товар" skip
+      515       "Артикул" p-artic p-prod-type p-prod-code skip
+      516       view-as alert-box .
+      517     undo, return error .
+      518   end.
+      519   case p-price-type :
+      520     when 'УчетнаяS':U then do:
+      521       if buf_goods.gds-type = 'т':U then do:
+      522         assign
+      523           v-total-avrg-base = 0
+      524           v-total-avrg-rubl = 0
+      525           v-total-avrg-qnty = 0
+      526         .
+      527         for each x_obj-group ,
+      528           each buf_gds-obj no-lock
+      529           where buf_gds-obj.obj-type  = x_obj-group.obj-type
+      530             and buf_gds-obj.obj-code  = x_obj-group.obj-code
+      531             and buf_gds-obj.artic     = p-artic
+      532             and buf_gds-obj.prod-type = p-prod-type
+      533             and buf_gds-obj.prod-code = p-prod-code
+      534         on error undo, return error
+      535         :
+      536           if buf_gds-obj.avrg-base > 0 then do:
+      537             assign
+      538               v-total-avrg-base = v-total-avrg-base
+      539                                 + (buf_gds-obj.avrg-base * buf_gds-obj.avrg-qnty)
+      540               v-total-avrg-rubl = v-total-avrg-rubl
+      541                                 + (buf_gds-obj.avrg-rubl * buf_gds-obj.avrg-qnty)
+      542               v-total-avrg-qnty = v-total-avrg-qnty
+      543                                 + buf_gds-obj.avrg-qnty
+      544             .
+      545           end.
+      546         end.
+      547         if v-total-avrg-qnty > 0 then do:
+      548           assign
+      549             p-price-base = v-total-avrg-base / v-total-avrg-qnty
+      550             p-price-rubl = v-total-avrg-rubl / v-total-avrg-qnty
+      551           .
+      552         end.
+      553         else do:
+      554           run last-incom-S in this-procedure
+      555           ( input   p-artic ,
+      556             input   p-prod-type,
+      557             input   p-prod-code ,
+      558             output  v-last-in-code,
+      559             output  v-last-obj-type,
+      560             output  v-last-obj-code ).
+      561           find first buf_gds-obj no-lock
+      562             where buf_gds-obj.obj-type  = v-last-obj-type
+      563               and buf_gds-obj.obj-code  = v-last-obj-code
+      564               and buf_gds-obj.artic     = p-artic
+      565               and buf_gds-obj.prod-type = p-prod-type
+      566               and buf_gds-obj.prod-code = p-prod-code
+      567             no-error .
+      568           if available buf_gds-obj then do:
+      569             assign
+      570               p-price-base = buf_gds-obj.last-base
+      571               p-price-rubl = buf_gds-obj.last-rubl
+      572             .
+      573           end.
+      574         end.
+      575       end.
+      576       else do:
+      577         assign
+      578           p-price-base = ?
+      579           p-price-rubl = ?
+      580         .
+      581       end.
+      582     end.
+      583     when 'Учет-рзрвS':U then do:
+      584       if buf_goods.gds-type = 'т':U then do:
+      585         define buffer buf_parts for ub.parts .
+      586         for each x_obj-group ,
+      587           each buf_parts no-lock
+      588           where buf_parts.obj-type  = x_obj-group.obj-type
+      589             and buf_parts.obj-code  = x_obj-group.obj-code
+      590             and buf_parts.artic     = p-artic
+      591             and buf_parts.prod-type = p-prod-type
+      592             and buf_parts.prod-code = p-prod-code
+      593             and buf_parts.status_   = no
+      594             and buf_parts.out-code  = 'free-zone':U
+      595             and buf_parts.qnty      > 0
+      596         on error undo, return error
+      597         :
+      598             assign
+      599             v-total-avrg-base = v-total-avrg-base
+      600                               + (buf_parts.price-base * buf_parts.qnty)
+      601             v-total-avrg-rubl = v-total-avrg-rubl
+      602                               + (buf_parts.price-rubl * buf_parts.qnty)
+      603             v-total-avrg-qnty = v-total-avrg-qnty
+      604                               + buf_parts.qnty
+      605           .
+      606         end.
+      607         if v-total-avrg-qnty > 0 then do:
+      608           assign
+      609             p-price-base = v-total-avrg-base / v-total-avrg-qnty
+      610             p-price-rubl = v-total-avrg-rubl / v-total-avrg-qnty
+      611           .
+      612         end.
+      613         else do:
+      614           run last-incom-S in this-procedure
+      615           ( input   p-artic ,
+      616             input   p-prod-type,
+      617             input   p-prod-code ,
+      618             output  v-last-in-code,
+      619             output  v-last-obj-type,
+      620             output  v-last-obj-code ).
+      621           find first buf_gds-obj no-lock
+      622             where buf_gds-obj.obj-type  = v-last-obj-type
+      623               and buf_gds-obj.obj-code  = v-last-obj-code
+      624               and buf_gds-obj.artic     = p-artic
+      625               and buf_gds-obj.prod-type = p-prod-type
+      626               and buf_gds-obj.prod-code = p-prod-code
+      627             no-error .
+      628           if available buf_gds-obj then do:
+      629             assign
+      630               p-price-base = buf_gds-obj.last-base
+      631               p-price-rubl = buf_gds-obj.last-rubl
+      632             .
+      633           end.
+      634         end.
+      635       end.
+      636       else do:
+      637         assign
+      638           p-price-base = ?
+      639           p-price-rubl = ?
+      640         .
+      641         for each  x_obj-group ,
+      642          first buf_gds-obj no-lock
+      643           where buf_gds-obj.obj-type  = x_obj-group.obj-type
+      644             and buf_gds-obj.obj-code  = x_obj-group.obj-code
+      645             and buf_gds-obj.artic     = p-artic
+      646             and buf_gds-obj.prod-type = p-prod-type
+      647             and buf_gds-obj.prod-code = p-prod-code :
+      648           assign
+      649             p-price-base = buf_gds-obj.price-base
+      650             p-price-rubl = buf_gds-obj.price-rubl
+      651           .
+      652         end.
+      653       end.
+      654     end.
+      655     when 'ПриходнаяS':U then do:
+      656       if buf_goods.gds-type = 'т':U then do:
+      657           run last-incom-S in this-procedure
+      658           ( input   p-artic ,
+      659             input   p-prod-type,
+      660             input   p-prod-code ,
+      661             output  v-last-in-code,
+      662             output  v-last-obj-type,
+      663             output  v-last-obj-code ).
+      664         find first buf_gds-obj no-lock
+      665           where buf_gds-obj.obj-type  = v-last-obj-type
+      666             and buf_gds-obj.obj-code  = v-last-obj-code
+      667             and buf_gds-obj.artic     = p-artic
+      668             and buf_gds-obj.prod-type = p-prod-type
+      669             and buf_gds-obj.prod-code = p-prod-code
+      670           no-error .
+      671         if available buf_gds-obj then do:
+      672           assign
+      673             p-price-base = buf_gds-obj.last-base
+      674             p-price-rubl = buf_gds-obj.last-rubl
+      675           .
+      676         end.
+      677       end.
+      678     end.
+      679     otherwise do:
+      680       message
+      681         vss-workfile vss-revision vss-description skip
+      682         "Ошибка задания входных параметров" skip
+      683         "Недопустимое значение аргумента p-price-type" p-price-type skip
+      684         "Артикул" p-artic p-prod-type p-prod-code skip
+      685         view-as alert-box error .
+      686       undo, return error .
+      687     end.
+      688   end case.
+      689   if p-price-base = 0 then do:
+      690     assign
+      691       p-price-base = ?
+      692     .
+      693   end.
+      694   if p-price-rubl = 0 then do:
+      695     assign
+      696       p-price-rubl = ?
+      697     .
+      698   end.
+      699   if (p-price-base = ?) <> (p-price-rubl = ?) then do:
+      700     message
+      701       vss-workfile vss-revision vss-description skip
+      702       "Учетная цена в одной из валют не задана" skip
+      703       "p-price-base" p-price-base skip
+      704       "p-price-rubl" p-price-rubl skip
+      705       view-as alert-box error .
+      706     undo, return error .
+      707   end.

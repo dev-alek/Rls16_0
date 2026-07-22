@@ -1,0 +1,834 @@
+        1   block-level on error undo, throw.
+        2   TRIGGER PROCEDURE FOR WRITE OF ub.icnt-doc old buffer old-doc .
+        3   define variable vss-revision    as character no-undo init "$Revision$":U .
+        4   define variable vss-author      as character no-undo init "$Author$":U .
+        5   define variable vss-date        as character no-undo init "$Date$":U .
+        6   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        7   define variable vss-archive     as character no-undo init "$Archive$":U .
+        8   define variable vss-description as character no-undo init "Триггер на запись документа счетчиков ТРК".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27   end procedure.
+       28   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       29   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       30   define variable v-vssrevis-logger                   as handle    no-undo .
+       31   procedure vss-logevent :
+       32     define input  parameter p-extra-paramters as character no-undo .
+       33     define variable v-vssrevis-parameters as character no-undo .
+       34     do
+       35     on error undo, return error return-value
+       36     :
+       37       if  valid-handle(v-vssrevis-logger)
+       38       and v-vssrevis-logger :get-signature("logevent") <> ""
+       39       then do:
+       40         run vss-get-parameters in this-procedure
+       41           (output v-vssrevis-parameters
+       42           ).
+       43         run logevent in v-vssrevis-logger
+       44           (input vss-workfile
+       45           ,input vss-revision
+       46           ,input v-vssrevis-parameters
+       47           ,input p-extra-paramters
+       48           ).
+       49       end.
+       50     end.
+       51   end procedure.
+       52   assign
+       53     v-vssrevis-logger = g#vssrevis-logger
+       54   .
+       55   if  valid-handle(v-vssrevis-logger)
+       56   and v-vssrevis-logger :get-signature("logevent") <> ""
+       57   then do:
+       58     assign
+       59       v-vssrevis-logevent = true
+       60     .
+       61     run vss-logevent in this-procedure (input vss-description) .
+       62   end.
+       63   define new global shared variable g#language as character no-undo .
+       64   if g#language <> '' and g#language <> 'rus':U then do:
+       65     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       66   end.
+       67   define new global shared variable g#library  as handle no-undo .
+       68   define new global shared variable g#library2 as handle no-undo .
+       69   define   shared variable g#auto as logical no-undo.
+       70   define   shared variable g#news as logical no-undo.
+       71   define   shared variable g#oxml as logical no-undo.
+       72   define   shared variable g#esys as logical no-undo.
+       73   define   shared variable g#news-source-db as integer no-undo.
+       74   define   shared variable g#esys-source-esys as integer no-undo.
+       75   define   shared variable g#db-num as integer   no-undo .
+       76   define   shared variable g#userid as character no-undo .
+       77   define   shared variable g#passwd as character no-undo .
+       78   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       79   procedure factord :
+       80     define input  parameter p-fact-date            as date    no-undo .
+       81     define input  parameter p-fact-time            as integer no-undo .
+       82     define input  parameter p-fact-num             as integer no-undo .
+       83     define input  parameter p-shift-date           as date    no-undo .
+       84     define input  parameter p-shift-num            as integer no-undo .
+       85     define input  parameter p-shift-on             as logical no-undo .
+       86     define output parameter p-fact-order           as decimal no-undo .
+       87     define output parameter p-shift-end-fact-order as decimal no-undo .
+       88     define output parameter p-day-end-fact-order   as decimal no-undo .
+       89     define variable vss-description as character no-undo init "factord: Определение порядкового номера документа".
+       90     if p-fact-date = ?
+       91     then do:
+       92       return error "Не указана фактическая дата" .
+       93     end.
+       94     define variable v-fact-date-num as integer no-undo .
+       95     assign
+       96       v-fact-date-num = integer(p-fact-date)
+       97     .
+       98     if p-fact-num = ?
+       99     or p-fact-num = 0
+      100     then do:
+      101       return error "Не задан p-fact-num " + string(p-fact-num) .
+      102     end.
+      103     if p-fact-num < 0
+      104     then do:
+      105       return error "Отрицательный fact-num " + string(p-fact-num) .
+      106     end.
+      107     if p-fact-num >= 100000000
+      108     then do:
+      109       return error "Недопустимо большой fact-num " + string(p-fact-num) .
+      110     end.
+      111     if p-shift-on = true
+      112     then do:
+      113       if p-shift-date = ?
+      114       then do:
+      115         return error "Не задана дата смены" .
+      116       end.
+      117       if p-shift-num = ?
+      118       or p-shift-num = 0
+      119       then do:
+      120         return error "Не задан номер смены" .
+      121       end.
+      122     end.
+      123     else do:
+      124       assign
+      125         p-shift-date = p-fact-date
+      126         p-shift-num  = 24
+      127       .
+      128     end.
+      129     define variable v-shift-offset as integer no-undo .
+      130     if p-shift-date = p-fact-date
+      131     then do:
+      132       assign
+      133         v-shift-offset = 1
+      134       .
+      135     end.
+      136     if p-shift-date < p-fact-date
+      137     then do:
+      138       assign
+      139         v-shift-offset = 0
+      140       .
+      141     end.
+      142     if p-shift-date > p-fact-date
+      143     then do:
+      144       message
+      145         vss-workfile vss-revision vss-description skip
+      146         "Неправильная дата закрытия смены" skip
+      147         "Дата закрытия не смены не может быть раньше чем дата открытия смены" skip
+      148         view-as alert-box error .
+      149       undo, return error
+      150         substitute("Дата закрытия не смены &1 не может быть раньше чем дата открытия смены &2"
+      151           ,string(p-fact-date, '99/99/9999':U)
+      152           ,string(p-shift-date, '99/99/9999':U)
+      153           )
+      154       .
+      155     end.
+      156     if p-shift-num < 1
+      157     or p-shift-num > 24
+      158     then do:
+      159       message
+      160         vss-workfile vss-revision vss-description skip
+      161         "Неправильный номер смены" skip
+      162         "p-shift-num" p-shift-num skip
+      163         view-as alert-box error .
+      164       undo, return error return-value .
+      165     end.
+      166     assign
+      167       p-fact-order           = v-fact-date-num
+      168                              + v-shift-offset * 0.5
+      169                              + p-shift-num    * 0.02 - 0.01
+      170                              + p-fact-num     * 0.0000000001
+      171       p-shift-end-fact-order = v-fact-date-num
+      172                              + v-shift-offset * 0.5
+      173                              + p-shift-num    * 0.02
+      174       p-day-end-fact-order   = v-fact-date-num
+      175                              + 0.99
+      176     .
+      177     if p-fact-order           <= v-fact-date-num
+      178     or p-shift-end-fact-order <= v-fact-date-num
+      179     or p-fact-order           >= p-shift-end-fact-order - 0.0000000001
+      180     or p-shift-end-fact-order >= p-day-end-fact-order
+      181     then do:
+      182       message
+      183         vss-workfile vss-revision vss-description skip
+      184         "Внутренняя ошибка при генерации фактического номера" skip
+      185         "p-fact-date"            p-fact-date            skip
+      186         "p-fact-time"            p-fact-time            skip
+      187         "p-fact-num"             p-fact-num             skip
+      188         "p-shift-date"           p-shift-date           skip
+      189         "p-shift-num"            p-shift-num            skip
+      190         "p-shift-on"             p-shift-on             skip
+      191         "p-shift-end-fact-order" p-shift-end-fact-order skip
+      192         "p-day-end-fact-order"   p-day-end-fact-order   skip
+      193         "v-fact-date-num"        v-fact-date-num        skip
+      194         view-as alert-box error .
+      195       undo, return error return-value .
+      196     end.
+      197   end procedure.
+      198   procedure day-begin-fact-order :
+      199     define input  parameter p-fact-date            as date    no-undo .
+      200     define output parameter p-day-begin-fact-order as decimal no-undo .
+      201     do
+      202     on error undo, return error return-value
+      203     :
+      204       if p-fact-date = ?
+      205       then do:
+      206         assign
+      207           p-day-begin-fact-order = 0
+      208         .
+      209       end.
+      210       else do:
+      211         assign
+      212           p-day-begin-fact-order = integer(p-fact-date)
+      213         .
+      214       end.
+      215     end.
+      216   end procedure.
+      217   procedure factord-max-fact-order :
+      218     define output parameter p-max-fact-order as decimal   no-undo .
+      219     do
+      220     on error undo, return error return-value
+      221     :
+      222       run day-begin-fact-order in this-procedure
+      223         (input  date(1, 1, 5000)
+      224         ,output p-max-fact-order
+      225         ) .
+      226     end.
+      227   end procedure.
+      228   procedure factord-cut-archive :
+      229     define input  parameter p-obj-type             as character no-undo .
+      230     define input  parameter p-obj-code             as integer   no-undo .
+      231     define input  parameter p-fact-date            as date      no-undo .
+      232     define output parameter p-shift-on             as logical   no-undo .
+      233     define output parameter p-shift-date           as date      no-undo .
+      234     define output parameter p-shift-num            as integer   no-undo .
+      235     define output parameter p-day-end-fact-order   as decimal   no-undo .
+      236     define output parameter p-shift-end-fact-order as decimal   no-undo .
+      237     define variable v-fact-order as decimal   no-undo .
+      238     define buffer buf_shift-obj for ub.shift-obj .
+      239     do
+      240     on error undo, return error return-value
+      241     :
+      242   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      243   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      244     (input  p-obj-type
+      245     ,input  p-obj-code
+      246     ,input  'shift-on=request'
+      247     ,output p-shift-on
+      248     ) no-error .
+      249       if error-status :error
+      250       then do:
+      251         message
+      252           vss-workfile vss-revision vss-description skip
+      253           "Ошибка при определении атрибута объекта" skip
+      254           "Объект" p-obj-type p-obj-code skip
+      255           error-status :get-message(1) skip
+      256           return-value skip
+      257           view-as alert-box error .
+      258         undo, return error return-value .
+      259       end.
+      260       if p-shift-on = false
+      261       then do:
+      262         assign
+      263           p-shift-date               = ?
+      264           p-shift-num                = 0
+      265         .
+      266       end.
+      267       else do:
+      268         find first buf_shift-obj share-lock
+      269           where buf_shift-obj.obj-type   = p-obj-type
+      270             and buf_shift-obj.obj-code   = p-obj-code
+      271             and buf_shift-obj.shift-date > p-fact-date
+      272           use-index pi
+      273           no-error .
+      274         if not available buf_shift-obj
+      275         or buf_shift-obj.status_ <> 'зкр':U
+      276         then do:
+      277           message
+      278             vss-workfile vss-revision vss-description skip
+      279             "Невозможно вычислить последнюю смену" skip
+      280             "Отсутствует закрытая смена с датой большей чем дата инициализации архива" skip
+      281             "Объект" p-obj-type p-obj-code skip
+      282             "Дата" p-fact-date skip
+      283             view-as alert-box error .
+      284           undo, return error return-value .
+      285         end.
+      286         find last buf_shift-obj share-lock
+      287           where buf_shift-obj.obj-type = p-obj-type
+      288             and buf_shift-obj.obj-code = p-obj-code
+      289             and buf_shift-obj.shift-date <= p-fact-date
+      290           use-index pi
+      291           no-error .
+      292         if available buf_shift-obj
+      293         then do:
+      294           if  buf_shift-obj.status_ = 'зкр':U
+      295           then do:
+      296             assign
+      297               p-shift-date = buf_shift-obj.shift-date
+      298               p-shift-num  = buf_shift-obj.shift-num
+      299             .
+      300           end.
+      301           else do:
+      302             message
+      303               vss-workfile vss-revision vss-description skip
+      304               "Невозможно вычислить последнюю смену" skip
+      305               "Статус смены отличен от статуса" 'зкр':U skip
+      306               "Объект" p-obj-type p-obj-code skip
+      307               "Дата" p-fact-date skip
+      308               "Смена" buf_shift-obj.shift-date buf_shift-obj.shift-num skip
+      309               view-as alert-box error .
+      310             undo, return error return-value .
+      311           end.
+      312         end.
+      313         else do:
+      314           assign
+      315             p-shift-date = p-fact-date - 1
+      316             p-shift-num  = 1
+      317           .
+      318         end.
+      319       end.
+      320       run factord in this-procedure
+      321         (input  p-fact-date
+      322         ,input  1
+      323         ,input  1
+      324         ,input  p-shift-date
+      325         ,input  p-shift-num
+      326         ,input  p-shift-on
+      327         ,output v-fact-order
+      328         ,output p-shift-end-fact-order
+      329         ,output p-day-end-fact-order
+      330         ) no-error .
+      331       if error-status :error
+      332       then do:
+      333         message
+      334           vss-workfile vss-revision vss-description skip
+      335           "Ошибка при вызове процедуры factord"
+      336           error-status :get-message(1) skip
+      337           return-value skip
+      338           view-as alert-box error .
+      339         undo, return error return-value .
+      340       end.
+      341     end.
+      342   end procedure.
+      343   procedure factord-lock-shift :
+      344     define input  parameter p-obj-type  as character no-undo .
+      345     define input  parameter p-obj-code  as integer   no-undo .
+      346     define input  parameter p-fact-date as date      no-undo .
+      347     define parameter buffer buf_shift-obj for ub.shift-obj .
+      348     define variable v-shift-on      as logical   no-undo .
+      349     define variable v-extra-message as character no-undo .
+      350     define variable v-error as character no-undo .
+      351     do
+      352     on error undo, return error return-value
+      353     :
+      354   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      355   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      356     (input  p-obj-type
+      357     ,input  p-obj-code
+      358     ,input  'shift-on=request'
+      359     ,output v-shift-on
+      360     ) no-error .
+      361       if error-status :error
+      362       then do:
+      363         v-error = substitute("Ошибка при определении атрибута объекта  &1 &2 &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value) .
+      364         undo, return error v-error .
+      365       end.
+      366       if v-shift-on = true
+      367       then do:
+      368         find first buf_shift-obj share-lock
+      369           where buf_shift-obj.obj-type   = p-obj-type
+      370             and buf_shift-obj.obj-code   = p-obj-code
+      371             and buf_shift-obj.shift-date > p-fact-date
+      372           use-index pi
+      373           no-error .
+      374         if not available buf_shift-obj
+      375         or buf_shift-obj.status_ <> 'зкр':U
+      376         then do:
+      377           find last buf_shift-obj
+      378             where buf_shift-obj.obj-type = p-obj-type
+      379               and buf_shift-obj.obj-code = p-obj-code
+      380               and buf_shift-obj.status_  = 'зкр':U
+      381             use-index stts
+      382             no-error .
+      383           if available buf_shift-obj
+      384           then do:
+      385             assign
+      386               v-extra-message =
+      387                     substitute("Дата начала последеней закрытой смены на объекте &1"
+      388                               ,string(buf_shift-obj.shift-date, '99/99/9999':u)
+      389                               )
+      390             .
+      391           end.
+      392           v-error = substitute("Ошибка при блокировке смены объекта  &1 &2 Отсутствует закрытая смена с датой большей чем указанная дата  &5  &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value , p-fact-date) .
+      393           undo, return error v-error .
+      394         end.
+      395       end.
+      396     end.
+      397   end procedure.
+      398   procedure factord-end-day :
+      399     define input  parameter p-fact-date            as date    no-undo .
+      400     define output parameter p-day-end-fact-order   as decimal no-undo .
+      401     do
+      402     on error undo, return error return-value
+      403     :
+      404       if p-fact-date = ?
+      405       then do:
+      406         return error "Не указана фактическая дата" .
+      407       end.
+      408       assign
+      409         p-day-end-fact-order = integer(p-fact-date) + 0.99
+      410       .
+      411     end.
+      412   end procedure.
+      413   procedure factord-to-date :
+      414     define input  parameter p-fact-order as decimal no-undo .
+      415     define output parameter p-fact-date  as date    no-undo .
+      416     define variable v-ref-date  as date      no-undo .
+      417     define variable v-ref-delta as integer   no-undo .
+      418     do
+      419     on error undo, return error return-value
+      420     :
+      421       if p-fact-order = ?
+      422       or p-fact-order = 0
+      423       then do:
+      424         return error "Не указан fact-order" .
+      425       end.
+      426       assign
+      427         v-ref-date  = date(1, 1, 2000)
+      428       .
+      429       assign
+      430         v-ref-delta = integer(truncate(p-fact-order, 0)) - integer(v-ref-date)
+      431       .
+      432       assign
+      433         p-fact-date = v-ref-date + v-ref-delta
+      434       .
+      435     end.
+      436   end procedure.
+      437   procedure factord-to-fact-num :
+      438     define input  parameter p-fact-order as decimal no-undo .
+      439     define output parameter p-fact-num   as integer no-undo .
+      440     define variable v-fact-order-trunc as decimal no-undo .
+      441     do
+      442     on error undo, return error return-value
+      443     :
+      444       if p-fact-order = ?
+      445       or p-fact-order = 0
+      446       then do:
+      447         return error "Не указан fact-order" .
+      448       end.
+      449       assign
+      450        v-fact-order-trunc = truncate(p-fact-order, 2)
+      451       .
+      452       assign
+      453         p-fact-num = (p-fact-order - v-fact-order-trunc ) * 10000000000
+      454       .
+      455     end.
+      456   end procedure.
+      457   procedure factord-to-shift-num :
+      458     define input  parameter p-fact-order as decimal no-undo .
+      459     define output parameter p-shift-num   as integer no-undo .
+      460     define variable  p-shift-numd  as decimal   no-undo .
+      461     define variable v-fact-order-trunc as decimal no-undo .
+      462     do
+      463     on error undo, return error return-value
+      464     :
+      465       if p-fact-order = ?
+      466       or p-fact-order = 0
+      467       then do:
+      468         return error "Не указан fact-order" .
+      469       end.
+      470       assign
+      471        v-fact-order-trunc = truncate(p-fact-order, 2)  - truncate(p-fact-order,0)
+      472       .
+      473       if v-fact-order-trunc < 0.5 then do:
+      474         v-fact-order-trunc = v-fact-order-trunc + 0.5.
+      475       end.
+      476       assign
+      477         p-shift-numd = (( v-fact-order-trunc  * 100 - 50 ) + 1 ) / 2
+      478         .
+      479        assign
+      480         p-shift-num = truncate (p-shift-numd , 0)
+      481       .
+      482     end.
+      483   end procedure.
+      484   define variable v-host-code like ub.icnt-doc.host-code no-undo .
+      485   define buffer buf_icnt-doc for ub.icnt-doc .
+      486   main-block:
+      487   do
+      488   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      489   on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+      490   on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+      491   :
+      492     find first ub.clients no-lock
+      493       where ub.clients.obj-type = ub.icnt-doc.obj-type
+      494         and ub.clients.obj-code = ub.icnt-doc.obj-code
+      495       no-error .
+      496     if not available ub.clients then do:
+      497       message
+      498         vss-workfile vss-revision vss-description skip
+      499         "Неправильная ссылка на объект" skip
+      500         "Документ счетчиков ТРК" ub.icnt-doc.doc-code skip
+      501         "Не найден объект" ub.icnt-doc.obj-type ub.icnt-doc.obj-code skip
+      502         view-as alert-box error .
+      503       undo main-block, return error .
+      504     end.
+      505     run trg/chkdocnm.p
+      506       (input ub.icnt-doc.doc-code
+      507       ,input 'icnt-doc':U
+      508       ,input recid(ub.icnt-doc)
+      509       ) no-error .
+      510     if error-status :error then do:
+      511       message
+      512         vss-workfile vss-revision vss-description skip
+      513         "Ошибка при проверке уникальности кода документа" skip
+      514         "Документ счетчиков ТРК" ub.icnt-doc.doc-code skip
+      515         error-status :get-message(1) skip
+      516         return-value skip
+      517         view-as alert-box error .
+      518       undo main-block, return error .
+      519     end.
+      520     if  ub.icnt-doc.status_ <> 'новый':U
+      521     and ub.icnt-doc.status_ <> 'факт':U then do:
+      522       message
+      523         vss-workfile vss-revision vss-description skip
+      524         "Неправильный статус документа счетчиков ТРК" skip
+      525         "Документ счетчиков ТРК" ub.icnt-doc.doc-code skip
+      526         "Статус" ub.icnt-doc.status_ skip
+      527         view-as alert-box error .
+      528       undo main-block, return error .
+      529     end.
+      530     if  ub.icnt-doc.doc-type <> 'инв-сч-трк':U
+      531     and ub.icnt-doc.doc-type <> 'сч-трк-погр':U then do:
+      532       message
+      533         vss-workfile vss-revision vss-description skip
+      534         "Неправильный тип документа счетчиков ТРК" skip
+      535         "Документ счетчиков ТРК" ub.icnt-doc.doc-code skip
+      536         "Тип" ub.icnt-doc.doc-type skip
+      537         view-as alert-box error .
+      538       undo main-block, return error .
+      539     end.
+      540     if  ub.icnt-doc.ext-doc-type <> 'ip':U
+      541     and ub.icnt-doc.ext-doc-type <> 'em':U then do:
+      542       message
+      543         vss-workfile vss-revision vss-description skip
+      544         "Неправильный расш.тип документа счетчиков ТРК" skip
+      545         "Документ счетчиков ТРК" ub.icnt-doc.doc-code skip
+      546         "Расш.Тип" ub.icnt-doc.ext-doc-type skip
+      547         view-as alert-box error .
+      548       undo main-block, return error .
+      549     end.
+      550     if not g#news
+      551     then do:
+      552   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      553   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curdburt in g#library
+      554     (output ub.icnt-doc.user-db-num
+      555     ,output ub.icnt-doc.user-name
+      556     ,output ub.icnt-doc.sys-date
+      557     ,output ub.icnt-doc.sys-time
+      558     ,output ub.icnt-doc.sys-time-int
+      559     )  .
+      560     end.
+      561     if old-doc.status_ = ub.icnt-doc.status_ then do:
+      562       return .
+      563     end.
+      564     run str/chk-icnt.p (input recid(ub.icnt-doc)) no-error.
+      565     if error-status :error then do:
+      566       message
+      567         vss-workfile vss-revision vss-description skip
+      568         "Ошибка при проверке документа счетчиков ТРК" skip
+      569         "Документ " ub.icnt-doc.doc-code skip
+      570         error-status :get-message(1) skip
+      571         return-value skip
+      572         view-as alert-box error .
+      573       undo main-block, return error .
+      574     end.
+      575     if not g#news then do:
+      576     end.
+      577     if not new ub.icnt-doc
+      578     and old-doc.status_     = 'факт':U
+      579     and ub.icnt-doc.status_ <> 'факт':U then do:
+      580       message
+      581         vss-workfile vss-revision vss-description skip
+      582         "Документ " ub.icnt-doc.doc-code skip
+      583         "Документ закрыт до статуса" 'факт':U skip
+      584         "Нельзя изменить статус на " ub.icnt-doc.status_ skip
+      585         view-as alert-box error .
+      586       undo main-block, return error .
+      587     end.
+      588   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      589   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+      590     (input  ub.icnt-doc.obj-type
+      591     ,input  ub.icnt-doc.obj-code
+      592     ,output v-host-code
+      593     ) no-error .
+      594     if error-status :error then do:
+      595       message
+      596        vss-workfile vss-revision vss-description skip
+      597        "Ошика при определении кода фирмы для объекта" skip
+      598        "Документ сверки" ub.icnt-doc.doc-code skip
+      599        "Тип объекта"     ub.icnt-doc.obj-type skip
+      600        "Код объекта"     ub.icnt-doc.obj-code skip
+      601        error-status :get-message(1) skip
+      602        return-value skip
+      603        view-as alert-box error .
+      604       undo main-block, return error .
+      605     end.
+      606     if ub.icnt-doc.host-code <> v-host-code then do:
+      607       message
+      608         vss-workfile vss-revision vss-description skip
+      609         "Неправильно заполнено поле фирма" skip
+      610         "Документ сверки" ub.icnt-doc.doc-code skip
+      611         "Объект"  ub.icnt-doc.obj-type " " ub.icnt-doc.obj-code skip
+      612         "Фирма"   ub.icnt-doc.host-code skip
+      613         "Должна быть фирма" v-host-code skip
+      614         view-as alert-box error .
+      615       undo main-block, return error .
+      616     end.
+      617     if ub.icnt-doc.status_ = 'факт':U then do:
+      618       run change-status-fact in this-procedure
+      619         no-error .
+      620       if error-status :error then do:
+      621         message
+      622           vss-workfile vss-revision vss-description skip
+      623           "Ошибка при выполнении программы change-status-fact" skip
+      624           "Документ счетчиков ТРК " ub.icnt-doc.doc-code skip
+      625           error-status :get-message(1) skip
+      626           return-value skip
+      627           view-as alert-box error .
+      628         undo main-block, return error .
+      629       end.
+      630     end.
+      631     if  not g#news
+      632     and ub.icnt-doc.creid = "" then do:
+      633       assign
+      634         ub.icnt-doc.creid = g#userid
+      635       .
+      636     end.
+      637     if not g#news then do:
+      638       if ub.icnt-doc.status_ <> 'новый':U then do:
+      639         run str/callnews.p
+      640            (input 'icnt-doc':U
+      641            ,input (buffer ub.icnt-doc:handle)
+      642            ) no-error .
+      643         if error-status :error then do:
+      644           message
+      645             vss-workfile vss-revision vss-description skip
+      646             "Невозможно маршрутизировать icnt-doc для отправки в новости" skip
+      647             error-status :get-message(1) skip
+      648             return-value skip
+      649             view-as alert-box error .
+      650           undo, return error .
+      651         end.
+      652       end.
+      653     end.
+      654       if g#oxml = yes
+      655       then do:
+      656       run str/calloxml.p (
+      657             input 'update':U
+      658           , input 'icnt-doc':U
+      659           , input ( buffer ub.icnt-doc:handle )
+      660       ) no-error.
+      661       if error-status :error
+      662       then do:
+      663           undo, return error substitute( "&2&1Ошибка при отправке записи в систему OpenXML&1&3&1&4"
+      664                                , chr(10)
+      665                                , vss-workfile
+      666                                , return-value
+      667                                , error-status :get-message ( 1 ) ).
+      668       end.
+      669       end.
+      670     if ub.icnt-doc.status_ = 'факт':U then
+      671     do:
+      672   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run rum-runa in g#library
+      673     (input ?
+      674     ,input this-procedure:handle
+      675     ,input ?
+      676     ,input 'event_icnt-doc':U
+      677     ,input  buffer old-doc:handle
+      678     ,input  buffer ub.icnt-doc:handle
+      679     ,input ''
+      680     ,input ''
+      681     ) no-error .
+      682       if error-status :error
+      683         then
+      684       do:
+      685         return error substitute( "&2&1Ошибка маршрутизации записи в машину правил&1&3&1&4"
+      686           , chr(10)
+      687           , vss-workfile
+      688           , return-value
+      689           , error-status :get-message ( 1 ) ).
+      690       end.
+      691     end.
+      692   end.
+      693   procedure change-status-fact :
+      694     do
+      695     on error undo, return error
+      696     :
+      697       if g#news then do:
+      698         if ub.icnt-doc.fact-order = ?
+      699         or ub.icnt-doc.fact-order = 0 then do:
+      700           message
+      701             vss-workfile vss-revision vss-description skip
+      702             "Не задан фактический номер документа счетчиков ТРК" skip
+      703             "Документ  счетчиков ТРК" ub.icnt-doc.doc-code skip
+      704             "fact-order" ub.icnt-doc.fact-order skip
+      705             view-as alert-box error .
+      706           undo, return error .
+      707         end.
+      708       end.
+      709       if not g#news then do:
+      710         run gbl/chk-date.p
+      711           (input ub.icnt-doc.obj-type
+      712           ,input ub.icnt-doc.obj-code
+      713           ,input ub.icnt-doc.fact-date
+      714           ,input ub.icnt-doc.fact-time
+      715           ,input ub.icnt-doc.shift-date
+      716           ,input ub.icnt-doc.shift-num
+      717           ,input yes
+      718           ) no-error.
+      719         if error-status :error then do:
+      720           message
+      721             vss-workfile vss-revision vss-description skip
+      722             "Ошибка при установке дат, времен, смен в документе счетчиков ТРК." skip
+      723             "Документ"          ub.icnt-doc.doc-code skip
+      724             "Дата"              ub.icnt-doc.fact-date skip
+      725             "Время"             ub.icnt-doc.fact-time skip
+      726             "Дата начала смены" ub.icnt-doc.shift-date skip
+      727             "Порядок смены"       ub.icnt-doc.shift-num skip
+      728             error-status :get-message(1) skip
+      729             return-value skip
+      730             view-as alert-box error .
+      731           undo, return error .
+      732         end.
+      733       end.
+      734       if not g#news then do:
+      735         if ub.icnt-doc.fact-order > 0 then do:
+      736           message
+      737             vss-workfile vss-revision vss-description skip
+      738             "Ошибочно задан фактический номер документа счетчиков ТРК " skip
+      739             "Документ счетчиков ТРК " ub.icnt-doc.doc-code skip
+      740             "fact-order" ub.icnt-doc.fact-order skip
+      741             view-as alert-box error .
+      742           undo, return error .
+      743         end.
+      744         define variable v-fact-num as integer no-undo .
+      745         assign
+      746           v-fact-num = next-value (s-trn-fact, ub)
+      747         .
+      748         define variable v-fact-order           as decimal no-undo .
+      749         define variable v-shift-end-fact-order as decimal no-undo .
+      750         define variable v-day-end-fact-order   as decimal no-undo .
+      751         define variable l-shift-on as logical no-undo .
+      752   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      753   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      754     (input  ub.icnt-doc.obj-type
+      755     ,input  ub.icnt-doc.obj-code
+      756     ,input  'shift-on=request'
+      757     ,output l-shift-on
+      758     ) no-error .
+      759         if error-status :error then do:
+      760           message
+      761             vss-workfile vss-revision vss-description skip
+      762             "Ошибка при запуске процедуры objat" skip
+      763             error-status :get-message(1) skip
+      764             return-value skip
+      765             view-as alert-box error .
+      766           undo, return error .
+      767         end.
+      768         run factord in this-procedure
+      769           (input  ub.icnt-doc.fact-date
+      770           ,input  ub.icnt-doc.fact-time
+      771           ,input  v-fact-num
+      772           ,input  ub.icnt-doc.shift-date
+      773           ,input  ub.icnt-doc.shift-num
+      774           ,input  l-shift-on
+      775           ,output v-fact-order
+      776           ,output v-shift-end-fact-order
+      777           ,output v-day-end-fact-order
+      778           ) no-error .
+      779         if error-status :error
+      780         or v-fact-order = ?
+      781         or v-fact-order = 0 then do:
+      782           message
+      783             vss-workfile vss-revision vss-description skip
+      784             "Ошибка при определении фактического номера документа счетчиков ТРК" skip
+      785             "doc-num"                 ub.icnt-doc.doc-code    skip
+      786             "fact-date"               ub.icnt-doc.fact-date   skip
+      787             "fact-time"               ub.icnt-doc.fact-time   skip
+      788             "fact-num"                v-fact-num             skip
+      789             "shift-date"              ub.icnt-doc.shift-date  skip
+      790             "shift-num"               ub.icnt-doc.shift-num   skip
+      791             "v-fact-order"            v-fact-order           skip
+      792             "v-shift-end-fact-order"  v-shift-end-fact-order skip
+      793             "v-day-end-fact-order"    v-day-end-fact-order   skip
+      794             error-status :get-message(1) skip
+      795             return-value skip
+      796             view-as alert-box error .
+      797           undo, return error .
+      798         end.
+      799         assign
+      800           ub.icnt-doc.fact-order = v-fact-order
+      801         .
+      802       end.
+      803       if ub.icnt-doc.doc-type = 'инв-сч-трк':U then do:
+      804         find first buf_icnt-doc no-lock
+      805           where buf_icnt-doc.obj-type   =  ub.icnt-doc.obj-type
+      806             and buf_icnt-doc.obj-code   =  ub.icnt-doc.obj-code
+      807             and buf_icnt-doc.status_    =  ub.icnt-doc.status_
+      808             and buf_icnt-doc.fact-order >= ub.icnt-doc.fact-order
+      809             and recid(buf_icnt-doc)     <> recid(ub.icnt-doc)
+      810           no-error .
+      811         if available buf_icnt-doc then do:
+      812           message
+      813             vss-workfile vss-revision vss-description skip
+      814             "Имеется документ счетчиков ТРК с более высоким порядковым номером, чем текущий." skip
+      815             "Закрываемый документ" skip
+      816             chr(9) "Номер"                      ub.icnt-doc.doc-code    skip
+      817             chr(9) "Факт-Номер"                 ub.icnt-doc.fact-order  skip
+      818             chr(9) "Дата фактического закрытия" ub.icnt-doc.fact-date   skip
+      819             chr(9) "Дата начала смены"          ub.icnt-doc.shift-date  skip
+      820             chr(9) "Номер смены"                ub.icnt-doc.shift-num   skip
+      821             chr(9) "Порядок смены"              ub.icnt-doc.shift-num   skip
+      822             "Существует документ счетчиков ТРК " skip
+      823             chr(9) "Номер"                      buf_icnt-doc.doc-code   skip
+      824             chr(9) "Факт-Номер"                 buf_icnt-doc.fact-order skip
+      825             chr(9) "Дата фактического закрытия" buf_icnt-doc.fact-date  skip
+      826             chr(9) "Дата начала смены"          buf_icnt-doc.shift-date skip
+      827             chr(9) "Номер смены"                buf_icnt-doc.shift-name skip
+      828             chr(9) "Порядок смены"              buf_icnt-doc.shift-num skip
+      829             view-as alert-box error .
+      830           undo , return error .
+      831         end.
+      832       end.
+      833     end.
+      834   end procedure.

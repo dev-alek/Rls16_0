@@ -1,0 +1,591 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: sibintek-soft $":U .
+        4   define variable vss-date        as character no-undo init "$Date: 08/10/2025":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00090000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cleandb/0009000.p $".
+        7   define variable vss-description as character no-undo init "Файл пирога чистки БД.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define input parameter vardate-actual-docs    as date      no-undo.
+       13   define input parameter varcall-back           as handle no-undo.
+       14   define variable vDeleted as int64     no-undo.
+       15   define variable vResult  as character no-undo.
+       16   define buffer buf_clients for ub.clients.
+       17   find ub.sys-ctrl no-lock.
+       18   if not available ub.sys-ctrl then do:
+       19      return error "Не найдена уникальная запись sys-ctrl.".
+       20   end.
+       21   define variable is-del as logical   no-undo .
+       22   define buffer trn-doc             for ub.trn-doc.
+       23   define buffer fin-ob              for ub.fin-ob.
+       24   define buffer buf_fin-ob          for ub.fin-ob.
+       25   define buffer fin-ob-before       for ub.fin-ob-before.
+       26   define buffer buf_fin-ob-before   for ub.fin-ob-before.
+       27   define buffer fin-doc             for ub.fin-doc.
+       28   define buffer buf_fin-doc         for ub.fin-doc.
+       29   define buffer fin-statement       for ub.fin-statement.
+       30   define buffer buf_fin-statement   for ub.fin-statement.
+       31   DEFINE temp-table temp-del-yes no-undo
+       32     field host-code  as integer
+       33     field doc-code  as character
+       34     field type  as integer
+       35     INDEX pi IS PRIMARY host-code doc-code type
+       36   .
+       37   DEFINE temp-table temp-del-no no-undo
+       38     field host-code  as integer
+       39     field doc-code   as character
+       40     field type       as integer
+       41     INDEX pi IS PRIMARY host-code doc-code type
+       42   .
+       43   DEFINE temp-table temp-cur no-undo
+       44     field host-code  as integer
+       45     field doc-code  as character
+       46     field type  as integer
+       47     INDEX pi IS PRIMARY host-code doc-code type
+       48   .
+       49   on delete of ub.fin-ob             override do: end.
+       50   on delete of ub.fin-ob-before      override do: end.
+       51   on delete of ub.fin-doc            override do: end.
+       52   on delete of ub.fin-statement      override do: end.
+       53   for each buf_clients no-lock
+       54      where buf_clients.db-num <> ?
+       55   :
+       56   for each fin-ob no-lock where
+       57            fin-ob.host-code = buf_clients.host-code
+       58        and fin-ob.doc-date  < vardate-actual-docs
+       59   on error undo, return error substitute("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+       60   :
+       61     assign is-del = no .
+       62     if fin-ob.fact-date < vardate-actual-docs then do:
+       63       assign is-del = yes .
+       64       if fin-ob.con-stat < 2 then
+       65       do:
+       66         if fin-ob.con-stat = 0  then
+       67           assign is-del = yes .
+       68         else assign is-del = no .
+       69       end.
+       70       else do:
+       71         run CheckDel ( input fin-ob.host-code, input fin-ob.doc-code, input 0 , output is-del ) .
+       72         if is-del = yes then do:
+       73           for each temp-cur :
+       74             find first temp-del-yes where
+       75                        temp-del-yes.host-code = temp-cur.host-code and
+       76                        temp-del-yes.doc-code  = temp-cur.doc-code  and
+       77                        temp-del-yes.type      = temp-cur.type no-error .
+       78             if not available temp-del-yes then do:
+       79                create temp-del-yes.
+       80                BUFFER-COPY temp-cur TO temp-del-yes no-error .
+       81             end.
+       82             delete temp-cur .
+       83           end.
+       84         end.
+       85         else do:
+       86           for each temp-cur :
+       87             find first temp-del-no where
+       88                        temp-del-no.host-code = temp-cur.host-code and
+       89                        temp-del-no.doc-code  = temp-cur.doc-code  and
+       90                        temp-del-no.type      = temp-cur.type no-error .
+       91             if not available temp-del-no then do:
+       92               create temp-del-no.
+       93               BUFFER-COPY temp-cur TO temp-del-no no-error .
+       94             end.
+       95             delete temp-cur .
+       96           end.
+       97         end.
+       98       end.
+       99     end.
+      100     if is-del then do:
+      101       run cleanFinOb in this-procedure.
+      102       find first buf_fin-ob exclusive-lock where
+      103              recid(buf_fin-ob) = recid(fin-ob) no-error no-wait.
+      104   if not avail buf_fin-ob then
+      105   do:
+      106     undo, return error "Ошибка удаления fin-ob. Запись занята другим пользователем.".
+      107   end.
+      108   delete buf_fin-ob.
+      109   vDeleted = vDeleted + 1.
+      110     end.
+      111   end.
+      112   for each fin-ob-before no-lock where
+      113            fin-ob-before.host-code = buf_clients.host-code
+      114   on error undo, return error substitute("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      115   :
+      116     if fin-ob-before.status_ = 'факт':U or fin-ob-before.doc-code <> ""  then
+      117     do:
+      118       find first trn-doc no-lock where trn-doc.doc-code = fin-ob-before.trn-doc-code no-error .
+      119       if not available trn-doc then
+      120       do:
+      121         run cleanFinObBefore in this-procedure.
+      122         find first buf_fin-ob-before exclusive-lock where
+      123              recid(buf_fin-ob-before) = recid(fin-ob-before) no-error no-wait.
+      124   if not avail buf_fin-ob-before then
+      125   do:
+      126     undo, return error "Ошибка удаления fin-ob-before. Запись занята другим пользователем.".
+      127   end.
+      128   delete buf_fin-ob-before.
+      129   vDeleted = vDeleted + 1.
+      130       end.
+      131     end.
+      132   end.
+      133   for each fin-doc no-lock where
+      134            fin-doc.host-code = buf_clients.host-code
+      135        and fin-doc.doc-date  < vardate-actual-docs
+      136   on error undo, return error substitute("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      137   :
+      138     assign is-del = no .
+      139     if fin-doc.fact-date < vardate-actual-docs then do:
+      140       if fin-doc.con-stat < 2 then assign is-del = no .
+      141       else do:
+      142         find first temp-del-yes where
+      143                    temp-del-yes.host-code = fin-doc.host-code
+      144                 and temp-del-yes.doc-code  = string(fin-doc.fin-doc-code)
+      145                 and temp-del-yes.type      = 1
+      146         no-error .
+      147         if available temp-del-yes then is-del = yes .
+      148       end.
+      149     end.
+      150     if is-del then do :
+      151       run cleanFinDoc in this-procedure.
+      152       find first buf_fin-doc exclusive-lock where
+      153              recid(buf_fin-doc) = recid(fin-doc) no-error no-wait.
+      154   if not avail buf_fin-doc then
+      155   do:
+      156     undo, return error "Ошибка удаления fin-doc. Запись занята другим пользователем.".
+      157   end.
+      158   delete buf_fin-doc.
+      159   vDeleted = vDeleted + 1.
+      160     end.
+      161   end.
+      162   for each fin-statement no-lock where
+      163            fin-statement.host-code = buf_clients.host-code
+      164        and fin-statement.doc-date  < vardate-actual-docs
+      165        and fin-statement.fact-date < vardate-actual-docs
+      166   on error undo, return error substitute("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      167   :
+      168     run cleanFinStatement in this-procedure.
+      169     find first buf_fin-statement exclusive-lock where
+      170              recid(buf_fin-statement) = recid(fin-statement) no-error no-wait.
+      171   if not avail buf_fin-statement then
+      172   do:
+      173     undo, return error "Ошибка удаления fin-statement. Запись занята другим пользователем.".
+      174   end.
+      175   delete buf_fin-statement.
+      176   vDeleted = vDeleted + 1.
+      177   end.
+      178   end.
+      179   vResult = substitute("Произведена чистка таблиц: &1~nУдалено записей - &2.", "Финансовые док-ты и обязательства с историей", vDeleted).
+      180   return vResult.
+      181   procedure CheckDel :
+      182     do on error undo, return error return-value :
+      183       define input  parameter p-host-code as integer   no-undo .
+      184       define input  parameter p-doc-code  as character no-undo .
+      185       define input  parameter p-type      as integer   no-undo .
+      186       define output parameter p-is-del    as logical   no-undo .
+      187       define buffer bf_fin-ob   for ub.fin-ob .
+      188       define buffer bf_fin-doc  for ub.fin-doc .
+      189       define buffer fin-connect for ub.fin-connect.
+      190       assign p-is-del = yes .
+      191       find first temp-cur where
+      192         temp-cur.host-code = p-host-code and
+      193         temp-cur.doc-code  = p-doc-code  and
+      194         temp-cur.type      = p-type     no-error .
+      195         if  not available  temp-cur then do:
+      196             create temp-cur .
+      197             assign
+      198               temp-cur.host-code = p-host-code
+      199               temp-cur.doc-code  = p-doc-code
+      200               temp-cur.type      = p-type
+      201             .
+      202       end.
+      203       find first temp-del-yes
+      204         where temp-del-yes.host-code = p-host-code
+      205           and temp-del-yes.doc-code  = p-doc-code
+      206           and temp-del-yes.type      = p-type
+      207       no-error .
+      208       if available temp-del-yes then do:
+      209         assign p-is-del = yes .
+      210         return .
+      211       end.
+      212       find first temp-del-no
+      213         where temp-del-no.host-code = p-host-code
+      214           and temp-del-no.doc-code  = p-doc-code
+      215           and temp-del-no.type      = p-type
+      216       no-error .
+      217       if available temp-del-no then do:
+      218         assign p-is-del = no .
+      219         return .
+      220       end.
+      221       if p-type = 0 then do:
+      222         for each fin-connect no-lock
+      223           where fin-connect.host-code   = p-host-code
+      224             and fin-connect.fin-ob-code = p-doc-code
+      225           :
+      226           find first bf_fin-doc no-lock
+      227             where bf_fin-doc.host-code    = fin-connect.host-code
+      228               and bf_fin-doc.fin-doc-code = fin-connect.fin-doc-code
+      229           no-error .
+      230           if available bf_fin-doc then do:
+      231             if ( bf_fin-doc.con-stat = 1  ) or bf_fin-doc.fact-date >= vardate-actual-docs then do:
+      232               assign p-is-del = no .
+      233               return  .
+      234             end.
+      235             else do:
+      236               find first temp-cur where
+      237                          temp-cur.host-code = p-host-code and
+      238                          temp-cur.doc-code  = string(bf_fin-doc.fin-doc-code) and
+      239                          temp-cur.type = 1
+      240                          no-error .
+      241                         if not available temp-cur then do:
+      242                           run CheckDel ( input p-host-code, input bf_fin-doc.fin-doc-code, input 1 , output p-is-del ) .
+      243                           if p-is-del = no then return .
+      244                         end.
+      245             end.
+      246           end.
+      247         end.
+      248       end.
+      249       else do:
+      250         for each fin-connect no-lock
+      251           where fin-connect.host-code   = p-host-code
+      252             and fin-connect.fin-doc-code = integer (p-doc-code)
+      253           :
+      254           find first bf_fin-ob no-lock
+      255             where bf_fin-ob.host-code = fin-connect.host-code
+      256               and bf_fin-ob.doc-code  = fin-connect.fin-ob-code
+      257           no-error .
+      258           if available bf_fin-ob then do:
+      259             if ( bf_fin-ob.con-stat = 1 and bf_fin-ob.fact-date < vardate-actual-docs ) or bf_fin-ob.fact-date >= vardate-actual-docs then do:
+      260               assign p-is-del = no .
+      261               return .
+      262             end.
+      263             else do:
+      264               find first temp-cur where
+      265                          temp-cur.host-code = p-host-code and
+      266                          temp-cur.doc-code  = bf_fin-ob.doc-code and
+      267                          temp-cur.type = 0
+      268                          no-error .
+      269                         if not available temp-cur then do:
+      270                           run CheckDel ( input p-host-code, input bf_fin-ob.doc-code, input 0 , output p-is-del ) .
+      271                           if p-is-del = no then return .
+      272                         end.
+      273             end.
+      274           end.
+      275         end.
+      276       end.
+      277     end.
+      278   end procedure.
+      279   procedure cleanFinOb:
+      280       define buffer fin-connect         for ub.fin-connect  .
+      281       define buffer c-fin-connect       for ub.c-fin-connect.
+      282       on delete of ub.fin-connect override do: end.
+      283       on delete of ub.c-fin-connect override do: end.
+      284       for each fin-connect no-lock
+      285          where fin-connect.host-code   = fin-ob.host-code
+      286            and fin-connect.fin-ob-code = fin-ob.doc-code
+      287       :
+      288         for each c-fin-connect no-lock
+      289            where c-fin-connect.host-code    = fin-connect.host-code
+      290              and c-fin-connect.connect-code = fin-connect.connect-code
+      291         :
+      292           delete fin-connect.
+      293           vDeleted = vDeleted + 1.
+      294         end.
+      295         delete fin-connect.
+      296         vDeleted = vDeleted + 1.
+      297       end.
+      298       define buffer fin-ob-attr for ub.fin-ob-attr.
+      299   on delete of ub.fin-ob-attr override do: end.
+      300   for each fin-ob-attr exclusive-lock
+      301       where fin-ob-attr.host-code = fin-ob.host-code
+      302            and fin-ob-attr.doc-code  = fin-ob.doc-code
+      303   on error undo, return error
+      304   :
+      305         delete fin-ob-attr no-error.
+      306         if error-status:error then
+      307           undo, return error error-status:get-message(1).
+      308         vDeleted = vDeleted + 1.
+      309   end.
+      310       define buffer fin-ob-tax for ub.fin-ob-tax.
+      311   on delete of ub.fin-ob-tax override do: end.
+      312   for each fin-ob-tax exclusive-lock
+      313       where fin-ob-tax.host-code = fin-ob.host-code
+      314            and fin-ob-tax.doc-code  = fin-ob.doc-code
+      315   on error undo, return error
+      316   :
+      317         delete fin-ob-tax no-error.
+      318         if error-status:error then
+      319           undo, return error error-status:get-message(1).
+      320         vDeleted = vDeleted + 1.
+      321   end.
+      322       define buffer fin-ob-tax-attr for ub.fin-ob-tax-attr.
+      323   on delete of ub.fin-ob-tax-attr override do: end.
+      324   for each fin-ob-tax-attr exclusive-lock
+      325       where fin-ob-tax-attr.host-code = fin-ob.host-code
+      326            and fin-ob-tax-attr.doc-code  = fin-ob.doc-code
+      327   on error undo, return error
+      328   :
+      329         delete fin-ob-tax-attr no-error.
+      330         if error-status:error then
+      331           undo, return error error-status:get-message(1).
+      332         vDeleted = vDeleted + 1.
+      333   end.
+      334       define buffer fin-gds-part for ub.fin-gds-part.
+      335   on delete of ub.fin-gds-part override do: end.
+      336   for each fin-gds-part exclusive-lock
+      337       where fin-gds-part.host-code = fin-ob.host-code
+      338            and fin-gds-part.fin-ob-code  = fin-ob.doc-code
+      339   on error undo, return error
+      340   :
+      341         delete fin-gds-part no-error.
+      342         if error-status:error then
+      343           undo, return error error-status:get-message(1).
+      344         vDeleted = vDeleted + 1.
+      345   end.
+      346       define buffer fin-gds-part-attr for ub.fin-gds-part-attr.
+      347   on delete of ub.fin-gds-part-attr override do: end.
+      348   for each fin-gds-part-attr exclusive-lock
+      349       where fin-gds-part-attr.host-code = fin-ob.host-code
+      350            and fin-gds-part-attr.fin-ob-code  = fin-ob.doc-code
+      351   on error undo, return error
+      352   :
+      353         delete fin-gds-part-attr no-error.
+      354         if error-status:error then
+      355           undo, return error error-status:get-message(1).
+      356         vDeleted = vDeleted + 1.
+      357   end.
+      358       define buffer fin-ob-trn          for ub.fin-ob-trn.
+      359       on delete of ub.fin-ob-trn override do: end.
+      360       for each fin-ob-trn no-lock
+      361          where fin-ob-trn.host-code = fin-ob.host-code
+      362            and fin-ob-trn.doc-code  = fin-ob.doc-code
+      363       :
+      364         find first trn-doc no-lock where trn-doc.doc-code = fin-ob-trn.trn-doc-code no-error .
+      365         if available trn-doc then next .
+      366         delete fin-ob-trn.
+      367         vDeleted = vDeleted + 1.
+      368       end.
+      369       define buffer c-fin-ob for ub.c-fin-ob.
+      370   on delete of ub.c-fin-ob override do: end.
+      371   for each c-fin-ob exclusive-lock
+      372       where c-fin-ob.host-code = fin-ob.host-code
+      373            and c-fin-ob.doc-code  = fin-ob.doc-code
+      374   on error undo, return error
+      375   :
+      376         delete c-fin-ob no-error.
+      377         if error-status:error then
+      378           undo, return error error-status:get-message(1).
+      379         vDeleted = vDeleted + 1.
+      380   end.
+      381       define buffer c-fin-ob-attr for ub.c-fin-ob-attr.
+      382   on delete of ub.c-fin-ob-attr override do: end.
+      383   for each c-fin-ob-attr exclusive-lock
+      384       where c-fin-ob-attr.host-code = fin-ob.host-code
+      385            and c-fin-ob-attr.doc-code  = fin-ob.doc-code
+      386   on error undo, return error
+      387   :
+      388         delete c-fin-ob-attr no-error.
+      389         if error-status:error then
+      390           undo, return error error-status:get-message(1).
+      391         vDeleted = vDeleted + 1.
+      392   end.
+      393       define buffer c-fin-ob-tax for ub.c-fin-ob-tax.
+      394   on delete of ub.c-fin-ob-tax override do: end.
+      395   for each c-fin-ob-tax exclusive-lock
+      396       where c-fin-ob-tax.host-code = fin-ob.host-code
+      397            and c-fin-ob-tax.doc-code  = fin-ob.doc-code
+      398   on error undo, return error
+      399   :
+      400         delete c-fin-ob-tax no-error.
+      401         if error-status:error then
+      402           undo, return error error-status:get-message(1).
+      403         vDeleted = vDeleted + 1.
+      404   end.
+      405       define buffer c-fin-gds-part for ub.c-fin-gds-part.
+      406   on delete of ub.c-fin-gds-part override do: end.
+      407   for each c-fin-gds-part exclusive-lock
+      408       where c-fin-gds-part.host-code = fin-ob.host-code
+      409            and c-fin-gds-part.fin-ob-code  = fin-ob.doc-code
+      410   on error undo, return error
+      411   :
+      412         delete c-fin-gds-part no-error.
+      413         if error-status:error then
+      414           undo, return error error-status:get-message(1).
+      415         vDeleted = vDeleted + 1.
+      416   end.
+      417   end procedure.
+      418   procedure cleanFinObBefore:
+      419     define buffer fin-ob-tax-before for ub.fin-ob-tax-before.
+      420   on delete of ub.fin-ob-tax-before override do: end.
+      421   for each fin-ob-tax-before exclusive-lock
+      422        where fin-ob-tax-before.host-code   = fin-ob-before.host-code
+      423           and fin-ob-tax-before.before-code = fin-ob-before.before-code
+      424   on error undo, return error
+      425   :
+      426         delete fin-ob-tax-before no-error.
+      427         if error-status:error then
+      428           undo, return error error-status:get-message(1).
+      429         vDeleted = vDeleted + 1.
+      430   end.
+      431   end procedure.
+      432   procedure cleanFinDoc:
+      433     define buffer fin-doc-attr for ub.fin-doc-attr.
+      434   on delete of ub.fin-doc-attr override do: end.
+      435   for each fin-doc-attr exclusive-lock
+      436       where fin-doc-attr.host-code    = fin-doc.host-code
+      437          and fin-doc-attr.fin-doc-code = fin-doc.fin-doc-code
+      438   on error undo, return error
+      439   :
+      440         delete fin-doc-attr no-error.
+      441         if error-status:error then
+      442           undo, return error error-status:get-message(1).
+      443         vDeleted = vDeleted + 1.
+      444   end.
+      445     define buffer fin-doc-tax for ub.fin-doc-tax.
+      446   on delete of ub.fin-doc-tax override do: end.
+      447   for each fin-doc-tax exclusive-lock
+      448       where fin-doc-tax.host-code    = fin-doc.host-code
+      449          and fin-doc-tax.fin-doc-code = fin-doc.fin-doc-code
+      450   on error undo, return error
+      451   :
+      452         delete fin-doc-tax no-error.
+      453         if error-status:error then
+      454           undo, return error error-status:get-message(1).
+      455         vDeleted = vDeleted + 1.
+      456   end.
+      457     define buffer fin-doc-tax-attr for ub.fin-doc-tax-attr.
+      458   on delete of ub.fin-doc-tax-attr override do: end.
+      459   for each fin-doc-tax-attr exclusive-lock
+      460       where fin-doc-tax-attr.host-code    = fin-doc.host-code
+      461          and fin-doc-tax-attr.fin-doc-code = fin-doc.fin-doc-code
+      462   on error undo, return error
+      463   :
+      464         delete fin-doc-tax-attr no-error.
+      465         if error-status:error then
+      466           undo, return error error-status:get-message(1).
+      467         vDeleted = vDeleted + 1.
+      468   end.
+      469     define buffer fin-doc-obj for ub.fin-doc-obj.
+      470   on delete of ub.fin-doc-obj override do: end.
+      471   for each fin-doc-obj exclusive-lock
+      472       where fin-doc-obj.host-code    = fin-doc.host-code
+      473          and fin-doc-obj.fin-doc-code = fin-doc.fin-doc-code
+      474   on error undo, return error
+      475   :
+      476         delete fin-doc-obj no-error.
+      477         if error-status:error then
+      478           undo, return error error-status:get-message(1).
+      479         vDeleted = vDeleted + 1.
+      480   end.
+      481     define buffer c-fin-doc for ub.c-fin-doc.
+      482   on delete of ub.c-fin-doc override do: end.
+      483   for each c-fin-doc exclusive-lock
+      484       where c-fin-doc.host-code    = fin-doc.host-code
+      485          and c-fin-doc.fin-doc-code = fin-doc.fin-doc-code
+      486   on error undo, return error
+      487   :
+      488         delete c-fin-doc no-error.
+      489         if error-status:error then
+      490           undo, return error error-status:get-message(1).
+      491         vDeleted = vDeleted + 1.
+      492   end.
+      493     define buffer c-fin-doc-attr for ub.c-fin-doc-attr.
+      494   on delete of ub.c-fin-doc-attr override do: end.
+      495   for each c-fin-doc-attr exclusive-lock
+      496       where c-fin-doc-attr.host-code    = fin-doc.host-code
+      497          and c-fin-doc-attr.fin-doc-code = fin-doc.fin-doc-code
+      498   on error undo, return error
+      499   :
+      500         delete c-fin-doc-attr no-error.
+      501         if error-status:error then
+      502           undo, return error error-status:get-message(1).
+      503         vDeleted = vDeleted + 1.
+      504   end.
+      505     define buffer c-fin-doc-tax for ub.c-fin-doc-tax.
+      506   on delete of ub.c-fin-doc-tax override do: end.
+      507   for each c-fin-doc-tax exclusive-lock
+      508       where c-fin-doc-tax.host-code    = fin-doc.host-code
+      509          and c-fin-doc-tax.fin-doc-code = fin-doc.fin-doc-code
+      510   on error undo, return error
+      511   :
+      512         delete c-fin-doc-tax no-error.
+      513         if error-status:error then
+      514           undo, return error error-status:get-message(1).
+      515         vDeleted = vDeleted + 1.
+      516   end.
+      517   end procedure.
+      518   procedure cleanFinStatement:
+      519     define buffer fin-statement-attr for ub.fin-statement-attr.
+      520   on delete of ub.fin-statement-attr override do: end.
+      521   for each fin-statement-attr exclusive-lock
+      522       where fin-statement-attr.host-code = fin-statement.host-code
+      523          and fin-statement-attr.sttm-code = fin-statement.sttm-code
+      524   on error undo, return error
+      525   :
+      526         delete fin-statement-attr no-error.
+      527         if error-status:error then
+      528           undo, return error error-status:get-message(1).
+      529         vDeleted = vDeleted + 1.
+      530   end.
+      531     define buffer fin-statement-line for ub.fin-statement-line.
+      532   on delete of ub.fin-statement-line override do: end.
+      533   for each fin-statement-line exclusive-lock
+      534       where fin-statement-line.host-code = fin-statement.host-code
+      535          and fin-statement-line.sttm-code = fin-statement.sttm-code
+      536   on error undo, return error
+      537   :
+      538         delete fin-statement-line no-error.
+      539         if error-status:error then
+      540           undo, return error error-status:get-message(1).
+      541         vDeleted = vDeleted + 1.
+      542   end.
+      543     define buffer fin-statement-line-attr for ub.fin-statement-line-attr.
+      544   on delete of ub.fin-statement-line-attr override do: end.
+      545   for each fin-statement-line-attr exclusive-lock
+      546       where fin-statement-line-attr.host-code = fin-statement.host-code
+      547          and fin-statement-line-attr.sttm-code = fin-statement.sttm-code
+      548   on error undo, return error
+      549   :
+      550         delete fin-statement-line-attr no-error.
+      551         if error-status:error then
+      552           undo, return error error-status:get-message(1).
+      553         vDeleted = vDeleted + 1.
+      554   end.
+      555     define buffer c-fin-statement for ub.c-fin-statement.
+      556   on delete of ub.c-fin-statement override do: end.
+      557   for each c-fin-statement exclusive-lock
+      558       where c-fin-statement.host-code = fin-statement.host-code
+      559          and c-fin-statement.sttm-code = fin-statement.sttm-code
+      560   on error undo, return error
+      561   :
+      562         delete c-fin-statement no-error.
+      563         if error-status:error then
+      564           undo, return error error-status:get-message(1).
+      565         vDeleted = vDeleted + 1.
+      566   end.
+      567     define buffer c-fin-statement-attr for ub.c-fin-statement-attr.
+      568   on delete of ub.c-fin-statement-attr override do: end.
+      569   for each c-fin-statement-attr exclusive-lock
+      570       where c-fin-statement-attr.host-code = fin-statement.host-code
+      571          and c-fin-statement-attr.sttm-code = fin-statement.sttm-code
+      572   on error undo, return error
+      573   :
+      574         delete c-fin-statement-attr no-error.
+      575         if error-status:error then
+      576           undo, return error error-status:get-message(1).
+      577         vDeleted = vDeleted + 1.
+      578   end.
+      579     define buffer c-fin-statement-line for ub.c-fin-statement-line.
+      580   on delete of ub.c-fin-statement-line override do: end.
+      581   for each c-fin-statement-line exclusive-lock
+      582       where c-fin-statement-line.host-code = fin-statement.host-code
+      583          and c-fin-statement-line.sttm-code = fin-statement.sttm-code
+      584   on error undo, return error
+      585   :
+      586         delete c-fin-statement-line no-error.
+      587         if error-status:error then
+      588           undo, return error error-status:get-message(1).
+      589         vDeleted = vDeleted + 1.
+      590   end.
+      591   end procedure.

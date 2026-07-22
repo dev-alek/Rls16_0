@@ -1,0 +1,650 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-db-num as integer no-undo .
+        3   define input parameter p-from-db-num as integer no-undo .
+        4   define input parameter p-file-num as integer no-undo .
+        5   define input parameter p-full-path-name as character no-undo .
+        6   define input parameter p-path-type as integer no-undo .
+        7   define input parameter p-path as character no-undo .
+        8   define input parameter p-mode as character no-undo .
+        9   define input parameter p-md5-signature as character no-undo .
+       10   define parameter buffer buf_ext-file for ub.ext-file.
+       11   DEFINE TEMP-TABLE tt-ext-file-par NO-UNDO LIKE ub.ext-file-par.
+       12   define input parameter table for tt-ext-file-par.
+       13   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+       14   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+       15   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+       16   define variable vss-workfile    as character no-undo init "$Workfile: bin-e.p $":U .
+       17   define variable vss-archive     as character no-undo init "$Archive: nws/bin-e.p $":U .
+       18   define variable vss-description as character no-undo init "Передача бинарного файла по СПН".
+       19   procedure vss-get-info :
+       20     define output parameter p-vss-revision    like vss-revision    no-undo .
+       21     define output parameter p-vss-author      like vss-author      no-undo .
+       22     define output parameter p-vss-date        like vss-date        no-undo .
+       23     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       24     define output parameter p-vss-archive     like vss-archive     no-undo .
+       25     define output parameter p-vss-description like vss-description no-undo .
+       26     assign
+       27       p-vss-revision    = vss-revision
+       28       p-vss-author      = vss-author
+       29       p-vss-date        = vss-date
+       30       p-vss-workfile    = vss-workfile
+       31       p-vss-archive     = vss-archive
+       32       p-vss-description = vss-description
+       33     .
+       34   end procedure.
+       35   procedure vss-get-parameters :
+       36     define output parameter p-vss-parameters as character no-undo .
+       37   end procedure.
+       38   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       39   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       40   define variable v-vssrevis-logger                   as handle    no-undo .
+       41   procedure vss-logevent :
+       42     define input  parameter p-extra-paramters as character no-undo .
+       43     define variable v-vssrevis-parameters as character no-undo .
+       44     do
+       45     on error undo, return error return-value
+       46     :
+       47       if  valid-handle(v-vssrevis-logger)
+       48       and v-vssrevis-logger :get-signature("logevent") <> ""
+       49       then do:
+       50         run vss-get-parameters in this-procedure
+       51           (output v-vssrevis-parameters
+       52           ).
+       53         run logevent in v-vssrevis-logger
+       54           (input vss-workfile
+       55           ,input vss-revision
+       56           ,input v-vssrevis-parameters
+       57           ,input p-extra-paramters
+       58           ).
+       59       end.
+       60     end.
+       61   end procedure.
+       62   assign
+       63     v-vssrevis-logger = g#vssrevis-logger
+       64   .
+       65   if  valid-handle(v-vssrevis-logger)
+       66   and v-vssrevis-logger :get-signature("logevent") <> ""
+       67   then do:
+       68     assign
+       69       v-vssrevis-logevent = true
+       70     .
+       71     run vss-logevent in this-procedure (input vss-description) .
+       72   end.
+       73   define new global shared variable g#language as character no-undo .
+       74   if g#language <> '' and g#language <> 'rus':U then do:
+       75     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       76   end.
+       77   define new global shared variable g#library  as handle no-undo .
+       78   define new global shared variable g#library2 as handle no-undo .
+       79   define stream sinp .
+       80   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       81   define variable v-binfile-converter-program as character no-undo initial 'exe/base64.exe':U .
+       82   define temp-table temp-ext-file-line no-undo like ub.ext-file-line
+       83     .
+       84   procedure binfile_clear :
+       85     define input  parameter p-db-num      as integer   no-undo .
+       86     define input  parameter p-from-db-num as integer   no-undo .
+       87     define input  parameter p-file-num    as integer   no-undo .
+       88     define buffer buf_temp-ext-file-line  for temp-ext-file-line .
+       89     do
+       90     on error undo, return error return-value
+       91     :
+       92       for each buf_temp-ext-file-line
+       93         where buf_temp-ext-file-line.db-num   = p-db-num
+       94           and buf_temp-ext-file-line.from-db-num = p-from-db-num
+       95           and buf_temp-ext-file-line.file-num = p-file-num
+       96       on error undo, return error return-value
+       97       :
+       98         delete buf_temp-ext-file-line .
+       99       end.
+      100     end.
+      101   end procedure.
+      102   procedure binfile_read :
+      103     define input  parameter p-db-num       as integer   no-undo .
+      104     define input  parameter p-from-db-num  as integer   no-undo .
+      105     define input  parameter p-file-num     as integer   no-undo .
+      106     define input  parameter p-file-name    as character no-undo .
+      107     define variable v-temp-file-name        as character no-undo .
+      108     define variable v-convert-full-pathname as character no-undo .
+      109     define variable v-input-full-pathname   as character no-undo .
+      110     define variable v-temp-full-pathname    as character no-undo .
+      111     define variable v-read-line             as character no-undo .
+      112     define variable v-line-num              as integer   no-undo .
+      113     define variable v-command-line          as character no-undo .
+      114     define buffer buf_temp-ext-file-line for temp-ext-file-line .
+      115     do
+      116     on error undo, return error return-value
+      117     :
+      118       run binfile_clear in this-procedure
+      119         (input p-db-num
+      120         ,input p-from-db-num
+      121         ,input p-file-num
+      122         ) .
+      123       run gbl/_tmpfile.p
+      124         (input  't':U
+      125         ,input  '.b64':U
+      126         ,output v-temp-file-name
+      127         ) .
+      128   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      129   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      130     (input v-temp-file-name
+      131     ,input '':U
+      132     )  .
+      133       assign
+      134         file-info :file-name    = v-binfile-converter-program
+      135         v-convert-full-pathname = file-info :full-pathname
+      136       .
+      137       assign
+      138         file-info :file-name    = p-file-name
+      139         v-input-full-pathname   = file-info :full-pathname
+      140       .
+      141       assign
+      142         file-info :file-name    = v-temp-file-name
+      143         v-temp-full-pathname    = file-info :full-pathname
+      144       .
+      145       assign
+      146         v-command-line = substitute('&1 -e "&2" &3':U
+      147                                         ,v-convert-full-pathname
+      148                                         ,v-input-full-pathname
+      149                                         ,v-temp-full-pathname
+      150                                         )
+      151       .
+      152       os-command silent value(v-command-line) .
+      153       input stream sinp from value(v-temp-full-pathname) .
+      154       assign
+      155         v-line-num = 0
+      156       .
+      157       repeat
+      158       :
+      159         assign
+      160           v-read-line = '':U
+      161         .
+      162         import stream sinp unformatted v-read-line .
+      163         if v-read-line <> '':U
+      164         then do:
+      165           assign
+      166             v-line-num  = v-line-num + 1
+      167           .
+      168           create buf_temp-ext-file-line .
+      169           assign
+      170             buf_temp-ext-file-line.db-num       = p-db-num
+      171             buf_temp-ext-file-line.from-db-num  = p-from-db-num
+      172             buf_temp-ext-file-line.file-num     = p-file-num
+      173             buf_temp-ext-file-line.line-num     = v-line-num
+      174             buf_temp-ext-file-line.sub-line-num = 0
+      175             buf_temp-ext-file-line.line-text    = v-read-line
+      176           .
+      177         end.
+      178       end.
+      179       input stream sinp close .
+      180       os-delete value(v-temp-full-pathname) .
+      181     end.
+      182   end procedure.
+      183   procedure binfile_write :
+      184     define input  parameter p-db-num        as integer   no-undo .
+      185     define input  parameter p-from-db-num   as integer   no-undo .
+      186     define input  parameter p-file-num      as integer   no-undo .
+      187     define input  parameter p-bin-file-name as character no-undo .
+      188     define variable v-temp-file-name        as character no-undo .
+      189     define variable v-temp-full-pathname    as character no-undo .
+      190     define variable v-output-full-pathname  as character no-undo .
+      191     define variable v-convert-full-pathname as character no-undo .
+      192     define variable v-command-line          as character no-undo .
+      193     define buffer buf_temp-ext-file-line for temp-ext-file-line .
+      194     do
+      195     on error undo, return error return-value
+      196     :
+      197       run gbl/_tmpfile.p
+      198         (input  't':U
+      199         ,input  '.b64':U
+      200         ,output v-temp-file-name
+      201         ) .
+      202       output stream sinp to value(v-temp-file-name) .
+      203       for each buf_temp-ext-file-line
+      204         where buf_temp-ext-file-line.db-num   = p-db-num
+      205           and buf_temp-ext-file-line.from-db-num = p-from-db-num
+      206           and buf_temp-ext-file-line.file-num = p-file-num
+      207       by buf_temp-ext-file-line.line-num
+      208       by buf_temp-ext-file-line.sub-line-num
+      209       on error undo, return error return-value
+      210       :
+      211         put stream sinp unformatted
+      212           buf_temp-ext-file-line.line-text + chr(10)
+      213           .
+      214       end.
+      215       output stream sinp close .
+      216       assign
+      217         file-info :file-name    = v-binfile-converter-program
+      218         v-convert-full-pathname = file-info :full-pathname
+      219       .
+      220       assign
+      221         file-info :file-name    = v-temp-file-name
+      222         v-temp-full-pathname    = file-info :full-pathname
+      223       .
+      224   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      225   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      226     (input p-bin-file-name
+      227     ,input '':U
+      228     )  .
+      229       assign
+      230         file-info :file-name    = p-bin-file-name
+      231         v-output-full-pathname   = file-info :full-pathname
+      232       .
+      233       assign
+      234         v-command-line =  substitute('&1 -d &2 "&3"':U
+      235                                     ,v-convert-full-pathname
+      236                                     ,v-temp-full-pathname
+      237                                     ,v-output-full-pathname
+      238                                     )
+      239       .
+      240       os-command silent value(v-command-line) .
+      241       os-delete value(v-temp-full-pathname) .
+      242     end.
+      243   end procedure.
+      244   procedure binfile_clear-from-db :
+      245     define input  parameter p-db-num        as integer   no-undo .
+      246     define input  parameter p-from-db-num   as integer   no-undo .
+      247     define input  parameter p-file-num      as integer   no-undo .
+      248     define buffer buf_ext-file-line for ub.ext-file-line .
+      249     do
+      250     on error undo, return error return-value
+      251     :
+      252       for each buf_ext-file-line
+      253         where buf_ext-file-line.db-num   = p-db-num
+      254           and buf_ext-file-line.from-db-num   = p-from-db-num
+      255           and buf_ext-file-line.file-num = p-file-num
+      256       on error undo, return error return-value
+      257       :
+      258         delete buf_ext-file-line .
+      259       end.
+      260     end.
+      261   end procedure.
+      262   procedure binfile_read-to-db :
+      263     define input  parameter p-db-num         as integer   no-undo .
+      264     define input  parameter p-from-db-num    as integer   no-undo .
+      265     define input  parameter p-file-num       as integer   no-undo .
+      266     define input  parameter p-file-name      as character no-undo .
+      267     define variable v-temp-file-name        as character no-undo .
+      268     define variable v-convert-full-pathname as character no-undo .
+      269     define variable v-input-full-pathname   as character no-undo .
+      270     define variable v-temp-full-pathname    as character no-undo .
+      271     define variable v-read-line             as character no-undo .
+      272     define variable v-line-num              as integer   no-undo .
+      273     define variable v-command-line          as character no-undo .
+      274     define buffer buf_ext-file-line for ub.ext-file-line .
+      275     do
+      276     on error undo, return error return-value
+      277     :
+      278       run binfile_clear-from-db in this-procedure
+      279         (input p-db-num
+      280         ,input p-from-db-num
+      281         ,input p-file-num
+      282         ) .
+      283       run gbl/_tmpfile.p
+      284         (input  't':U
+      285         ,input  '.b64':U
+      286         ,output v-temp-file-name
+      287         ) .
+      288   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      289   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      290     (input v-temp-file-name
+      291     ,input '':U
+      292     )  .
+      293       assign
+      294         file-info :file-name    = v-binfile-converter-program
+      295         v-convert-full-pathname = file-info :full-pathname
+      296       .
+      297       assign
+      298         file-info :file-name    = p-file-name
+      299         v-input-full-pathname   = file-info :full-pathname
+      300       .
+      301       assign
+      302         file-info :file-name    = v-temp-file-name
+      303         v-temp-full-pathname    = file-info :full-pathname
+      304       .
+      305       assign
+      306         v-command-line = substitute('&1 -e "&2" "&3"':U
+      307                                         ,v-convert-full-pathname
+      308                                         ,v-input-full-pathname
+      309                                         ,v-temp-full-pathname
+      310                                         )
+      311       .
+      312       os-command silent value(v-command-line) .
+      313       input stream sinp from value(v-temp-full-pathname) .
+      314       assign
+      315         v-line-num = 0
+      316       .
+      317       repeat
+      318       :
+      319         assign
+      320           v-read-line = '':U
+      321         .
+      322         import stream sinp unformatted v-read-line .
+      323         if v-read-line <> '':U
+      324         then do:
+      325           assign
+      326             v-line-num  = v-line-num + 1
+      327           .
+      328           create buf_ext-file-line .
+      329           assign
+      330             buf_ext-file-line.db-num       = p-db-num
+      331             buf_ext-file-line.from-db-num  = p-from-db-num
+      332             buf_ext-file-line.file-num     = p-file-num
+      333             buf_ext-file-line.line-num     = v-line-num
+      334             buf_ext-file-line.sub-line-num = 0
+      335             buf_ext-file-line.line-text    = v-read-line
+      336           .
+      337         end.
+      338       end.
+      339       input stream sinp close .
+      340       os-delete value(v-temp-full-pathname) .
+      341     end.
+      342   end procedure.
+      343   procedure binfile_write-from-db :
+      344     define input  parameter p-db-num        as integer   no-undo .
+      345     define input  parameter p-from-db-num   as integer   no-undo .
+      346     define input  parameter p-file-num      as integer   no-undo .
+      347     define input  parameter p-bin-file-name as character no-undo .
+      348     define variable v-temp-file-name        as character no-undo .
+      349     define variable v-temp-full-pathname    as character no-undo .
+      350     define variable v-output-full-pathname  as character no-undo .
+      351     define variable v-convert-full-pathname as character no-undo .
+      352     define variable v-command-line          as character no-undo .
+      353     define buffer buf_ext-file-line for ub.ext-file-line .
+      354     do
+      355     on error undo, return error return-value
+      356     :
+      357       run gbl/_tmpfile.p
+      358         (input  't':U
+      359         ,input  '.b64':U
+      360         ,output v-temp-file-name
+      361         ) .
+      362       output stream sinp to value(v-temp-file-name) .
+      363       for each buf_ext-file-line
+      364         where buf_ext-file-line.db-num   = p-db-num
+      365           and buf_ext-file-line.from-db-num   = p-from-db-num
+      366           and buf_ext-file-line.file-num = p-file-num
+      367       by buf_ext-file-line.line-num
+      368       by buf_ext-file-line.sub-line-num
+      369       on error undo, return error return-value
+      370       :
+      371         put stream sinp unformatted
+      372           buf_ext-file-line.line-text + chr(10)
+      373           .
+      374       end.
+      375       output stream sinp close .
+      376       assign
+      377         file-info :file-name    = v-binfile-converter-program
+      378         v-convert-full-pathname = file-info :full-pathname
+      379       .
+      380       assign
+      381         file-info :file-name    = v-temp-file-name
+      382         v-temp-full-pathname    = file-info :full-pathname
+      383       .
+      384   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      385   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run file-wr in g#library
+      386     (input p-bin-file-name
+      387     ,input '':U
+      388     )  .
+      389       assign
+      390         file-info :file-name    = p-bin-file-name
+      391         v-output-full-pathname   = file-info :full-pathname
+      392       .
+      393       assign
+      394         v-command-line =  substitute('&1 -d &2 "&3"':U
+      395                                     ,v-convert-full-pathname
+      396                                     ,v-temp-full-pathname
+      397                                     ,v-output-full-pathname
+      398                                     )
+      399       .
+      400       os-command silent value(v-command-line) .
+      401       os-delete value(v-temp-full-pathname) .
+      402     end.
+      403   end procedure.
+      404   define variable v-cmd-proc-handle as handle no-undo .
+      405   define variable v-cmd-code as integer no-undo .
+      406   define variable v-md5-signature as character no-undo .
+      407   define variable v-path                    as character                no-undo .
+      408   DEFINE VARIABLE v-full-path               as character                no-undo .
+      409   DEFINE VARIABLE v-file-name               as character                no-undo .
+      410   DEFINE VARIABLE v-file-name-no-ext        as character                no-undo .
+      411   DEFINE VARIABLE v-file-name-ext           as character                no-undo .
+      412   define variable v-rec-ord                 as integer                  no-undo .
+      413   define buffer buf_temp-ext-file-line for temp-ext-file-line .
+      414   define buffer buf_tt-ext-file-par for tt-ext-file-par.
+      415   define buffer buf_ext-file-par for ub.ext-file-par.
+      416   define buffer buf_ext-file-line for ub.ext-file-line.
+      417   main-block:
+      418   do
+      419   on error undo, return error return-value
+      420   :
+      421     run gbl/filename.p (
+      422                     input p-full-path-name
+      423                   ,output v-full-path
+      424                   ,output v-path
+      425                   ,output v-file-name
+      426                   ,output v-file-name-no-ext
+      427                   ,output v-file-name-ext
+      428                   ) no-error .
+      429     if error-status:error then do:
+      430       undo main-block, return error substitute("&1 &2 &3&4Ошибка при определении имени файла &5&4" +
+      431                                           "&6&4&7"
+      432                                           ,vss-workfile
+      433                                           ,vss-revision
+      434                                           ,vss-description
+      435                                           ,chr(10)
+      436                                           ,p-full-path-name
+      437                                           ,error-status:get-message(1)
+      438                                           ,return-value ).
+      439     end.
+      440     if p-mode = 'save-this-db':U then do:
+      441       run binfile_read-to-db in this-procedure (
+      442         input  p-db-num
+      443         ,input p-from-db-num
+      444         ,input  p-file-num
+      445         ,input  p-full-path-name
+      446         ) .
+      447       if buf_ext-file.file-type begins ('cash-desk':U + chr(3))
+      448       then do:
+      449         for each buf_tt-ext-file-par no-lock:
+      450             find first buf_ext-file-par where
+      451                       buf_ext-file-par.db-num = 0
+      452                   and buf_ext-file-par.from-db-num = 0
+      453                   and buf_ext-file-par.file-num = 0
+      454                   and buf_ext-file-par.param-num = buf_tt-ext-file-par.param-num  no-error.
+      455             if not available buf_ext-file-par then do:
+      456               create buf_ext-file-par.
+      457             end.
+      458             buffer-copy buf_tt-ext-file-par except db-num from-db-num file-num
+      459             to buf_ext-file-par
+      460             assign
+      461             buf_ext-file-par.from-db-num = p-from-db-num
+      462             buf_ext-file-par.db-num = p-db-num
+      463             buf_ext-file-par.file-num = buf_Ext-file.file-num
+      464             buf_ext-file-par.user-db-num = p-from-db-num
+      465             .
+      466         end.
+      467       end.
+      468       return.
+      469     end.
+      470     else do:
+      471       if p-md5-signature = '':U then do:
+      472         run gbl/md5.p (
+      473           input  p-full-path-name
+      474           ,output p-md5-signature
+      475           ) .
+      476       end.
+      477       run binfile_read in this-procedure (
+      478          input  p-db-num
+      479         ,input  p-from-db-num
+      480         ,input  p-file-num
+      481         ,input  p-full-path-name
+      482         ) .
+      483     end.
+      484     if not valid-handle(v-cmd-proc-handle ) then dO:
+      485       run nws/cmd-bush.p persistent set v-cmd-proc-handle no-error .
+      486       if error-status :error
+      487       then do:
+      488         delete procedure v-cmd-proc-handle .
+      489         undo main-block, return error substitute("&1 &2 &3&4Ошибка при запуске процедуры cmd-bush.p&4" +
+      490                                             "&5&4&6"
+      491                                             ,vss-workfile
+      492                                             ,vss-revision
+      493                                             ,vss-description
+      494                                             ,chr(10)
+      495                                             ,error-status:get-message(1)
+      496                                             ,return-value ).
+      497       end.
+      498     end.
+      499     run begin-create-command in v-cmd-proc-handle (
+      500                                                   input  ('cmd-send-binary':U + chr(6)
+      501                                                         + p-mode  + chr(6)
+      502                                                         + string(p-file-num) + chr(6)
+      503                                                         + v-file-name + chr(6)
+      504                                                         + string(p-path-type) + chr(6)
+      505                                                         + p-path + chr(6)
+      506                                                         + p-md5-signature  )
+      507                                                   ,INPUT  string(if p-db-num > 0 then p-db-num else 0)
+      508                                                   ,output v-cmd-code
+      509       ) no-error.
+      510     if error-status :error
+      511     then do:
+      512       delete procedure v-cmd-proc-handle .
+      513       undo main-block, return error substitute("&1 &2 &3&4Ошибка при создании команды &5&4" +
+      514                                           "&6&4&7"
+      515                                           ,vss-workfile
+      516                                           ,vss-revision
+      517                                           ,vss-description
+      518                                           ,chr(10)
+      519                                           ,'cmd-send-binary':U
+      520                                           ,error-status:get-message(1)
+      521                                           ,return-value ).
+      522     end.
+      523     run add-dump in v-cmd-proc-handle
+      524       (input v-cmd-code
+      525       ,input 'ext-file':U
+      526       ,input '+update'
+      527       ,input (buffer buf_ext-file:handle)
+      528       ,input '':U
+      529       ,output v-rec-ord
+      530       ) no-error .
+      531     if error-status :error
+      532     then do:
+      533       delete procedure v-cmd-proc-handle .
+      534       undo main-block, return error substitute("&1 &2 &3Ошибка при добавлении записи &4 в команду с кодом &5 &6&3" +
+      535                                           "&7&3БД"
+      536                                           ,vss-workfile
+      537                                           ,vss-revision
+      538                                           ,chr(10)
+      539                                           ,'ext-file':U
+      540                                           ,v-cmd-code
+      541                                           ,error-status:get-message(1)
+      542                                           ,return-value
+      543                                           ).                                                       ~
+      544     end.
+      545     for each buf_temp-ext-file-line no-lock:
+      546         find first buf_ext-file-line where
+      547                   buf_ext-file-line.db-num = p-db-num
+      548               and buf_ext-file-line.from-db-num = p-from-db-num
+      549               and buf_ext-file-line.file-num = p-file-num
+      550               and buf_ext-file-line.line-num = buf_temp-ext-file-line.line-num
+      551               and buf_ext-file-line.sub-line-num = buf_temp-ext-file-line.sub-line-num
+      552               no-error.
+      553         if not available buf_ext-file-line then do:
+      554           create buf_ext-file-line.
+      555         end.
+      556         buffer-copy buf_temp-ext-file-line except db-num from-db-num file-num
+      557         to buf_ext-file-line
+      558         assign
+      559         buf_ext-file-line.from-db-num = p-from-db-num
+      560         buf_ext-file-line.db-num = p-db-num
+      561         buf_ext-file-line.file-num = p-file-num
+      562         .
+      563       run add-dump in v-cmd-proc-handle
+      564         (input v-cmd-code
+      565         ,input 'ext-file-line':U
+      566         ,input '+update'
+      567         ,input (buffer buf_temp-ext-file-line:handle)
+      568         ,input '':U
+      569         ,output v-rec-ord
+      570         ) no-error .
+      571       if error-status :error
+      572       then do:
+      573         delete procedure v-cmd-proc-handle .
+      574         undo main-block, return error substitute("&1 &2 &3Ошибка при добавлении записи &4 в команду с кодом &5 &6&3" +
+      575                                             "&7&3БД"
+      576                                             ,vss-workfile
+      577                                             ,vss-revision
+      578                                             ,chr(10)
+      579                                             ,'ext-file-line':U
+      580                                             ,v-cmd-code
+      581                                             ,error-status:get-message(1)
+      582                                             ,return-value
+      583                                             ).                                                       ~
+      584       end.
+      585     end.
+      586     if p-mode = 'save-disk-and-run':U
+      587     or p-mode = 'save-db-and-run':U
+      588     or buf_ext-file.file-type begins ('cash-desk':U + chr(3))
+      589     then do:
+      590     for each buf_tt-ext-file-par no-lock:
+      591         find first buf_ext-file-par where
+      592                   buf_ext-file-par.db-num = 0
+      593               and buf_ext-file-par.from-db-num = 0
+      594               and buf_ext-file-par.file-num = 0
+      595               and buf_ext-file-par.param-num = buf_tt-ext-file-par.param-num  no-error.
+      596         if not available buf_ext-file-par then do:
+      597           create buf_ext-file-par.
+      598         end.
+      599         buffer-copy buf_tt-ext-file-par except db-num from-db-num file-num
+      600         to buf_ext-file-par
+      601         assign
+      602         buf_ext-file-par.from-db-num = p-from-db-num
+      603         buf_ext-file-par.db-num = p-db-num
+      604         buf_ext-file-par.file-num = buf_Ext-file.file-num
+      605         buf_ext-file-par.user-db-num = p-from-db-num
+      606         .
+      607         run add-dump in v-cmd-proc-handle
+      608           (input v-cmd-code
+      609           ,input 'ext-file-par':U
+      610           ,input '+update'
+      611           ,input (buffer buf_ext-file-par:handle)
+      612           ,input '':U
+      613           ,output v-rec-ord
+      614           ) no-error .
+      615         if error-status :error
+      616         then do:
+      617           delete procedure v-cmd-proc-handle .
+      618           undo main-block, return error substitute("&1 &2 &3Ошибка при добавлении записи &4 в команду с кодом &5 &6&3" +
+      619                                               "&7&3БД"
+      620                                               ,vss-workfile
+      621                                               ,vss-revision
+      622                                               ,chr(10)
+      623                                               ,'ext-file-par':U
+      624                                               ,v-cmd-code
+      625                                               ,error-status:get-message(1)
+      626                                               ,return-value
+      627                                               ).                                                       ~
+      628         end.
+      629       end.
+      630     end.
+      631     run send-command in v-cmd-proc-handle
+      632       ( input v-cmd-code
+      633         ,input string(if p-db-num > 0 then p-db-num else 0)
+      634         ) no-error .
+      635     if error-status :error then do:
+      636       delete procedure v-cmd-proc-handle .
+      637       undo main-block, return error substitute("&1 &2 &3&4Ошибка при отправке в новости команды с кодом &5 БД &8&4" +
+      638                                           "&6&4&7"
+      639                                           ,vss-workfile
+      640                                           ,vss-revision
+      641                                           ,vss-description
+      642                                           ,chr(10)
+      643                                           ,v-cmd-code
+      644                                           ,error-status:get-message(1)
+      645                                           ,return-value
+      646                                           ,p-db-num
+      647                                           ).
+      648     end.
+      649     delete procedure v-cmd-proc-handle .
+      650   end.

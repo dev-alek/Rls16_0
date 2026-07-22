@@ -1,0 +1,819 @@
+        1   DEFINE TEMP-TABLE tt-tnved-item NO-UNDO
+        2          field mark as character
+        3          field tnved-code as integer
+        4          field tnved-item-code as character
+        5          field tnved-item-name as character
+        6          field whole-send-news as integer
+        7          field parent-code as character
+        8          field tnved-code-list as character
+        9          field disp-order as integer
+       10          field disp-order-str as character
+       11          field typp-code as character
+       12          field typp-name as character
+       13          field prod-code as character
+       14          field kind-code as character
+       15          index pi is primary unique tnved-code tnved-item-code
+       16          index i1 tnved-item-code whole-send-news.
+       17   define input parameter parparentproc as handle no-undo .
+       18   define input parameter p-mode as character no-undo .
+       19   define input parameter p-selected-uuid as character no-undo .
+       20   define variable vss-revision               as character no-undo init "$Revision$":U .
+       21   define variable vss-author                 as character no-undo init "$Author$":U .
+       22   define variable vss-date                   as character no-undo init "$Date$":U .
+       23   define variable vss-workfile               as character no-undo init "$Workfile$":U .
+       24   define variable vss-archive                as character no-undo init "$Archive$":U .
+       25   define variable vss-description            as character no-undo init "Справочник типов продукции".
+       26   define temp-table tt-imp
+       27     field fl01       as character
+       28     field typp-name  as character
+       29     field typp-code  as character
+       30     field prod-name  as character
+       31     field prod-tnved as character
+       32     field prod-code  as character
+       33     field kind-name  as character
+       34     field kind-tnved as character
+       35     field kind-code  as character
+       36   .
+       37   define stream f-imp .
+       38   define temp-table tt-tnved-item-imp      no-undo like ub.tnved-item .
+       39   define temp-table tt-tnved-item-attr-imp no-undo like ub.tnved-item-attr .
+       40   define new global shared variable g#language as character no-undo .
+       41   if g#language <> '' and g#language <> 'rus':U then do:
+       42     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       43   end.
+       44   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       45   define variable v-waitfram-action01         as character   no-undo .
+       46   define variable v-waitfram-action02         as character   no-undo .
+       47   define variable v-waitfram-action03         as character   no-undo .
+       48   define variable mWaitFramTextBeg            as character   no-undo.
+       49   define variable mWaitFramTextEnd            as character   no-undo.
+       50   define variable mWaitFramView               as logical     no-undo.
+       51   define variable mWaitProcEvent              as logical     no-undo init yes.
+       52   define variable mWaitFramInterval           as integer     no-undo init 1 .
+       53   define variable mWaitFramStop               as logical     no-undo.
+       54   define variable mWaitFramStopUser           as logical     no-undo.
+       55   define variable mWaitFramStopTimeOut        as logical     no-undo.
+       56   define variable mWaitFramStartProc          as datetime-tz no-undo.
+       57   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+       58   define button B-WaitFramStop auto-end-key
+       59        label "Стоп"
+       60        size 10 by 1 tooltip "Остоновить процесс".
+       61   define button B-viewProcInfo
+       62        label "Информация"
+       63        size 15 by 1 tooltip "Информация о процесс".
+       64   define frame waitfram
+       65     v-waitfram-action01 format "x(72)" no-label skip
+       66     v-waitfram-action02 format "x(72)" no-label skip
+       67     v-waitfram-action03 format "x(72)" no-label skip
+       68     B-viewProcInfo
+       69     B-WaitFramStop at row 4 col 30
+       70     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+       71     .
+       72   define new global shared variable mBatchMode as logical no-undo init ?.
+       73   define variable mFramBachModHandle as handle no-undo.
+       74   mFramBachModHandle = frame waitfram:handle.
+       75   define variable mFameOldVis as logical no-undo.
+       76   define variable mVisCUrentVin as logical no-undo.
+       77   if session:batch-mode
+       78   then
+       79      mBatchMode = yes.
+       80   if mBatchMode = ? then do:
+       81     mVisCUrentVin = current-window:visible.
+       82     mFameOldVis = mFramBachModHandle:visible.
+       83     mFramBachModHandle:visible  = yes.
+       84     mBatchMode = mFramBachModHandle:visible ne yes.
+       85     mFramBachModHandle:visible = mFameOldVis.
+       86     current-window:visible = mVisCUrentVin.
+       87   end.
+       88    if  log-manager:logfile-name ne ?
+       89     then DO:
+       90         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+       91         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+       92         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+       93     end.
+       94   on choose of B-WaitFramStop in frame waitfram
+       95   do:
+       96     mWaitFramStop = yes.
+       97     mWaitFramStopUser = yes.
+       98   end.
+       99   function waitfram-check-timeout returns logical():
+      100      define variable vtime as int64 no-undo.
+      101      if mWaitFramStopTimeOut
+      102      then
+      103         return yes.
+      104      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      105      if     mWaitFramTimeOut ne ?
+      106         and mWaitFramTimeOut ne 0
+      107         and mWaitFramTimeOut lt vtime
+      108      then do:
+      109         mWaitFramStopTimeOut = yes.
+      110      end.
+      111      return mWaitFramStopTimeOut.
+      112   end.
+      113   procedure waitfram-hide :
+      114     if not session:batch-mode
+      115     then do
+      116     on error undo, return error return-value
+      117     :
+      118       pause 0 before-hide .
+      119       if not mBatchMode then
+      120         hide frame waitfram .
+      121     if     not mWaitFramView
+      122        and mWaitProcEvent
+      123     then
+      124       process events .
+      125     end.
+      126   end procedure.
+      127   procedure waitfram-show :
+      128     define input  parameter p-message as character no-undo .
+      129     define variable v-left-margin as integer   no-undo .
+      130     if not session:batch-mode
+      131     then do
+      132     on error undo, return error return-value
+      133     :
+      134       if length(p-message) <= 70 then do:
+      135         assign
+      136           v-left-margin = integer((70 - length(p-message)) / 2)
+      137         .
+      138         assign
+      139           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      140         .
+      141         assign
+      142           v-waitfram-action01 = " "
+      143           v-waitfram-action02 = " "
+      144                                    + fill(" ", v-left-margin)
+      145                                    + p-message
+      146           v-waitfram-action03 = " "
+      147         .
+      148       end.
+      149       else do:
+      150         define variable vRindex1 as integer no-undo.
+      151         define variable vRindex2 as integer no-undo.
+      152         vRindex1 = r-index(p-message," ",70).
+      153         if vRindex1 = 0
+      154         then
+      155            vRindex1 = 70.
+      156         if length(p-message)  <= vRindex1 + 70 then do:
+      157           assign
+      158             v-waitfram-action01 = " "
+      159             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+      160             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+      161           .
+      162         end.
+      163         else do:
+      164           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+      165           if vRindex2 <= vRindex1
+      166           then
+      167              vRindex2 = vRindex1 + 70.
+      168           assign
+      169             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+      170             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+      171             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+      172           .
+      173         end.
+      174       end.
+      175       B-viewProcInfo:visible   in frame waitfram = no.
+      176       B-viewProcInfo:sensitive in frame waitfram = no.
+      177       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      178       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      179       if  (   mWaitFramView
+      180          or  mWaitProcEvent)
+      181          and not mBatchMode
+      182       then
+      183          display
+      184             v-waitfram-action01 skip
+      185             v-waitfram-action02 skip
+      186             v-waitfram-action03 skip
+      187          with frame waitfram .
+      188       if     mWaitFramView
+      189          then do:
+      190             if     mWaitFramInterval ne ?
+      191                and not mBatchMode
+      192             then
+      193                wait-for go of frame waitfram pause mWaitFramInterval.
+      194          end.
+      195          else
+      196             if     mWaitProcEvent
+      197                and not mBatchMode
+      198             then
+      199                process events .
+      200     end.
+      201   end procedure.
+      202      procedure waitfram-show-this:
+      203         define input  parameter iInterval as int64 no-undo.
+      204         define variable vtime as int64 no-undo.
+      205         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      206         mWaitFramInterval = iInterval.
+      207         run waitfram-show (substitute("&1&2 &3&4" ,
+      208                                       mWaitFramTextBeg ,
+      209                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+      210                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+      211                                       mWaitFramTextEnd
+      212                                      )
+      213                           ).
+      214      end.
+      215      procedure WaitFramRunPause:
+      216         define input  parameter iInterval as dec no-undo.
+      217         define variable vStart  as datetime-tz no-undo.
+      218         define variable vend    as datetime-tz no-undo.
+      219         define variable vint as int64 no-undo.
+      220         define variable vOk as logical no-undo.
+      221         vStart = now.
+      222         vend   = vStart.
+      223         publish "WaitFramPause" (iInterval,output vOk).
+      224         vend   =  now.
+      225         vint = vend - vStart.
+      226         vint = iInterval - vint / 1000.
+      227         if     not mWaitFramStop
+      228            and (   vint > 0
+      229                 or (    not vOk
+      230                     and iInterval eq ?
+      231                     )
+      232                 )
+      233         then
+      234            run waitfram-show-this (iInterval).
+      235         vend   =  now.
+      236         vint = vend - vStart.
+      237         vint = iInterval - vint / 1000.
+      238         if     not mWaitFramStop
+      239            and vint > 0
+      240         then do:
+      241            run gbl/pause.p (vint * 1000).
+      242         end.
+      243         if iInterval ne ?
+      244         then
+      245            publish "WaitFramStop".
+      246         waitfram-check-timeout().
+      247      end.
+      248      procedure WaitFramWaitFor:
+      249         define input  parameter iInterval as dec no-undo.
+      250         assign
+      251            mWaitFramStartProc   = now
+      252            mWaitFramStopUser    = no
+      253            mWaitFramStopTimeOut = no
+      254         .
+      255         block-wait:
+      256         do while not mWaitFramStop:
+      257            run WaitFramRunPause (iInterval).
+      258            if  waitfram-check-timeout()
+      259            then do:
+      260               leave block-wait.
+      261            end.
+      262         end.
+      263         run waitfram-hide.
+      264      end.
+      265   procedure waitfram-join :
+      266     define input  parameter p-line-1  as character no-undo .
+      267     define input  parameter p-line-2  as character no-undo .
+      268     define input  parameter p-line-3  as character no-undo .
+      269     define output parameter p-message as character no-undo .
+      270     do
+      271     on error undo, return error return-value
+      272     :
+      273       assign
+      274         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+      275                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+      276                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+      277       .
+      278     end.
+      279   end procedure.
+      280   function waitfram-join-function returns character
+      281     (input p-line-1 as character
+      282     ,input p-line-2 as character
+      283     ,input p-line-3 as character
+      284     ).
+      285     define variable v-message as character no-undo .
+      286     run waitfram-join in this-procedure
+      287       (input  p-line-1
+      288       ,input  p-line-2
+      289       ,input  p-line-3
+      290       ,output v-message
+      291       ) .
+      292     return v-message .
+      293   end function .
+      294   DEFINE BUTTON Btn_Cancel AUTO-END-KEY
+      295        LABEL "Выход"
+      296        SIZE 10 BY 1
+      297        BGCOLOR 8 .
+      298   DEFINE BUTTON btn_import
+      299        LABEL "Импорт"
+      300        SIZE 10 BY 1.
+      301   DEFINE BUTTON Btn_mark
+      302        LABEL "*"
+      303        SIZE 3 BY 1.
+      304   DEFINE BUTTON btn_search
+      305        LABEL "Поиск"
+      306        SIZE 10 BY 1.
+      307   DEFINE BUTTON b-sel AUTO-GO
+      308        LABEL "Выбор"
+      309        SIZE 10 BY 1.
+      310   DEFINE VARIABLE fi-search AS CHARACTER FORMAT "X(256)":U
+      311        VIEW-AS FILL-IN
+      312        SIZE 30 BY 1
+      313        FGCOLOR 1  NO-UNDO.
+      314   DEFINE QUERY BROWSE-2 FOR
+      315         tt-tnved-item SCROLLING.
+      316   DEFINE BROWSE BROWSE-2
+      317     QUERY BROWSE-2 NO-LOCK DISPLAY
+      318         tt-tnved-item.mark format "x(1)" no-label
+      319         tt-tnved-item.tnved-item-name format "x(80)" column-label "Наименование продукции и вида продукции"
+      320         tt-tnved-item.tnved-code-list format "x(19)" column-label "Коды ТН ВЭД"
+      321         tt-tnved-item.typp-name format "x(20)" column-label "Тип продукции"
+      322       WITH SEPARATORS SIZE 130 BY 20 FIT-LAST-COLUMN.
+      323   DEFINE FRAME Dialog-Frame
+      324        Btn_Cancel AT ROW 1 COL 1
+      325        Btn_mark AT ROW 1 COL 12
+      326        b-sel AT ROW 1 COL 16
+      327        btn_import AT ROW 1 COL 27
+      328        btn_search AT ROW 1 COL 38
+      329        fi-search AT ROW 1 COL 49 NO-LABEL
+      330        BROWSE-2 AT ROW 2.91 COL 2 WIDGET-ID 200
+      331        SPACE(1.24) SKIP(2.93)
+      332       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+      333            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+      334            TITLE "Справочник типов продукции"
+      335            CANCEL-BUTTON Btn_Cancel WIDGET-ID 100.
+      336   ASSIGN
+      337          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+      338          FRAME Dialog-Frame:HIDDEN           = TRUE.
+      339   ASSIGN
+      340          BROWSE-2:NUM-LOCKED-COLUMNS         = 1
+      341          BROWSE-2:COLUMN-RESIZABLE IN FRAME Dialog-Frame       = TRUE.
+      342   ON window-close OF FRAME Dialog-Frame
+      343   do:
+      344       apply "END-ERROR":U to self.
+      345   end.
+      346   ON CHOOSE OF b-sel IN FRAME Dialog-Frame
+      347   DO:
+      348   define buffer buf_tt-tnved-typp-name for tt-tnved-item .
+      349     p-selected-uuid = "" .
+      350     for each tt-tnved-item
+      351        where tt-tnved-item.mark = "*"
+      352       while length(p-selected-uuid) < 15000
+      353     :
+      354       find first buf_tt-tnved-typp-name where buf_tt-tnved-typp-name.tnved-item-code = tt-tnved-item.parent-code no-error .
+      355       if available buf_tt-tnved-typp-name then
+      356         p-selected-uuid = substitute("&1,&2,&3,&4"
+      357         , buf_tt-tnved-typp-name.typp-code
+      358         , buf_tt-tnved-typp-name.typp-name
+      359         , tt-tnved-item.parent-code
+      360         , tt-tnved-item.tnved-item-code
+      361       ) . else
+      362         p-selected-uuid = substitute(",,&1,&2"
+      363         , tt-tnved-item.parent-code
+      364         , tt-tnved-item.tnved-item-code
+      365       ) .
+      366       leave .
+      367     end .
+      368     apply "GO" to FRAME Dialog-Frame .
+      369   END.
+      370   ON GO OF FRAME Dialog-Frame
+      371   DO:
+      372   END.
+      373   ON CHOOSE OF btn_import IN FRAME Dialog-Frame
+      374   DO:
+      375   define variable v-imp-fname as character no-undo .
+      376   define variable v-ok        as logical no-undo .
+      377     system-dialog get-file v-imp-fname
+      378       filters "Файлы импорта справочника (*.csv)" "*.csv",
+      379               "Все файлы (*.*)" "*.*"
+      380       title "Выберите файл для импорта справочника"
+      381       update v-ok
+      382     .
+      383     if v-ok then do:
+      384       run import-file in this-procedure (v-imp-fname) .
+      385       run load-tt-tnved in this-procedure.
+      386       run refresh-view.
+      387     end .
+      388   END.
+      389   ON choose OF Btn_mark IN FRAME Dialog-Frame
+      390   do:
+      391     define variable varlog as logical no-undo .
+      392     if available tt-tnved-item then do :
+      393       if tt-tnved-item.mark = "*" then tt-tnved-item.mark = "" .
+      394                                   else tt-tnved-item.mark = "*" .
+      395       if can-find (first tt-tnved-item where tt-tnved-item.mark > "") then do:
+      396         ENABLE b-sel WITH FRAME Dialog-Frame.
+      397       end .
+      398       else do:
+      399         DISABLE b-sel WITH FRAME Dialog-Frame.
+      400       end.
+      401       varlog = BROWSE-2:refresh () .
+      402       varlog = BROWSE-2:select-next-row () .
+      403       apply "entry" to BROWSE-2 in frame Dialog-Frame.
+      404     end .
+      405   end.
+      406   ON CHOOSE OF btn_search IN FRAME Dialog-Frame
+      407   DO:
+      408       run find-in-browse in this-procedure (
+      409           input fi-search :screen-value
+      410       ) no-error.
+      411       if error-status :error then do:
+      412           message
+      413             vss-workfile vss-revision vss-description
+      414             skip "Ошибка поиска."
+      415             skip return-value
+      416             skip error-status :get-message(1)
+      417             skip error-status :get-message(2)
+      418             skip error-status :get-message(3)
+      419             skip error-status :get-message(4)
+      420             skip error-status :get-message(5)
+      421           view-as alert-box error.
+      422           undo, return no-apply.
+      423       end.
+      424   END.
+      425   ON RETURN OF fi-search IN FRAME Dialog-Frame
+      426   DO:
+      427       if fi-search :screen-value > "" then apply "choose" to btn_search in frame Dialog-Frame .
+      428   END.
+      429   ON VALUE-CHANGED OF BROWSE-2 IN FRAME Dialog-Frame
+      430   DO:
+      431     define variable v-is-active as logical no-undo .
+      432     if p-mode = 'ПРОСМОТР':U then do :
+      433       v-is-active = false .
+      434       if available tt-tnved-item then do:
+      435         v-is-active = (tt-tnved-item.kind-code > "") .
+      436       end .
+      437       Btn_mark:SENSITIVE = v-is-active .
+      438     end .
+      439   END.
+      440   if valid-handle(active-window) and frame Dialog-Frame:PARENT eq ?
+      441     then frame Dialog-Frame:PARENT = active-window.
+      442   MAIN-BLOCK:
+      443   do on error undo MAIN-BLOCK, leave MAIN-BLOCK
+      444      on end-key undo MAIN-BLOCK, leave MAIN-BLOCK:
+      445     run enable_UI.
+      446     case p-mode:
+      447       when 'ПРОСМОТР':U then do:
+      448         DISABLE btn_import WITH FRAME Dialog-Frame.
+      449       end .
+      450       when 'ИЗМЕНЕНИЕ':U then do:
+      451         DISABLE Btn_mark b-sel WITH FRAME Dialog-Frame.
+      452       end .
+      453     end case .
+      454     run load-tt-tnved in this-procedure.
+      455     if p-selected-uuid > "" then do:
+      456       define variable v-selected-uuid as character no-undo .
+      457       v-selected-uuid = entry(1, p-selected-uuid) .
+      458       find first tt-tnved-item where tt-tnved-item.tnved-item-code = v-selected-uuid no-error.
+      459       if available tt-tnved-item then tt-tnved-item.mark = "*" .
+      460       else do:
+      461         DISABLE b-sel WITH FRAME Dialog-Frame.
+      462       end .
+      463     end .
+      464     else do:
+      465       DISABLE b-sel WITH FRAME Dialog-Frame.
+      466     end .
+      467     run refresh-view.
+      468     wait-for go of frame Dialog-Frame.
+      469   end.
+      470   run disable_UI.
+      471   return p-selected-uuid .
+      472   PROCEDURE disable_UI :
+      473     HIDE FRAME Dialog-Frame.
+      474   END PROCEDURE.
+      475   PROCEDURE enable_UI :
+      476     ENABLE Btn_Cancel Btn_mark b-sel btn_import btn_search fi-search BROWSE-2
+      477         WITH FRAME Dialog-Frame.
+      478     VIEW FRAME Dialog-Frame.
+      479     OPEN QUERY BROWSE-2 FOR EACH tt-tnved-item NO-LOCK     by tt-tnved-item.disp-order-str INDEXED-REPOSITION.
+      480   END PROCEDURE.
+      481   PROCEDURE load-arr-typp private :
+      482   define output parameter p-typp-names as character extent .
+      483   define buffer buf_typp_tnved-item        for ub.tnved-item .
+      484   define query q1 for buf_typp_tnved-item .
+      485   define variable v-size as integer no-undo .
+      486   define variable v-ind  as integer no-undo .
+      487     extent(p-typp-names) = ? .
+      488     if can-find (first tnved-item where tnved-item.whole-send-news = 1) then do:
+      489       open query q1 preselect each buf_typp_tnved-item no-lock
+      490                              where buf_typp_tnved-item.whole-send-news = 1
+      491                                 by integer(buf_typp_tnved-item.tnved-item-code) .
+      492       get last q1.
+      493       v-size = integer(buf_typp_tnved-item.tnved-item-code).
+      494       extent(p-typp-names) = v-size.
+      495       v-ind = v-size .
+      496       do while available buf_typp_tnved-item :
+      497         v-ind = integer(buf_typp_tnved-item.tnved-item-code) .
+      498         p-typp-names[v-ind] = buf_typp_tnved-item.tnved-item-name .
+      499         get prev q1.
+      500       end .
+      501       close query q1.
+      502     end.
+      503     else do:
+      504       extent(p-typp-names) = 1.
+      505       p-typp-names[1] = "" .
+      506     end.
+      507   end procedure.
+      508   PROCEDURE load-tt-tnved :
+      509   define variable v-num-order as integer no-undo .
+      510   define buffer buf2_tnved-item        for ub.tnved-item .
+      511   define buffer buf2_tnved-item-attr-a for ub.tnved-item-attr .
+      512   define buffer buf2_tnved-item-attr-b for ub.tnved-item-attr .
+      513   define buffer buf2_tnved-item-attr-c for ub.tnved-item-attr .
+      514   define variable v-wait-msg   as character no-undo .
+      515   define variable v-ln-prev    as integer no-undo .
+      516   define variable v-tm-prev    as integer no-undo .
+      517   define variable v-tm-curr    as integer no-undo .
+      518   define variable v-lines      as integer no-undo .
+      519   define variable v-typp-names as character extent .
+      520   define variable v-name-ind   as integer no-undo .
+      521   define variable v-item-level as integer no-undo .
+      522     assign
+      523       v-wait-msg = "Чтение справочника типов продукции. Строк прочитано: &1"
+      524       v-num-order = 0
+      525       v-lines    = 0
+      526       v-ln-prev  = v-num-order + 100
+      527       v-tm-prev  = time + 1
+      528     .
+      529     run waitfram-show in this-procedure ("Чтение справочника типов продукции.") .
+      530     empty temp-table tt-tnved-item .
+      531     run load-arr-typp in this-procedure (output v-typp-names) .
+      532     for each buf2_tnved-item-attr-a no-lock
+      533        where buf2_tnved-item-attr-a.tnved-code = 0
+      534     break by buf2_tnved-item-attr-a.tnved-code
+      535           by buf2_tnved-item-attr-a.tnved-item-code :
+      536       v-lines = v-lines + 1 .
+      537       if v-lines > v-ln-prev then do:
+      538         v-ln-prev = v-lines + 100.
+      539         v-tm-curr = time.
+      540         if v-tm-prev < v-tm-curr then do:
+      541           v-tm-prev  = v-tm-curr + 1 .
+      542           run waitfram-show in this-procedure (substitute(v-wait-msg, v-lines)) .
+      543         end .
+      544       end.
+      545       if first-of (buf2_tnved-item-attr-a.tnved-item-code) then do :
+      546         find first buf2_tnved-item no-lock
+      547              where buf2_tnved-item.tnved-code      = buf2_tnved-item-attr-a.tnved-code
+      548                and buf2_tnved-item.tnved-item-code = buf2_tnved-item-attr-a.tnved-item-code
+      549                and buf2_tnved-item.whole-send-news > 1 no-error .
+      550         if available buf2_tnved-item then do:
+      551           create tt-tnved-item .
+      552           assign
+      553             tt-tnved-item.mark            = ""
+      554             tt-tnved-item.disp-order      = 0
+      555             tt-tnved-item.tnved-code      = buf2_tnved-item.tnved-code
+      556             tt-tnved-item.tnved-item-code = buf2_tnved-item.tnved-item-code
+      557             tt-tnved-item.whole-send-news = buf2_tnved-item.whole-send-news
+      558             tt-tnved-item.tnved-item-name =
+      559               if buf2_tnved-item.whole-send-news = 2
+      560                                      then                      buf2_tnved-item.tnved-item-name
+      561                                      else substitute("    &1", buf2_tnved-item.tnved-item-name)
+      562             v-item-level = buf2_tnved-item.whole-send-news
+      563           .
+      564         end .
+      565         else v-item-level = 1 .
+      566       end .
+      567       if v-item-level > 1 then do:
+      568         case buf2_tnved-item-attr-a.attr-code :
+      569           when "parent-code" then do:
+      570             tt-tnved-item.parent-code = buf2_tnved-item-attr-a.attr-value .
+      571             case v-item-level :
+      572               when 2 then do:
+      573                 assign
+      574                   tt-tnved-item.typp-code       = tt-tnved-item.parent-code
+      575                   tt-tnved-item.prod-code       = tt-tnved-item.tnved-item-code
+      576                   tt-tnved-item.kind-code       = ""
+      577                 .
+      578                 v-name-ind = integer(tt-tnved-item.parent-code) no-error.
+      579                 tt-tnved-item.typp-name = if v-name-ind > 0 then v-typp-names[v-name-ind] else "" .
+      580               end .
+      581               when 3 then do:
+      582                 assign
+      583                   tt-tnved-item.typp-code       = ""
+      584                   tt-tnved-item.prod-code       = tt-tnved-item.parent-code
+      585                   tt-tnved-item.kind-code       = tt-tnved-item.tnved-item-code
+      586                 .
+      587               end .
+      588               otherwise .
+      589             end case .
+      590           end .
+      591           when "tnved-code" then tt-tnved-item.tnved-code-list = buf2_tnved-item-attr-a.attr-value .
+      592           when "order-str" then tt-tnved-item.disp-order-str  = buf2_tnved-item-attr-a.attr-value .
+      593           otherwise .
+      594         end case.
+      595       end .
+      596     end .
+      597     extent(v-typp-names) = ?.
+      598     run waitfram-hide in this-procedure.
+      599   END PROCEDURE.
+      600   PROCEDURE find-in-browse :
+      601   define input parameter p-search-str as character no-undo .
+      602   define variable v-search-str  as character no-undo .
+      603   define variable v-is-found    as logical no-undo .
+      604   define variable v-focused-row as integer no-undo .
+      605   define buffer buf_tt-tnved-item for tt-tnved-item .
+      606   define query q_brw-2 for buf_tt-tnved-item .
+      607     if not available tt-tnved-item then return .
+      608     assign
+      609       v-is-found   = false
+      610       v-search-str = substitute("*&1*", p-search-str)
+      611       v-focused-row = BROWSE-2 :focused-row in frame Dialog-Frame
+      612     .
+      613     open query q_brw-2
+      614       FOR EACH buf_tt-tnved-item
+      615          where buf_tt-tnved-item.tnved-item-name matches v-search-str
+      616             by buf_tt-tnved-item.disp-order-str .
+      617     repeat :
+      618       get next q_brw-2 .
+      619       if not available buf_tt-tnved-item then leave .
+      620       if buf_tt-tnved-item.disp-order-str > tt-tnved-item.disp-order-str then do:
+      621         BROWSE-2 :set-repositioned-row(v-focused-row, "ALWAYS") in frame Dialog-Frame.
+      622         reposition BROWSE-2 to rowid rowid ( buf_tt-tnved-item ).
+      623         v-is-found = true .
+      624         leave .
+      625       end .
+      626     end .
+      627     if not v-is-found then do :
+      628       get first q_brw-2 .
+      629       if available buf_tt-tnved-item then do:
+      630         BROWSE-2 :set-repositioned-row(v-focused-row, "ALWAYS") in frame Dialog-Frame.
+      631         reposition BROWSE-2 to rowid rowid ( buf_tt-tnved-item ).
+      632         v-is-found = true .
+      633       end .
+      634     end .
+      635     close query q_brw-2 .
+      636     if not v-is-found then do:
+      637       message substitute("Запись не найдена.") view-as alert-box .
+      638     end .
+      639   end procedure.
+      640   PROCEDURE proc-row-disp :
+      641   end.
+      642   PROCEDURE refresh-view :
+      643       OPEN QUERY BROWSE-2 FOR EACH tt-tnved-item NO-LOCK     by tt-tnved-item.disp-order-str INDEXED-REPOSITION.
+      644   end.
+      645   PROCEDURE reopen-browse :
+      646     run refresh-view.
+      647   end.
+      648   PROCEDURE import-file :
+      649   define input parameter p-imp-file-name as character no-undo .
+      650   define buffer buf1_tnved-item      for tt-tnved-item-imp .
+      651   define buffer buf1_tnved-item-attr for tt-tnved-item-attr-imp .
+      652   define buffer buf2_tnved-item      for tt-tnved-item-imp .
+      653   define buffer buf2_tnved-item-attr for tt-tnved-item-attr-imp .
+      654   define buffer buf3_tnved-item      for tt-tnved-item-imp .
+      655   define buffer buf3_tnved-item-attr for tt-tnved-item-attr-imp .
+      656   define variable v-imp-row   as character no-undo .
+      657   define variable v-str-typp-code as character no-undo .
+      658   define variable v-str-prod-code as character no-undo .
+      659   define variable v-str-kind-code as character no-undo .
+      660   define variable v-srt-prod-code as character no-undo .
+      661   define variable v-srt-kind-code as character no-undo .
+      662   define variable v-wait-msg   as character no-undo .
+      663   define variable v-lines      as integer no-undo .
+      664   define variable v-ln-prev    as integer no-undo .
+      665   define variable v-tm-prev    as integer no-undo .
+      666   define variable v-tm-curr    as integer no-undo .
+      667     empty temp-table tt-tnved-item-imp  .
+      668     empty temp-table tt-tnved-item-attr-imp .
+      669     do transaction on error undo, return error string(os-error):
+      670       input stream f-imp from value(p-imp-file-name) .
+      671     end .
+      672     assign
+      673       v-wait-msg = "Импорт справочника типов продукции. Строк прочитано: &1"
+      674       v-lines    = 0
+      675       v-ln-prev  = v-lines + 100
+      676       v-tm-prev  = time + 1
+      677     .
+      678     run waitfram-show in this-procedure ("Импорт справочника типов продукции.") .
+      679     import stream f-imp unformatted v-imp-row .
+      680     repeat on endkey undo, leave
+      681            on error undo, leave :
+      682       v-lines = v-lines + 1 .
+      683       if v-lines > v-ln-prev then do:
+      684         v-ln-prev = v-lines + 100.
+      685         v-tm-curr = time.
+      686         if v-tm-prev < v-tm-curr then do:
+      687           v-tm-prev  = v-tm-curr + 1 .
+      688           run waitfram-show in this-procedure (substitute(v-wait-msg, v-lines)) .
+      689         end .
+      690       end.
+      691       empty temp-table tt-imp .
+      692       create tt-imp .
+      693       import stream f-imp DELIMITER ';' tt-imp .
+      694       v-str-typp-code = trim(tt-imp.typp-code) .
+      695       if not can-find (first buf1_tnved-item where buf1_tnved-item.tnved-item-code = v-str-typp-code
+      696                                             and buf1_tnved-item.whole-send-news = 1) then do:
+      697         create buf1_tnved-item .
+      698         assign
+      699           buf1_tnved-item.tnved-code      = 0
+      700           buf1_tnved-item.whole-send-news = 1
+      701           buf1_tnved-item.tnved-item-code = v-str-typp-code
+      702           buf1_tnved-item.tnved-item-name = trim(tt-imp.typp-name)
+      703         .
+      704       end .
+      705       v-str-prod-code = trim(tt-imp.prod-code) .
+      706       if not can-find (first buf2_tnved-item where buf2_tnved-item.tnved-item-code = v-str-prod-code
+      707                                             and buf2_tnved-item.whole-send-news = 2) then do:
+      708         v-srt-prod-code = string(v-lines, "999999999") .
+      709         create buf2_tnved-item .
+      710         assign
+      711           buf2_tnved-item.tnved-code      = 0
+      712           buf2_tnved-item.whole-send-news = 2
+      713           buf2_tnved-item.tnved-item-code = v-str-prod-code
+      714           buf2_tnved-item.tnved-item-name = trim(tt-imp.prod-name)
+      715         .
+      716         create buf2_tnved-item-attr .
+      717         assign
+      718           buf2_tnved-item-attr.tnved-code      = buf2_tnved-item.tnved-code
+      719           buf2_tnved-item-attr.tnved-item-code = buf2_tnved-item.tnved-item-code
+      720           buf2_tnved-item-attr.attr-code       = "tnved-code"
+      721           buf2_tnved-item-attr.attr-value      = trim(tt-imp.prod-tnved)
+      722         .
+      723         create buf2_tnved-item-attr .
+      724         assign
+      725           buf2_tnved-item-attr.tnved-code      = buf2_tnved-item.tnved-code
+      726           buf2_tnved-item-attr.tnved-item-code = buf2_tnved-item.tnved-item-code
+      727           buf2_tnved-item-attr.attr-code       = "parent-code"
+      728           buf2_tnved-item-attr.attr-value      = v-str-typp-code
+      729         .
+      730         create buf2_tnved-item-attr .
+      731         assign
+      732           buf2_tnved-item-attr.tnved-code      = buf2_tnved-item.tnved-code
+      733           buf2_tnved-item-attr.tnved-item-code = buf2_tnved-item.tnved-item-code
+      734           buf2_tnved-item-attr.attr-code       = "order-str"
+      735           buf2_tnved-item-attr.attr-value      = substitute("&1,&2,&3", v-str-typp-code, v-srt-prod-code, "")
+      736         .
+      737       end .
+      738       v-str-kind-code = trim(tt-imp.kind-code) .
+      739       if not can-find (first buf3_tnved-item where buf3_tnved-item.tnved-item-code = v-str-kind-code
+      740                                             and buf3_tnved-item.whole-send-news = 3) then do:
+      741         v-srt-kind-code = string(v-lines, "999999999") .
+      742         create buf3_tnved-item .
+      743         assign
+      744           buf3_tnved-item.tnved-code      = 0
+      745           buf3_tnved-item.whole-send-news = 3
+      746           buf3_tnved-item.tnved-item-code = v-str-kind-code
+      747           buf3_tnved-item.tnved-item-name = trim(tt-imp.kind-name)
+      748         .
+      749         create buf3_tnved-item-attr .
+      750         assign
+      751           buf3_tnved-item-attr.tnved-code      = buf3_tnved-item.tnved-code
+      752           buf3_tnved-item-attr.tnved-item-code = buf3_tnved-item.tnved-item-code
+      753           buf3_tnved-item-attr.attr-code       = "tnved-code"
+      754           buf3_tnved-item-attr.attr-value      = trim(tt-imp.kind-tnved)
+      755         .
+      756         create buf3_tnved-item-attr .
+      757         assign
+      758           buf3_tnved-item-attr.tnved-code      = buf3_tnved-item.tnved-code
+      759           buf3_tnved-item-attr.tnved-item-code = buf3_tnved-item.tnved-item-code
+      760           buf3_tnved-item-attr.attr-code       = "parent-code"
+      761           buf3_tnved-item-attr.attr-value      = v-str-prod-code
+      762         .
+      763         create buf3_tnved-item-attr .
+      764         assign
+      765           buf3_tnved-item-attr.tnved-code      = buf3_tnved-item.tnved-code
+      766           buf3_tnved-item-attr.tnved-item-code = buf3_tnved-item.tnved-item-code
+      767           buf3_tnved-item-attr.attr-code       = "order-str"
+      768           buf3_tnved-item-attr.attr-value      = substitute("&1,&2,&3", v-str-typp-code, v-srt-prod-code, v-srt-kind-code)
+      769         .
+      770       end .
+      771     end.
+      772     input stream f-imp close .
+      773     assign
+      774       v-wait-msg = "Импорт справочника типов продукции. Строк записано: &1"
+      775       v-lines    = 0
+      776       v-ln-prev  = v-lines + 100
+      777     .
+      778     run waitfram-show in this-procedure ("Импорт справочника типов продукции. Удаление строк.") .
+      779     define buffer buf_tnved-item      for ub.tnved-item .
+      780     define buffer buf_tnved-item-attr for ub.tnved-item-attr .
+      781     define buffer buf_tt-tnved-item-imp      for tt-tnved-item-imp .
+      782     define buffer buf_tt-tnved-item-attr-imp for tt-tnved-item-attr-imp .
+      783     do transaction on error undo, leave:
+      784       for each buf_tnved-item-attr exclusive-lock : delete buf_tnved-item-attr . end .
+      785       for each buf_tnved-item      exclusive-lock : delete buf_tnved-item .      end .
+      786     end .
+      787     for each buf_tt-tnved-item-imp :
+      788       v-lines = v-lines + 1 .
+      789       if v-lines > v-ln-prev then do:
+      790         v-ln-prev = v-lines + 100.
+      791         v-tm-curr = time.
+      792         if v-tm-prev < v-tm-curr then do:
+      793           v-tm-prev  = v-tm-curr + 1 .
+      794           run waitfram-show in this-procedure (substitute(v-wait-msg, v-lines)) .
+      795         end .
+      796       end.
+      797       do transaction on error undo, leave:
+      798         create buf_tnved-item .
+      799         buffer-copy buf_tt-tnved-item-imp to buf_tnved-item .
+      800       end .
+      801     end .
+      802     for each buf_tt-tnved-item-attr-imp :
+      803       v-lines = v-lines + 1 .
+      804       if v-lines > v-ln-prev then do:
+      805         v-ln-prev = v-lines + 100.
+      806         v-tm-curr = time.
+      807         if v-tm-prev < v-tm-curr then do:
+      808           v-tm-prev  = v-tm-curr + 1 .
+      809           run waitfram-show in this-procedure (substitute(v-wait-msg, v-lines)) .
+      810         end .
+      811       end.
+      812       do transaction on error undo, leave:
+      813         create buf_tnved-item-attr .
+      814         buffer-copy buf_tt-tnved-item-attr-imp to buf_tnved-item-attr .
+      815       end .
+      816     end .
+      817     define variable vMsg as character no-undo .
+      818     run waitfram-hide in this-procedure.
+      819   end.

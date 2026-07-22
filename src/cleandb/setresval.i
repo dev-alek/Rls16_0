@@ -1,0 +1,1 @@
+vResult = substitute("Произведена чистка таблиц: &1~nУдалено записей - &2.", "{&Tables}", vDeleted).

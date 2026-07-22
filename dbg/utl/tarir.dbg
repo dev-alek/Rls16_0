@@ -1,0 +1,135 @@
+        1   block-level on error undo, throw.
+        2   define new global shared variable g#language as character no-undo .
+        3   if g#language <> '' and g#language <> 'rus':U then do:
+        4     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+        5   end.
+        6   define input parameter parfile     as character no-undo.
+        7   define input parameter parobj-type as character no-undo.
+        8   define input parameter parobj-code as integer   no-undo.
+        9   define variable varstring as character no-undo.
+       10   define variable varcode   as integer   no-undo.
+       11   define variable varlevel  as integer   no-undo.
+       12   define variable varvolume as integer   no-undo.
+       13   define variable varprev-level  as integer   no-undo.
+       14   define variable varprev-volume as integer   no-undo.
+       15   define variable varkoeff  as decimal   no-undo.
+       16   define variable varerror  as logical initial no no-undo.
+       17   define variable varid as character no-undo.
+       18   define temp-table tt-rsrv no-undo
+       19   field code as integer
+       20   index pi is unique primary code.
+       21   define temp-table tt-tarir
+       22   field code    as   integer
+       23   field pl-code like ub.place.pl-code
+       24   field level   as   integer
+       25   field volume  as   integer
+       26   field koeff   as   decimal
+       27   index pi is unique primary code level.
+       28   define buffer bf_clients  for ub.clients.
+       29   define buffer bf_place    for ub.place.
+       30   define buffer bf_pl-level for ub.pl-level.
+       31   do on error undo, return error return-value :
+       32   if search(parfile) = ? then do:
+       33     message "Не найден файл " parfile view-as alert-box error.
+       34     return error.
+       35   end.
+       36   if parobj-type <> 'маг':U  and
+       37      parobj-type <> 'скл':U then do:
+       38     message "Указан тип объекта " parobj-type " должен быть указан склад или магазин." view-as alert-box error.
+       39     return error.
+       40   end.
+       41   find first bf_clients where bf_clients.obj-type = parobj-type and
+       42                               bf_clients.obj-code = parobj-code no-lock no-error.
+       43   if not available bf_clients then do:
+       44     message "Указан неправильный объект " parobj-type " " parobj-code " ." view-as alert-box error.
+       45     return error.
+       46   end.
+       47   define stream str-in.
+       48   input stream str-in from value(search(parfile)).
+       49   repeat :
+       50     import stream str-in unformatted varstring.
+       51     assign
+       52       varcode   = integer(entry (1, varstring, chr(9)))
+       53       varlevel  = integer(entry (2, varstring, chr(9)))
+       54       varvolume = integer(entry (3, varstring, chr(9)))
+       55     no-error.
+       56     if error-status:error = no then do:
+       57       assign
+       58         varkoeff = ?.
+       59       assign
+       60         varkoeff = decimal(entry (4, varstring, chr(9))) no-error.
+       61       find first tt-rsrv where tt-rsrv.code = varcode no-error.
+       62       if not available tt-rsrv then do:
+       63         create tt-rsrv.
+       64         assign
+       65           tt-rsrv.code = varcode.
+       66       end.
+       67       create tt-tarir.
+       68       assign
+       69         tt-tarir.code   = varcode
+       70         tt-tarir.level  = varlevel
+       71         tt-tarir.volume = varvolume
+       72         tt-tarir.koeff  = varkoeff.
+       73     end.
+       74   end.
+       75   for each tt-rsrv,
+       76      each tt-tarir where tt-tarir.code = tt-rsrv.code break by tt-tarir.code :
+       77     if first-of (tt-tarir.code) then do:
+       78       if tt-tarir.level <> 0 then do:
+       79         message "По резервуару " tt-tarir.code " первый уровень не 0." view-as alert-box error.
+       80         assign
+       81           varerror = yes.
+       82       end.
+       83     end.
+       84     else do:
+       85       if tt-tarir.level <> varprev-level + 1 then do:
+       86         message "Неверно указаны тарировочные таблицы по резервуару " tt-tarir.code " уровень " tt-tarir.level " идет после уровня " varprev-level " ."
+       87         view-as alert-box error.
+       88         assign
+       89           varerror = yes.
+       90       end.
+       91       if tt-tarir.volume <= varprev-level then do:
+       92         message "Неверно указаны тарировочные таблицы по резервуару " tt-tarir.code " уровень " tt-tarir.level " объем " tt-tarir.volume " идет после уровня " varprev-level " с объемом " varprev-volume " ."
+       93         view-as alert-box error.
+       94         assign
+       95           varerror = yes.
+       96       end.
+       97     end.
+       98     assign
+       99       varprev-level  = tt-tarir.level
+      100       varprev-volume = tt-tarir.volume.
+      101   end.
+      102   if varerror then do:
+      103     message "Во время загрузки тарировочных таблиц были ошибки. Таблицы не загружены." view-as alert-box error.
+      104     return error.
+      105   end.
+      106   for each tt-rsrv on error undo, return error return-value :
+      107     find first bf_place where bf_place.obj-type = parobj-type  and
+      108                               bf_place.obj-code = parobj-code  and
+      109                               bf_place.loc1     = string(tt-rsrv.code) no-lock no-error.
+      110     if not available bf_place then do:
+      111       message "Получены данные по резервуару с кодом " bf_place.loc1 ", но данного резервуара нет в справочнике." view-as alert-box error.
+      112       return error.
+      113     end.
+      114     for each bf_pl-level where bf_pl-level.obj-type = bf_place.obj-type and
+      115                                bf_pl-level.obj-code = bf_place.obj-code and
+      116                                bf_pl-level.pl-code  = bf_place.pl-code  on error undo, return error return-value :
+      117       delete bf_pl-level.
+      118     end.
+      119   end.
+      120   for each tt-rsrv :
+      121     find first bf_place where bf_place.obj-type = parobj-type     and
+      122                               bf_place.obj-code = parobj-code     and
+      123                               bf_place.loc1     = string(tt-rsrv.code) no-lock.
+      124     for each tt-tarir where tt-tarir.code = tt-rsrv.code :
+      125       create bf_pl-level.
+      126       assign
+      127         bf_pl-level.obj-type = bf_place.obj-type
+      128         bf_pl-level.obj-code = bf_place.obj-code
+      129         bf_pl-level.pl-code  = bf_place.pl-code
+      130         bf_pl-level.pl-level = tt-tarir.level
+      131         bf_pl-level.pl-qnty  = tt-tarir.volume.
+      132     end.
+      133   end.
+      134   end.
+      135   message "Импорт завершен успешно." view-as alert-box.

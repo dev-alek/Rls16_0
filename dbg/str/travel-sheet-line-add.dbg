@@ -1,0 +1,416 @@
+        1   def input param         parparentproc   as Widget-handle no-undo .
+        2   def input param         p-cd-doc-recid    as recid    no-undo.
+        3   def output param        p-ret-stat        as logical  no-undo.
+        4   define variable vss-revision    as character no-undo init "$Revision$":U .
+        5   define variable vss-author      as character no-undo init "$Author$":U .
+        6   define variable vss-date        as character no-undo init "$Date$":U .
+        7   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        8   define variable vss-archive     as character no-undo init "$Archive$":U .
+        9   define variable vss-description as character no-undo init "Добавление в Путевой лист факта заправки. Документы->Путевые листы".
+       10   define new global shared variable g#language as character no-undo .
+       11   if g#language <> '' and g#language <> 'rus':U then do:
+       12     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       13   end.
+       14   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       15     define variable v-cntxt-db-num        as integer   no-undo .
+       16     define variable v-cntxt-userid        as character no-undo .
+       17     define variable v-cntxt-level         as character no-undo .
+       18     define variable v-cntxt-host-code-obj as integer   no-undo .
+       19     define variable v-cntxt-obj-type      as character no-undo .
+       20     define variable v-cntxt-obj-code      as integer   no-undo .
+       21     define variable v-cntxt-db-num-obj    as integer   no-undo .
+       22     define variable v-cntxt-is-admin      as logical   no-undo .
+       23   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       24     run mainmenu_getcntxt in parparentproc
+       25       (output v-cntxt-db-num
+       26       ,output v-cntxt-userid
+       27       ,output v-cntxt-level
+       28       ,output v-cntxt-host-code-obj
+       29       ,output v-cntxt-obj-type
+       30       ,output v-cntxt-obj-code
+       31       ,output v-cntxt-db-num-obj
+       32       ,output v-cntxt-is-admin
+       33       ) .
+       34   procedure update-or-create-travel-sheet:
+       35       def input-output param p-rec-id      as recid    no-undo.
+       36       def input param p-ts-num      as char     no-undo.
+       37       def input param p-ts-date     as date     no-undo.
+       38       def input param p-pf          as decimal  no-undo.
+       39       def input param p-fuel-code   as int      no-undo.
+       40       def input param p-card-code   as char     no-undo.
+       41       def input param p-stat        as logical  no-undo.
+       42       def buffer buf_cd-doc   for ub.cd-doc.
+       43       def buffer buf_goods    for ub.goods.
+       44       def buffer buf_dis-card for ub.dis-card.
+       45       if p-fuel-code = 0 then
+       46           return error "Топлево не указано".
+       47       if trim(p-card-code) = "" then
+       48           return error "Дисконтная карта не указана".
+       49       if p-pf = 0 then
+       50           return error "Разрешенный налив должен быть больше 0".
+       51       if trim(p-ts-num) = "" then
+       52           return error "Номер ПЛ не должен быть пустым".
+       53       for each buf_cd-doc no-lock
+       54           where buf_cd-doc.CharKey_One = p-ts-num
+       55           and buf_cd-doc.doc-type = 'путевой-лист':U
+       56           and buf_cd-doc.obj-code = v-cntxt-obj-code
+       57           and buf_cd-doc.obj-type = v-cntxt-obj-type
+       58           and recid(buf_cd-doc) <> p-rec-id:
+       59               return error "уже есть ПЛ с номером " + p-ts-num.
+       60       end.
+       61       find first buf_goods no-lock
+       62           where buf_goods.gds-code = p-fuel-code
+       63           no-error.
+       64       if not avail buf_goods then
+       65           return error "не удалось найти топливо по gds коду = " + string(p-fuel-code).
+       66       find first buf_dis-card no-lock
+       67           where buf_dis-card.d-card = p-card-code
+       68           no-error.
+       69       if not avail buf_dis-card then
+       70           return error "не удалось найти дисконтную карту".
+       71       if p-rec-id = 0 then do:
+       72           create buf_cd-doc.
+       73           assign
+       74               buf_cd-doc.Key#_One = 0
+       75           .
+       76       end.
+       77       else do:
+       78           find first buf_cd-doc
+       79               where recid(buf_cd-doc) = p-rec-id
+       80               no-error.
+       81           if not avail buf_cd-doc then
+       82               return error "Не найдена запись с recid = " + string(p-rec-id).
+       83           if buf_cd-doc.doc-type <> 'путевой-лист':U then
+       84               return error "Запись с recid = " + string(p-rec-id) + " не является ПЛ".
+       85           if buf_cd-doc.Key#_One = 1 then
+       86               return error "Документ с recid = " + string(p-rec-id) + " переведен в статус Закрыт, изменение не возможно".
+       87       end.
+       88       assign
+       89           buf_cd-doc.obj-type     = v-cntxt-obj-type      when p-rec-id = 0
+       90           buf_cd-doc.obj-code     = v-cntxt-obj-code      when p-rec-id = 0
+       91           buf_cd-doc.pos-type     = ""                    when p-rec-id = 0
+       92           buf_cd-doc.doc-type     = 'путевой-лист':U       when p-rec-id = 0
+       93           buf_cd-doc.doc-code     = string(next-value(s-file-num-2)) when p-rec-id = 0
+       94           buf_cd-doc.datekey_one  = p-ts-date       when p-ts-date <> ?
+       95           buf_cd-doc.CharKey_One  = p-ts-num        when p-ts-num <> ?
+       96           buf_cd-doc.CharKey_Two  = p-card-code     when p-card-code <> ?
+       97           buf_cd-doc.Key#_Two     = p-fuel-code     when p-fuel-code <> ?
+       98           buf_cd-doc.DecKey_One   = p-pf            when p-pf <> ?
+       99           buf_cd-doc.Key#_One     = integer(p-stat) when p-stat <> ?
+      100       .
+      101       p-rec-id = recid(buf_cd-doc).
+      102   end.
+      103   procedure delete-travel-sheet:
+      104       def input param p-rid as recid no-undo.
+      105       def buffer buf_cd-doc for       ub.cd-doc.
+      106       def buffer buf_cd-doc-line for  ub.cd-doc-line.
+      107       find first buf_cd-doc share-lock
+      108           where recid(buf_cd-doc) = p-rid
+      109           no-error.
+      110       if not avail buf_cd-doc then
+      111           return error "Запись для удаления не найдена, recid = " + string(p-rid).
+      112       for each buf_cd-doc-line no-lock
+      113           where buf_cd-doc-line.doc-type = 'путевой-лист':U
+      114           and buf_cd-doc-line.doc-code = buf_cd-doc.doc-code
+      115           and buf_cd-doc-line.obj-code = buf_cd-doc.obj-code
+      116           and buf_cd-doc-line.obj-type = buf_cd-doc.obj-type
+      117           :
+      118               return error "Нельзя удалять путевые листы, для которых есть данные о заправках".
+      119       end.
+      120       delete buf_cd-doc.
+      121   end.
+      122   procedure create-travel-sheet-line:
+      123       def input param p-travel-sheet-recid as recid no-undo.
+      124       def input param p-vol as decimal no-undo.
+      125       def input param p-doc-code as char no-undo.
+      126       def input param p-rfn as char no-undo.
+      127       def input param p-stat as logical no-undo.
+      128       def output param p-rec-id as recid no-undo.
+      129       def buffer buf_chk-doc for ub.chk-doc.
+      130       def buffer buf_cd-doc for ub.cd-doc.
+      131       def buffer buf_cd-doc-line for ub.cd-doc-line.
+      132       def var line-num as int no-undo init 0.
+      133       def var head-fact as dec no-undo init 0.
+      134       def var head-blocked as dec no-undo init 0.
+      135       def var for-del as logical no-undo init false.
+      136       p-rec-id = 0.
+      137       if p-vol = 0 then
+      138           return error "Объем не может быть равным 0".
+      139       if p-doc-code = "" and p-stat then
+      140           return error "Чек не указан".
+      141       find first buf_cd-doc
+      142           where recid(buf_cd-doc) = p-travel-sheet-recid
+      143           no-error.
+      144       if not avail buf_cd-doc then
+      145           return error "Не удалось найти cd-doc по recid = " + string(p-travel-sheet-recid).
+      146       if buf_cd-doc.Key#_One = 1 then
+      147           return error "Путевой лист закрыт".
+      148       if p-rfn = ? then p-rfn = "".
+      149       for each buf_cd-doc-line
+      150           where buf_cd-doc-line.obj-code = buf_cd-doc.obj-code
+      151           and buf_cd-doc-line.obj-type = buf_cd-doc.obj-type
+      152           and buf_cd-doc-line.doc-code = buf_cd-doc.doc-code
+      153           and buf_cd-doc-line.doc-type = 'путевой-лист':U:
+      154               for-del = false.
+      155               if p-rfn <> "" and buf_cd-doc-line.CharKey_Two = p-rfn and buf_cd-doc-line.Key#_One = 0 then
+      156                   for-del = true.
+      157               else if buf_cd-doc-line.Key#_One = 0 then
+      158                   for-del = true.
+      159               if for-del then
+      160                   delete buf_cd-doc-line.
+      161               else do:
+      162                   if buf_cd-doc-line.DecKey_One = 0 then
+      163                       head-blocked = head-blocked + buf_cd-doc-line.DecKey_One.
+      164                   else
+      165                       head-fact = head-fact + buf_cd-doc-line.DecKey_One.
+      166                   line-num = buf_cd-doc-line.line-num.
+      167               end.
+      168       end.
+      169       line-num = line-num + 1.
+      170       if p-stat then
+      171           head-fact = head-fact + p-vol.
+      172       else
+      173           head-blocked = head-blocked + p-vol.
+      174       buf_cd-doc.DecKey_Two = head-fact.
+      175       buf_cd-doc.DecKey_Three = head-blocked.
+      176       if head-fact >= buf_cd-doc.DecKey_One then
+      177           buf_cd-doc.Key#_One = 1.
+      178       create buf_cd-doc-line.
+      179       assign
+      180           buf_cd-doc-line.doc-type = 'путевой-лист':U
+      181           buf_cd-doc-line.doc-code = buf_cd-doc.doc-code
+      182           buf_cd-doc-line.obj-code = buf_cd-doc.obj-code
+      183           buf_cd-doc-line.obj-type = buf_cd-doc.obj-type
+      184           buf_cd-doc-line.pos-type = ""
+      185           buf_cd-doc-line.line-num = line-num
+      186           buf_cd-doc-line.DecKey_One = p-vol.
+      187           buf_cd-doc-line.CharKey_Two = p-rfn.
+      188           buf_cd-doc-line.CharKey_Three = p-doc-code.
+      189           buf_cd-doc-line.Key#_One = integer(p-stat).
+      190       .
+      191       p-rec-id = recid(buf_cd-doc-line).
+      192   end.
+      193   procedure vss-get-info :
+      194     define output parameter p-vss-revision    like vss-revision    no-undo .
+      195     define output parameter p-vss-author      like vss-author      no-undo .
+      196     define output parameter p-vss-date        like vss-date        no-undo .
+      197     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+      198     define output parameter p-vss-archive     like vss-archive     no-undo .
+      199     define output parameter p-vss-description like vss-description no-undo .
+      200     assign
+      201       p-vss-revision    = vss-revision
+      202       p-vss-author      = vss-author
+      203       p-vss-date        = vss-date
+      204       p-vss-workfile    = vss-workfile
+      205       p-vss-archive     = vss-archive
+      206       p-vss-description = vss-description
+      207     .
+      208   end procedure.
+      209   procedure vss-get-parameters :
+      210     define output parameter p-vss-parameters as character no-undo .
+      211   end procedure.
+      212   define new global shared variable g#vssrevis-logger as handle    no-undo .
+      213   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+      214   define variable v-vssrevis-logger                   as handle    no-undo .
+      215   procedure vss-logevent :
+      216     define input  parameter p-extra-paramters as character no-undo .
+      217     define variable v-vssrevis-parameters as character no-undo .
+      218     do
+      219     on error undo, return error return-value
+      220     :
+      221       if  valid-handle(v-vssrevis-logger)
+      222       and v-vssrevis-logger :get-signature("logevent") <> ""
+      223       then do:
+      224         run vss-get-parameters in this-procedure
+      225           (output v-vssrevis-parameters
+      226           ).
+      227         run logevent in v-vssrevis-logger
+      228           (input vss-workfile
+      229           ,input vss-revision
+      230           ,input v-vssrevis-parameters
+      231           ,input p-extra-paramters
+      232           ).
+      233       end.
+      234     end.
+      235   end procedure.
+      236   assign
+      237     v-vssrevis-logger = g#vssrevis-logger
+      238   .
+      239   if  valid-handle(v-vssrevis-logger)
+      240   and v-vssrevis-logger :get-signature("logevent") <> ""
+      241   then do:
+      242     assign
+      243       v-vssrevis-logevent = true
+      244     .
+      245     run vss-logevent in this-procedure (input vss-description) .
+      246   end.
+      247   procedure proc-alt-shift-f2:
+      248     if not ibs.th.gbl.gbl-var:rcode
+      249   then
+      250     run gbl\inidebug.p .
+      251   end.
+      252   procedure proc-alt-shift-f3:
+      253     run gbl/prvssinf.p
+      254       ( input this-procedure
+      255       ) .
+      256   end.
+      257   define variable v-inform-launched as logical no-undo initial false .
+      258   procedure proc-alt-shift-f4:
+      259     define variable v-action as character no-undo .
+      260     if v-inform-launched = false then do:
+      261       assign
+      262         v-inform-launched = true
+      263       .
+      264       run gbl/d-inform.w
+      265         (  input self
+      266         ,  input this-procedure
+      267         , output v-action
+      268         ) no-error .
+      269       run gbl/infrmact.p (input self, input this-procedure, input v-action) no-error .
+      270       assign
+      271         v-inform-launched = false
+      272       .
+      273     end.
+      274   end.
+      275   procedure proc-alt-f1:
+      276     run gbl/corrhelp.p
+      277       (input this-procedure
+      278       ) .
+      279   end .
+      280   on alt-shift-f2 anywhere do:
+      281     run proc-alt-shift-f2.
+      282   end.
+      283   on alt-shift-f3 anywhere do:
+      284     run proc-alt-shift-f3 in this-procedure .
+      285   end.
+      286   on alt-shift-f4 anywhere do:
+      287     run proc-alt-shift-f4 in this-procedure.
+      288   end.
+      289   on alt-f1 anywhere do:
+      290     run proc-alt-f1 in this-procedure .
+      291   end.
+      292   p-ret-stat = false.
+      293   DEFINE BUTTON Btn_Cancel AUTO-END-KEY
+      294        LABEL "Отмена"
+      295        SIZE 10 BY 1
+      296        BGCOLOR 8 .
+      297   DEFINE BUTTON Btn_OK AUTO-GO
+      298        LABEL "Ввод"
+      299        SIZE 10 BY 1
+      300        BGCOLOR 8 .
+      301   DEFINE BUTTON BUTTON-sel-chk
+      302        IMAGE-UP FILE "btn-down-arrow":U
+      303        IMAGE-DOWN FILE "btn-down-arrow":U
+      304        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+      305        LABEL ""
+      306        SIZE 3 BY 1.
+      307   DEFINE VARIABLE chk AS CHARACTER FORMAT "X(256)":U
+      308        LABEL "Чек"
+      309        VIEW-AS FILL-IN
+      310        SIZE 20 BY 1 NO-UNDO.
+      311   DEFINE VARIABLE rfn AS CHARACTER FORMAT "X(256)":U
+      312        LABEL "RFN"
+      313        VIEW-AS FILL-IN
+      314        SIZE 20 BY 1 NO-UNDO.
+      315   DEFINE VARIABLE volume AS DECIMAL FORMAT "->>,>>9.99":U INITIAL 0
+      316        LABEL "Объем"
+      317        VIEW-AS FILL-IN
+      318        SIZE 20 BY 1 NO-UNDO.
+      319   DEFINE FRAME Dialog-Frame
+      320        Btn_OK AT ROW 1 COL 2
+      321        Btn_Cancel AT ROW 1 COL 12
+      322        volume AT ROW 2.91 COL 9 COLON-ALIGNED WIDGET-ID 2
+      323        rfn AT ROW 4.33 COL 9 COLON-ALIGNED WIDGET-ID 8
+      324        chk AT ROW 5.76 COL 9 COLON-ALIGNED WIDGET-ID 4
+      325        BUTTON-sel-chk AT ROW 5.76 COL 32 WIDGET-ID 6
+      326        SPACE(3.19) SKIP(0.94)
+      327       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+      328            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+      329            TITLE "Ввод заправки"
+      330            DEFAULT-BUTTON Btn_OK CANCEL-BUTTON Btn_Cancel WIDGET-ID 100.
+      331   ASSIGN
+      332          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+      333          FRAME Dialog-Frame:HIDDEN           = TRUE.
+      334   ASSIGN
+      335          chk:READ-ONLY IN FRAME Dialog-Frame        = TRUE.
+      336   ON WINDOW-CLOSE OF FRAME Dialog-Frame
+      337   DO:
+      338     APPLY "END-ERROR":U TO SELF.
+      339   END.
+      340   ON CHOOSE OF Btn_OK IN FRAME Dialog-Frame
+      341   DO:
+      342       def var rid as recid no-undo.
+      343       assign frame Dialog-Frame
+      344           volume
+      345           rfn
+      346           chk
+      347       .
+      348       run create-travel-sheet-line(
+      349                 p-cd-doc-recid
+      350               , volume
+      351               , chk
+      352               , rfn
+      353               , true
+      354               , output rid
+      355       ) no-error.
+      356       if error-status:ERROR then do:
+      357           message return-value view-as alert-box.
+      358           return no-apply.
+      359       end.
+      360       else
+      361           p-ret-stat = true.
+      362   END.
+      363   ON CHOOSE OF BUTTON-sel-chk IN FRAME Dialog-Frame
+      364   DO:
+      365       def var rid-list as char no-undo.
+      366       run str/chk-docs.w (
+      367                    input parparentproc
+      368                   ,input "b-sel":U
+      369                   ,input 'объект':U
+      370                   ,input ?
+      371                   ,input v-cntxt-obj-type
+      372                   ,input v-cntxt-obj-code
+      373                   ,input ?
+      374                   ,input "":U
+      375                   ,input 0
+      376                   ,input ?
+      377                   ,input ?
+      378                   ,input 0
+      379                   ,output rid-list
+      380                   ).
+      381       if num-entries(rid-list) = 0 then return.
+      382       find first ub.chk-doc no-lock
+      383           where recid(ub.chk-doc) = integer(rid-list).
+      384       chk = ub.chk-doc.doc-code.
+      385       disp chk with frame Dialog-Frame.
+      386   END.
+      387   IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+      388   THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+      389   MAIN-BLOCK:
+      390   DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+      391      ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+      392     run my-init no-error.
+      393     if error-status:ERROR then do:
+      394         message return-value view-as alert-box.
+      395         return.
+      396     end.
+      397     RUN enable_UI.
+      398     WAIT-FOR GO OF FRAME Dialog-Frame FOCUS volume.
+      399   END.
+      400   RUN disable_UI.
+      401   PROCEDURE disable_UI :
+      402     HIDE FRAME Dialog-Frame.
+      403   END PROCEDURE.
+      404   PROCEDURE enable_UI :
+      405     DISPLAY volume rfn chk
+      406         WITH FRAME Dialog-Frame.
+      407     ENABLE Btn_OK Btn_Cancel volume rfn chk BUTTON-sel-chk
+      408         WITH FRAME Dialog-Frame.
+      409     VIEW FRAME Dialog-Frame.
+      410   END PROCEDURE.
+      411   PROCEDURE my-init :
+      412   find first ub.cd-doc no-lock
+      413           where recid(ub.cd-doc) = p-cd-doc-recid
+      414           no-error.
+      415       if not avail ub.cd-doc then return error "Не удалось найти cd-doc с recid = " + string(p-cd-doc-recid).
+      416   END PROCEDURE.

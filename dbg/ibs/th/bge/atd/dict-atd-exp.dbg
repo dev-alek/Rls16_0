@@ -1,0 +1,383 @@
+        1   using Progress.Lang.*.
+        2   class ibs.th.bge.atd.dict-atd-exp:
+        3      define private property pFilePath    as character no-undo get. set.
+        4      define private property pCurDbNum    as int64     no-undo get. set.
+        5      define private property pCurObjType  as character no-undo get. set.
+        6      define private property pCurObjCode  as int64     no-undo get. set.
+        7      define private property pAtdReg      as character no-undo get. set.
+        8      define temp-table ttgoods no-undo
+        9         field gcode as int64 label "GlobalCode"
+       10         field lcode as int64 label "LocalCode"
+       11      index ndx gcode.
+       12      define temp-table ttclients no-undo
+       13         field objname as character label "Name_Object"
+       14         field objcode as int64     label "SiteID"
+       15         field objaddr as character label "Address"
+       16      index ndx objname.
+       17      define temp-table ttcashdesks no-undo
+       18         field objip       as character label "IP"
+       19         field objname     as int64     label "Name"
+       20         field objsiteid   as int64     label "NObjectId_Name"
+       21         field cash-type   as integer   label "cash_type"
+       22      index ndx objip.
+       23      define temp-table tttanks no-undo
+       24         field objnum   as int64       label "TankNumber"
+       25         field objgrade as int64       label "Grade"
+       26         field objname  as character   label "Grade_Name"
+       27         field max-volume  as decimal  label "Max_volume"
+       28         field water-level as character label "WaterLevel_Allow"
+       29         field water-alarm as character label "water_alarm"
+       30         field level-alarm as character label "level_alarm"
+       31      index ndx objnum.
+       32      define temp-table ttsched no-undo
+       33         field water-sched as int64  label "water_sched"
+       34         field level-sched as int64  label "level_sched"
+       35      .
+       36      constructor public dict-atd-exp (iFilePath as character,
+       37                                       iDbNum    as int64,
+       38                                       iObjType  as character,
+       39                                       iObjCode  as int64):
+       40         define variable vPType as character no-undo.
+       41         run gbl/conf-rd.p ("atd-reg","","",0,"","","",yes,output pAtdReg,output vPType) no-error.
+       42         assign
+       43            pFilePath   = iFilePath
+       44            pCurDbNum   = iDbNum
+       45            pCurObjType = iObjType
+       46            pCurObjCode = iObjCode
+       47         .
+       48         if not valid-handle (ibs.th.gbl.gbl-hndllib:g#lib-trn)
+       49         then run str/lib-trn.p persistent no-error .
+       50      end constructor.
+       51      constructor public dict-atd-exp (iDbNum    as int64,
+       52                                       iObjType  as character,
+       53                                       iObjCode  as int64):
+       54         define variable vPType as character no-undo.
+       55         run gbl/conf-rd.p ("atd-reg","","",0,"","","",no,output pAtdReg,output vPType) no-error.
+       56         assign
+       57            pCurDbNum   = iDbNum
+       58            pCurObjType = iObjType
+       59            pCurObjCode = iObjCode
+       60         .
+       61         if not valid-handle (ibs.th.gbl.gbl-hndllib:g#lib-trn)
+       62         then run str/lib-trn.p persistent no-error .
+       63      end constructor.
+       64      destructor dict-atd-exp():
+       65      end destructor.
+       66      method void WriteFile(input iFileName as char, input iContents as longchar):
+       67         copy-lob iContents to file iFileName.
+       68      end method.
+       69      method public void RunFileTask():
+       70         if pCurObjType <> 'маг' then do:
+       71            message substitute("Выгрузка по объекту типа : &1 не производится!",pFilePath)
+       72            view-as alert-box.
+       73            return.
+       74         end.
+       75         if pAtdReg = '' or pAtdReg = ? then do:
+       76            message "Выгрузка при выключенном параметре atd-reg не производится!"
+       77            view-as alert-box.
+       78            return.
+       79         end.
+       80         CrtReCodesTable().
+       81         CrtNObjectTable().
+       82         CrtNCassaTable().
+       83         CrtNTankTable().
+       84         CrtNSchedTable().
+       85         WriteFile(pFilePath + "\ReCodesTables.tbl",ExpJson(temp-table ttgoods:handle)).
+       86         WriteFile(pFilePath + "\NObject.tbl",ExpJson(temp-table ttclients:handle)).
+       87         WriteFile(pFilePath + "\NCassa.tbl",ExpJson(temp-table ttcashdesks:handle)).
+       88         WriteFile(pFilePath + "\NTank.tbl",ExpJson(temp-table tttanks:handle)).
+       89         WriteFile(pFilePath + "\NSched.tbl",ExpJson(temp-table ttsched:handle)).
+       90         message substitute("Выгрузка в &1 завершена!",pFilePath)
+       91         view-as alert-box.
+       92      end method.
+       93      method public longchar GetReCodesTable():
+       94         CrtReCodesTable().
+       95         return ExpJson(temp-table ttgoods:handle).
+       96      end method.
+       97      method public longchar GetNObjectTable():
+       98         CrtNObjectTable().
+       99         return ExpJson(temp-table ttclients:handle).
+      100      end method.
+      101      method public longchar GetNCassaTable():
+      102         CrtNCassaTable().
+      103         return ExpJson(temp-table ttcashdesks:handle).
+      104      end method.
+      105      method public longchar GetNTankTable():
+      106         CrtNTankTable().
+      107         return ExpJson(temp-table tttanks:handle).
+      108      end method.
+      109      method public longchar GetNSchedTable():
+      110         CrtNSchedTable().
+      111         return ExpJson(temp-table ttsched:handle).
+      112      end method.
+      113      method private void CrtReCodesTable():
+      114         define buffer bgoods    for ub.goods.
+      115         define buffer bbar-code for ub.bar-code.
+      116         define buffer bprod-bc  for ub.prod-bc.
+      117         define variable vIsPetrol  as logical no-undo init yes.
+      118         define variable vIsPieces  as logical no-undo.
+      119         loop:
+      120         for each bgoods where  bgoods.stts = 0
+      121         no-lock:
+      122   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_is-petrl in ibs.th.gbl.gbl-hndllib:g#lib-trn
+      123     (
+      124        input bgoods.artic
+      125     ,  input bgoods.prod-type
+      126     ,  input bgoods.prod-code
+      127     , output vIsPetrol
+      128     , output vIsPieces
+      129     ) .
+      130            if not vIsPetrol then next loop.
+      131            for each bbar-code where bbar-code.gds-code = bgoods.gds-code
+      132            no-lock,
+      133               each bprod-bc where bprod-bc.b-code = bbar-code.b-code
+      134               no-lock:
+      135                  create ttgoods.
+      136                  assign
+      137                     ttgoods.gcode = bgoods.gds-code
+      138                     ttgoods.lcode = int64(bprod-bc.b-str)
+      139                  .
+      140            end.
+      141         end.
+      142      end method.
+      143      method private void CrtNObjectTable():
+      144         define buffer bclients  for ub.clients.
+      145         define buffer bshop     for ub.shop.
+      146         define buffer bfirm     for ub.firm.
+      147         define buffer bperson   for ub.person.
+      148         define variable vAddr   as character no-undo.
+      149         define variable vN      as int64     no-undo.
+      150         assign
+      151            vAddr = pAtdReg
+      152            vN = length(vAddr)
+      153         .
+      154         if vN < 3 then vAddr = fill("0", 3 - vN) + vAddr.
+      155         for first bclients where bclients.obj-type = pCurObjType
+      156                              and bclients.obj-code = pCurObjCode
+      157                              and bclients.stts     = 0
+      158         no-lock,
+      159            first bshop where bshop.obj-code = bclients.obj-code
+      160            no-lock:
+      161               create ttclients.
+      162               assign
+      163                  ttclients.objname = replace(bclients.obj-name, '"', "&quot;")
+      164                  ttclients.objcode = bclients.obj-code
+      165                  ttclients.objaddr = vAddr
+      166               .
+      167         end.
+      168      end method.
+      169      method private void CrtNCassaTable():
+      170         define buffer bclients    for ub.clients.
+      171         define buffer bcash-desk  for ub.cash-desk.
+      172         define buffer buf_cash-desk-attr for ub.cash-desk-attr .
+      173         for first bclients where bclients.obj-type = pCurObjType
+      174                              and bclients.obj-code = pCurObjCode
+      175                              and bclients.stts     = 0
+      176         no-lock,
+      177            each bcash-desk where bcash-desk.obj-code = bclients.obj-code
+      178                              and bcash-desk.is-del   = no
+      179            no-lock:
+      180               create ttcashdesks.
+      181               assign
+      182                  ttcashdesks.objname    = bcash-desk.cash-num
+      183                  ttcashdesks.objip      = FilterIPandPort(bcash-desk.addr-path)
+      184                  ttcashdesks.objsiteid  = bclients.obj-code
+      185                  ttcashdesks.cash-type  = bcash-desk.device-kind
+      186               .
+      187            end.
+      188      end method.
+      189      method private void CrtNTankTable():
+      190         define buffer bclients  for ub.clients.
+      191         define buffer bpl-gds   for ub.pl-gds.
+      192         define buffer bbar-code for ub.bar-code.
+      193         define buffer bprod-bc  for ub.prod-bc.
+      194         define buffer bplace    for ub.place.
+      195         define buffer bgoods    for ub.goods.
+      196         define buffer bshift-obj for ub.shift-obj.
+      197         define buffer bplace-attr for ub.place-attr.
+      198         define variable v-attr-shift-date   as date     no-undo .
+      199         define variable v-attr-shift-num    as integer  no-undo .
+      200         for each bplace where bplace.obj-type = pCurObjType
+      201                           and bplace.obj-code = pCurObjCode
+      202                           and bplace.status_  = ''
+      203         no-lock,
+      204            each bpl-gds where bpl-gds.obj-type = bplace.obj-type
+      205                           and bpl-gds.pl-code  = bplace.pl-code
+      206            no-lock,
+      207               first bbar-code where bbar-code.b-code = bpl-gds.gds-code
+      208               no-lock,
+      209                  first bgoods where bgoods.gds-code = bpl-gds.gds-code
+      210                  no-lock:
+      211                  find first bprod-bc where bprod-bc.b-code = bbar-code.b-code
+      212                  no-lock no-error.
+      213                  create tttanks.
+      214                  assign
+      215                     tttanks.objnum    = int64(bplace.loc1)
+      216                     tttanks.objgrade  = if available bprod-bc
+      217                                         then int64(bprod-bc.b-str)
+      218                                         else bbar-code.b-code
+      219                     tttanks.objname   = bgoods.gds-name
+      220                     tttanks.max-volume = bplace.max-qnty
+      221                  no-error.
+      222                  find first bplace-attr no-lock where bplace-attr.attr-code   = "water-level"
+      223                                                   and bplace-attr.obj-code    = bplace.obj-code
+      224                                                   and bplace-attr.obj-type    = bplace.obj-type
+      225                                                   and bplace-attr.pl-code     = bplace.pl-code
+      226                                                   no-error .
+      227                  if not available bplace-attr
+      228                  or bplace-attr.attr-value = ?
+      229                  or bplace-attr.attr-value = "?"
+      230                  then do :
+      231                    assign tttanks.water-level = "" .
+      232                  end .
+      233                  else do :
+      234                    assign tttanks.water-level = bplace-attr.attr-value .
+      235                  end .
+      236                  find first bshift-obj where bshift-obj.obj-type = bplace.obj-type
+      237                                          and bshift-obj.obj-code = bplace.obj-code
+      238                                          and bshift-obj.status_ = 'тек':U
+      239                                          use-index stts no-lock no-error .
+      240                  if not available bshift-obj
+      241                  then do :
+      242                    assign
+      243                      tttanks.level-alarm = "enable"
+      244                      tttanks.water-alarm = "enable"
+      245                    .
+      246                  end .
+      247                  else do :
+      248                    find first bplace-attr no-lock where bplace-attr.attr-code   = "disable-water-alarm"
+      249                                                     and bplace-attr.obj-code    = bplace.obj-code
+      250                                                     and bplace-attr.obj-type    = bplace.obj-type
+      251                                                     and bplace-attr.pl-code     = bplace.pl-code
+      252                                                     no-error .
+      253                    if not available bplace-attr
+      254                    or num-entries(bplace-attr.attr-value, chr(4)) <> 3
+      255                    then do :
+      256                      assign
+      257                        tttanks.water-alarm = "enable"
+      258                      .
+      259                    end .
+      260                    else do :
+      261                      v-attr-shift-date = date(entry(2, bplace-attr.attr-value, chr(4))) .
+      262                      v-attr-shift-num = integer(entry(3, bplace-attr.attr-value, chr(4))) .
+      263                      if v-attr-shift-date = bshift-obj.shift-date
+      264                      and v-attr-shift-num = bshift-obj.shift-num
+      265                      then do :
+      266                        assign
+      267                          tttanks.water-alarm = entry(1, bplace-attr.attr-value, chr(4))
+      268                        .
+      269                      end .
+      270                      else do :
+      271                        assign
+      272                          tttanks.water-alarm = "enable"
+      273                        .
+      274                      end .
+      275                    end .
+      276                    find first bplace-attr no-lock where bplace-attr.attr-code   = "disable-level-alarm"
+      277                                                     and bplace-attr.obj-code    = bplace.obj-code
+      278                                                     and bplace-attr.obj-type    = bplace.obj-type
+      279                                                     and bplace-attr.pl-code     = bplace.pl-code
+      280                                                     no-error .
+      281                    if not available bplace-attr
+      282                    or num-entries(bplace-attr.attr-value, chr(4)) <> 3
+      283                    then do :
+      284                      assign
+      285                        tttanks.level-alarm = "enable"
+      286                      .
+      287                    end .
+      288                    else do :
+      289                      v-attr-shift-date = date(entry(2, bplace-attr.attr-value, chr(4))) .
+      290                      v-attr-shift-num = integer(entry(3, bplace-attr.attr-value, chr(4))) .
+      291                      if v-attr-shift-date = bshift-obj.shift-date
+      292                      and v-attr-shift-num = bshift-obj.shift-num
+      293                      then do :
+      294                        assign
+      295                          tttanks.level-alarm = entry(1, bplace-attr.attr-value, chr(4))
+      296                        .
+      297                      end .
+      298                      else do :
+      299                        assign
+      300                          tttanks.level-alarm = "enable"
+      301                        .
+      302                      end .
+      303                    end .
+      304                  end .
+      305         end.
+      306      end method.
+      307      method private void CrtNSchedTable():
+      308         define buffer bclients for ub.clients .
+      309         define buffer bclients-attr for ub.clients-attr .
+      310         for first bclients where bclients.obj-type = pCurObjType
+      311                              and bclients.obj-code = pCurObjCode
+      312                              and bclients.stts     = 0
+      313         no-lock,
+      314            first bclients-attr where bclients-attr.obj-type = bclients.obj-type
+      315                                  and bclients-attr.obj-code = bclients.obj-code
+      316                                  and bclients-attr.attr-code = 'atd-alarm-schedule':U
+      317                                  and bclients-attr.attr-value > ""
+      318            exclusive-lock:
+      319               create ttsched .
+      320               assign
+      321                  ttsched.water-sched = integer(entry(1, bclients-attr.attr-value)) * 60
+      322                  ttsched.level-sched = integer(entry(2, bclients-attr.attr-value)) * 60
+      323               .
+      324               bclients-attr.attr-value = "" .
+      325         end.
+      326      end method.
+      327      method private longchar ExpJson(input hTab as handle):
+      328         define variable vI    as int64    no-undo.
+      329         define variable vBuff as handle   no-undo.
+      330         define variable vQry  as handle   no-undo.
+      331         define variable vRes  as longchar no-undo init "".
+      332         if not hTab:has-records then return vRes.
+      333         vRes = vRes + "~[".
+      334         create query vQry.
+      335         vBuff = hTab:default-buffer-handle.
+      336         vQry:set-buffers(vBuff).
+      337         vQry:query-prepare(substitute("FOR EACH &1",hTab:name)).
+      338         vQry:query-open.
+      339         vQry:get-next().
+      340         loop:
+      341         repeat:
+      342            vRes = vRes + "~{".
+      343            do vI = 1 to vBuff:num-fields:
+      344               vRes = vRes +
+      345                  quoter(vBuff:buffer-field[vI]:label) + ":" +
+      346                  quoter(vBuff:buffer-field[vI]:buffer-value).
+      347               if vI <> vBuff:num-fields then
+      348                  vRes = vRes + ",".
+      349            end.
+      350            vRes = vRes + "~}".
+      351            vQry:get-next().
+      352            if not vQry:query-off-end then vRes = vRes + ",".
+      353            else leave loop.
+      354         end.
+      355         vQry:query-close().
+      356         delete object vQry.
+      357         vRes = vRes + "~]".
+      358         return vRes.
+      359      end method.
+      360      method private char FilterIPandPort( input iStr as character ):
+      361         define variable vRes as character   no-undo.
+      362         define variable vI   as int64       no-undo init 1.
+      363         define variable vC   as character   no-undo.
+      364         do while (vI <= length(iStr)):
+      365            vC = substring(iStr,vI,1).
+      366            if vC >= '0' and vC <= '9' then leave.
+      367            vI = vI + 1.
+      368         end.
+      369         if vI < length(iStr) then do:
+      370            vRes = substring(iStr,vI).
+      371            vI = length(vRes).
+      372            do while (vI > 0):
+      373               vC = substring(vRes,vI,1).
+      374               if vC >= '0' and vC <= '9' then leave.
+      375               vI = vI - 1.
+      376            end.
+      377            if vI > 0 then do:
+      378               vRes = substring(vRes,1,vI).
+      379            end.
+      380         end.
+      381         return vRes.
+      382      end method.
+      383   end class.

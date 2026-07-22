@@ -1,0 +1,476 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: fi-buhac.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: ref/fi-buhac.p $":U .
+        7   define variable vss-description as character no-undo init "Импорт из бухгалтерии Корреспондирующих счетов.    ".
+        8   procedure vss-get-info :
+        9     define output parameter p-vss-revision    like vss-revision    no-undo .
+       10     define output parameter p-vss-author      like vss-author      no-undo .
+       11     define output parameter p-vss-date        like vss-date        no-undo .
+       12     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       13     define output parameter p-vss-archive     like vss-archive     no-undo .
+       14     define output parameter p-vss-description like vss-description no-undo .
+       15     assign
+       16       p-vss-revision    = vss-revision
+       17       p-vss-author      = vss-author
+       18       p-vss-date        = vss-date
+       19       p-vss-workfile    = vss-workfile
+       20       p-vss-archive     = vss-archive
+       21       p-vss-description = vss-description
+       22     .
+       23   end procedure.
+       24   procedure vss-get-parameters :
+       25     define output parameter p-vss-parameters as character no-undo .
+       26   end procedure.
+       27   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       28   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       29   define variable v-vssrevis-logger                   as handle    no-undo .
+       30   procedure vss-logevent :
+       31     define input  parameter p-extra-paramters as character no-undo .
+       32     define variable v-vssrevis-parameters as character no-undo .
+       33     do
+       34     on error undo, return error return-value
+       35     :
+       36       if  valid-handle(v-vssrevis-logger)
+       37       and v-vssrevis-logger :get-signature("logevent") <> ""
+       38       then do:
+       39         run vss-get-parameters in this-procedure
+       40           (output v-vssrevis-parameters
+       41           ).
+       42         run logevent in v-vssrevis-logger
+       43           (input vss-workfile
+       44           ,input vss-revision
+       45           ,input v-vssrevis-parameters
+       46           ,input p-extra-paramters
+       47           ).
+       48       end.
+       49     end.
+       50   end procedure.
+       51   assign
+       52     v-vssrevis-logger = g#vssrevis-logger
+       53   .
+       54   if  valid-handle(v-vssrevis-logger)
+       55   and v-vssrevis-logger :get-signature("logevent") <> ""
+       56   then do:
+       57     assign
+       58       v-vssrevis-logevent = true
+       59     .
+       60     run vss-logevent in this-procedure (input vss-description) .
+       61   end.
+       62   define new global shared variable g#language as character no-undo .
+       63   if g#language <> '' and g#language <> 'rus':U then do:
+       64     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       65   end.
+       66   define new global shared variable g#library  as handle no-undo .
+       67   define new global shared variable g#library2 as handle no-undo .
+       68   define   shared variable g#auto as logical no-undo.
+       69   define   shared variable g#news as logical no-undo.
+       70   define   shared variable g#oxml as logical no-undo.
+       71   define   shared variable g#esys as logical no-undo.
+       72   define   shared variable g#news-source-db as integer no-undo.
+       73   define   shared variable g#esys-source-esys as integer no-undo.
+       74   define   shared variable g#db-num as integer   no-undo .
+       75   define   shared variable g#userid as character no-undo .
+       76   define   shared variable g#passwd as character no-undo .
+       77   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       78   define buffer buf_file for ub.fin-code-cor-acc .
+       79   procedure current-db :
+       80    do
+       81    on error undo, return error return-value
+       82    :
+       83   define input parameter  p-host-code as integer no-undo .
+       84   define input parameter  c-host-code as integer no-undo .
+       85   define output parameter ret         as logical no-undo .
+       86   define buffer current_sysconf for ub.sysconf.
+       87   define variable v-current-db as integer no-undo .
+       88   find first current_sysconf where current_sysconf.host-code = c-host-code no-lock no-error .
+       89   if error-status :error then return error .
+       90      v-current-db = current_sysconf.firm-db-num .
+       91      ret = true .
+       92   find first ub.sysconf where ub.sysconf.host-code = p-host-code no-lock no-error .
+       93   if not( ub.sysconf.firm-db-num = v-current-db or
+       94           ub.sysconf.firm-db-num = 0 )
+       95     then do:
+       96     ret = false .
+       97     message "Нельзя добавлять запись в  справочнике  для фирмы с не главной БД !!!" view-as alert-box information .
+       98     return .
+       99   end.
+      100    end.
+      101   end procedure.
+      102   procedure ver-db :
+      103    do
+      104    on error undo, return error substitute("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      105    :
+      106   define input parameter  c-host-code as integer no-undo .
+      107   define input parameter  par-ver-db  as integer no-undo .
+      108   define input parameter  p-mess as logical no-undo .
+      109   define output parameter ret         as logical no-undo .
+      110   define buffer current_sysconf for ub.sysconf.
+      111   define variable v-current-db as integer no-undo .
+      112   find first current_sysconf where current_sysconf.host-code = c-host-code no-lock no-error .
+      113   if error-status :error then return error .
+      114      v-current-db = current_sysconf.firm-db-num .
+      115      ret = true .
+      116   if not( par-ver-db = v-current-db or
+      117           par-ver-db = 0 )
+      118     then do:
+      119     ret = false .
+      120     if p-mess = true then message "База , на которой мы работаем не является главной базой данных текущей фирмы!!!" view-as alert-box information .
+      121     return .
+      122   end.
+      123    end.
+      124   end procedure.
+      125   procedure fin-code :
+      126    do
+      127    on error undo, return error return-value
+      128    :
+      129     define input  parameter p-host-code as integer no-undo .
+      130     define output parameter p-fin-code  as integer no-undo .
+      131     p-fin-code = next-value(s-fin-code, ub) .
+      132    end.
+      133   end procedure.
+      134   procedure create-ref-fin-code :
+      135    do
+      136    on error undo, return error return-value
+      137    :
+      138   define input parameter p-ver as logical no-undo .
+      139   define input parameter p-host-code  as integer   no-undo .
+      140   define input parameter p-fin-code   as integer   no-undo .
+      141   define input parameter p-code-value as character no-undo .
+      142   define input parameter p-descr      as character no-undo .
+      143   define input parameter p-status_    as integer   no-undo .
+      144   define input parameter p-level-1    as integer   no-undo .
+      145   define input parameter p-level-2    as integer   no-undo .
+      146   define input parameter p-level-3    as integer   no-undo .
+      147   if p-ver then do:
+      148       find first  buf_file no-lock  where buf_file.host-code = p-host-code and
+      149                                           buf_file.fin-code  = p-fin-code no-error .
+      150       if available buf_file then return error .
+      151   end.
+      152   define variable p-ret as logical no-undo .
+      153   run current-db in this-procedure (
+      154       input p-host-code,
+      155       input p-host-code,
+      156       output p-ret ) .
+      157    if p-ret = no then return.
+      158    create ub.fin-code-cor-acc.
+      159    assign
+      160      ub.fin-code-cor-acc.host-code  = p-host-code
+      161      ub.fin-code-cor-acc.fin-code   = p-fin-code
+      162      ub.fin-code-cor-acc.code-value = p-code-value
+      163      ub.fin-code-cor-acc.descr      = p-descr
+      164      ub.fin-code-cor-acc.status_    = p-status_
+      165      ub.fin-code-cor-acc.level-1    = p-level-1
+      166      ub.fin-code-cor-acc.level-2    = p-level-2
+      167      ub.fin-code-cor-acc.level-3    = p-level-3
+      168     no-error .
+      169     if error-status :error then do:
+      170         message vss-include-info0 skip
+      171                 error-status :get-message(1)
+      172                 view-as alert-box error .
+      173         return error .
+      174     end.
+      175    end.
+      176   end procedure.
+      177   procedure create-ref-corr-acc :
+      178    do
+      179    on error undo, return error return-value
+      180    :
+      181   define input parameter p-ver as logical no-undo .
+      182   define input parameter p-host-code  as integer   no-undo .
+      183   define input parameter p-fin-code   as integer   no-undo .
+      184   define input parameter p-code-value as character no-undo .
+      185   define input parameter p-descr      as character no-undo .
+      186   define input parameter p-status_    as integer   no-undo .
+      187   define input parameter p-level-1    as integer   no-undo .
+      188   define input parameter p-level-2    as integer   no-undo .
+      189   define input parameter p-level-3    as integer   no-undo .
+      190   define input parameter p-acc-type    as integer   no-undo .
+      191   define buffer buf_file  for ub.fin-code-cor-acc .
+      192   if p-ver then do:
+      193       find first  buf_file no-lock  where buf_file.host-code = p-host-code and
+      194                                           buf_file.fin-code  = p-fin-code no-error .
+      195       if available buf_file then return error .
+      196   end.
+      197   define variable p-ret as logical no-undo .
+      198   run current-db in this-procedure (
+      199       input p-host-code,
+      200       input p-host-code,
+      201       output p-ret ) .
+      202    if p-ret = no then return.
+      203    create ub.fin-code-cor-acc.
+      204    assign
+      205      ub.fin-code-cor-acc.host-code  = p-host-code
+      206      ub.fin-code-cor-acc.fin-code   = p-fin-code
+      207      ub.fin-code-cor-acc.code-value = p-code-value
+      208      ub.fin-code-cor-acc.descr      = p-descr
+      209      ub.fin-code-cor-acc.status_    = p-status_
+      210      ub.fin-code-cor-acc.level-1    = p-level-1
+      211      ub.fin-code-cor-acc.level-2    = p-level-2
+      212      ub.fin-code-cor-acc.level-3    = p-level-3
+      213      ub.fin-code-cor-acc.acc-type   = p-acc-type
+      214     no-error .
+      215     if error-status :error then do:
+      216         message vss-include-info0 skip
+      217                 error-status :get-message(1)
+      218                 view-as alert-box error .
+      219         return error .
+      220     end.
+      221    end.
+      222   end procedure.
+      223   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      224   define variable v-waitfram-action01         as character   no-undo .
+      225   define variable v-waitfram-action02         as character   no-undo .
+      226   define variable v-waitfram-action03         as character   no-undo .
+      227   define variable mWaitFramTextBeg            as character   no-undo.
+      228   define variable mWaitFramTextEnd            as character   no-undo.
+      229   define variable mWaitFramView               as logical     no-undo.
+      230   define variable mWaitProcEvent              as logical     no-undo init yes.
+      231   define variable mWaitFramInterval           as integer     no-undo init 1 .
+      232   define variable mWaitFramStop               as logical     no-undo.
+      233   define variable mWaitFramStopUser           as logical     no-undo.
+      234   define variable mWaitFramStopTimeOut        as logical     no-undo.
+      235   define variable mWaitFramStartProc          as datetime-tz no-undo.
+      236   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+      237   define button B-WaitFramStop auto-end-key
+      238        label "Стоп"
+      239        size 10 by 1 tooltip "Остоновить процесс".
+      240   define button B-viewProcInfo
+      241        label "Информация"
+      242        size 15 by 1 tooltip "Информация о процесс".
+      243   define frame waitfram
+      244     v-waitfram-action01 format "x(72)" no-label skip
+      245     v-waitfram-action02 format "x(72)" no-label skip
+      246     v-waitfram-action03 format "x(72)" no-label skip
+      247     B-viewProcInfo
+      248     B-WaitFramStop at row 4 col 30
+      249     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+      250     .
+      251   define new global shared variable mBatchMode as logical no-undo init ?.
+      252   define variable mFramBachModHandle as handle no-undo.
+      253   mFramBachModHandle = frame waitfram:handle.
+      254   define variable mFameOldVis as logical no-undo.
+      255   define variable mVisCUrentVin as logical no-undo.
+      256   if session:batch-mode
+      257   then
+      258      mBatchMode = yes.
+      259   if mBatchMode = ? then do:
+      260     mVisCUrentVin = current-window:visible.
+      261     mFameOldVis = mFramBachModHandle:visible.
+      262     mFramBachModHandle:visible  = yes.
+      263     mBatchMode = mFramBachModHandle:visible ne yes.
+      264     mFramBachModHandle:visible = mFameOldVis.
+      265     current-window:visible = mVisCUrentVin.
+      266   end.
+      267    if  log-manager:logfile-name ne ?
+      268     then DO:
+      269         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      270         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      271         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+      272     end.
+      273   on choose of B-WaitFramStop in frame waitfram
+      274   do:
+      275     mWaitFramStop = yes.
+      276     mWaitFramStopUser = yes.
+      277   end.
+      278   function waitfram-check-timeout returns logical():
+      279      define variable vtime as int64 no-undo.
+      280      if mWaitFramStopTimeOut
+      281      then
+      282         return yes.
+      283      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      284      if     mWaitFramTimeOut ne ?
+      285         and mWaitFramTimeOut ne 0
+      286         and mWaitFramTimeOut lt vtime
+      287      then do:
+      288         mWaitFramStopTimeOut = yes.
+      289      end.
+      290      return mWaitFramStopTimeOut.
+      291   end.
+      292   procedure waitfram-hide :
+      293     if not session:batch-mode
+      294     then do
+      295     on error undo, return error return-value
+      296     :
+      297       pause 0 before-hide .
+      298       if not mBatchMode then
+      299         hide frame waitfram .
+      300     if     not mWaitFramView
+      301        and mWaitProcEvent
+      302     then
+      303       process events .
+      304     end.
+      305   end procedure.
+      306   procedure waitfram-show :
+      307     define input  parameter p-message as character no-undo .
+      308     define variable v-left-margin as integer   no-undo .
+      309     if not session:batch-mode
+      310     then do
+      311     on error undo, return error return-value
+      312     :
+      313       if length(p-message) <= 70 then do:
+      314         assign
+      315           v-left-margin = integer((70 - length(p-message)) / 2)
+      316         .
+      317         assign
+      318           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      319         .
+      320         assign
+      321           v-waitfram-action01 = " "
+      322           v-waitfram-action02 = " "
+      323                                    + fill(" ", v-left-margin)
+      324                                    + p-message
+      325           v-waitfram-action03 = " "
+      326         .
+      327       end.
+      328       else do:
+      329         define variable vRindex1 as integer no-undo.
+      330         define variable vRindex2 as integer no-undo.
+      331         vRindex1 = r-index(p-message," ",70).
+      332         if vRindex1 = 0
+      333         then
+      334            vRindex1 = 70.
+      335         if length(p-message)  <= vRindex1 + 70 then do:
+      336           assign
+      337             v-waitfram-action01 = " "
+      338             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+      339             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+      340           .
+      341         end.
+      342         else do:
+      343           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+      344           if vRindex2 <= vRindex1
+      345           then
+      346              vRindex2 = vRindex1 + 70.
+      347           assign
+      348             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+      349             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+      350             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+      351           .
+      352         end.
+      353       end.
+      354       B-viewProcInfo:visible   in frame waitfram = no.
+      355       B-viewProcInfo:sensitive in frame waitfram = no.
+      356       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      357       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      358       if  (   mWaitFramView
+      359          or  mWaitProcEvent)
+      360          and not mBatchMode
+      361       then
+      362          display
+      363             v-waitfram-action01 skip
+      364             v-waitfram-action02 skip
+      365             v-waitfram-action03 skip
+      366          with frame waitfram .
+      367       if     mWaitFramView
+      368          then do:
+      369             if     mWaitFramInterval ne ?
+      370                and not mBatchMode
+      371             then
+      372                wait-for go of frame waitfram pause mWaitFramInterval.
+      373          end.
+      374          else
+      375             if     mWaitProcEvent
+      376                and not mBatchMode
+      377             then
+      378                process events .
+      379     end.
+      380   end procedure.
+      381      procedure waitfram-show-this:
+      382         define input  parameter iInterval as int64 no-undo.
+      383         define variable vtime as int64 no-undo.
+      384         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      385         mWaitFramInterval = iInterval.
+      386         run waitfram-show (substitute("&1&2 &3&4" ,
+      387                                       mWaitFramTextBeg ,
+      388                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+      389                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+      390                                       mWaitFramTextEnd
+      391                                      )
+      392                           ).
+      393      end.
+      394      procedure WaitFramRunPause:
+      395         define input  parameter iInterval as dec no-undo.
+      396         define variable vStart  as datetime-tz no-undo.
+      397         define variable vend    as datetime-tz no-undo.
+      398         define variable vint as int64 no-undo.
+      399         define variable vOk as logical no-undo.
+      400         vStart = now.
+      401         vend   = vStart.
+      402         publish "WaitFramPause" (iInterval,output vOk).
+      403         vend   =  now.
+      404         vint = vend - vStart.
+      405         vint = iInterval - vint / 1000.
+      406         if     not mWaitFramStop
+      407            and (   vint > 0
+      408                 or (    not vOk
+      409                     and iInterval eq ?
+      410                     )
+      411                 )
+      412         then
+      413            run waitfram-show-this (iInterval).
+      414         vend   =  now.
+      415         vint = vend - vStart.
+      416         vint = iInterval - vint / 1000.
+      417         if     not mWaitFramStop
+      418            and vint > 0
+      419         then do:
+      420            run gbl/pause.p (vint * 1000).
+      421         end.
+      422         if iInterval ne ?
+      423         then
+      424            publish "WaitFramStop".
+      425         waitfram-check-timeout().
+      426      end.
+      427      procedure WaitFramWaitFor:
+      428         define input  parameter iInterval as dec no-undo.
+      429         assign
+      430            mWaitFramStartProc   = now
+      431            mWaitFramStopUser    = no
+      432            mWaitFramStopTimeOut = no
+      433         .
+      434         block-wait:
+      435         do while not mWaitFramStop:
+      436            run WaitFramRunPause (iInterval).
+      437            if  waitfram-check-timeout()
+      438            then do:
+      439               leave block-wait.
+      440            end.
+      441         end.
+      442         run waitfram-hide.
+      443      end.
+      444   procedure waitfram-join :
+      445     define input  parameter p-line-1  as character no-undo .
+      446     define input  parameter p-line-2  as character no-undo .
+      447     define input  parameter p-line-3  as character no-undo .
+      448     define output parameter p-message as character no-undo .
+      449     do
+      450     on error undo, return error return-value
+      451     :
+      452       assign
+      453         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+      454                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+      455                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+      456       .
+      457     end.
+      458   end procedure.
+      459   function waitfram-join-function returns character
+      460     (input p-line-1 as character
+      461     ,input p-line-2 as character
+      462     ,input p-line-3 as character
+      463     ).
+      464     define variable v-message as character no-undo .
+      465     run waitfram-join in this-procedure
+      466       (input  p-line-1
+      467       ,input  p-line-2
+      468       ,input  p-line-3
+      469       ,output v-message
+      470       ) .
+      471     return v-message .
+      472   end function .
+      473    define input-output parameter  rr            as recid no-undo .
+      474    define input parameter         par-host-code as integer no-undo .
+      475   message "АРМ Бухгалтерия не поддерживается "  view-as alert-box information .
+      476   return .

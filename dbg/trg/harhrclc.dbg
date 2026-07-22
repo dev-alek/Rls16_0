@@ -1,0 +1,657 @@
+        1   block-level on error undo, throw.
+        2   define input  parameter p-cat-code       like ub.hold-time.cat-code no-undo .
+        3   define input  parameter p-lock-code      as character no-undo .
+        4   define input  parameter p-btpr-type-code as character no-undo .
+        5   define input  parameter p-start-date     like ub.hold-time.start-date no-undo .
+        6   define variable vss-revision    as character no-undo init "$Revision$":U .
+        7   define variable vss-author      as character no-undo init "$Author$":U .
+        8   define variable vss-date        as character no-undo init "$Date$":U .
+        9   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+       10   define variable vss-archive     as character no-undo init "$Archive$":U .
+       11   define variable vss-description as character no-undo init "Перерасчет межфирменных архивов".
+       12   procedure vss-get-info :
+       13     define output parameter p-vss-revision    like vss-revision    no-undo .
+       14     define output parameter p-vss-author      like vss-author      no-undo .
+       15     define output parameter p-vss-date        like vss-date        no-undo .
+       16     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       17     define output parameter p-vss-archive     like vss-archive     no-undo .
+       18     define output parameter p-vss-description like vss-description no-undo .
+       19     assign
+       20       p-vss-revision    = vss-revision
+       21       p-vss-author      = vss-author
+       22       p-vss-date        = vss-date
+       23       p-vss-workfile    = vss-workfile
+       24       p-vss-archive     = vss-archive
+       25       p-vss-description = vss-description
+       26     .
+       27   end procedure.
+       28   procedure vss-get-parameters :
+       29     define output parameter p-vss-parameters as character no-undo .
+       30       assign
+       31         p-vss-parameters = substitute('&1|&2|&3|&4':u,p-cat-code,p-lock-code,p-btpr-type-code,p-start-date)
+       32       .
+       33   end procedure.
+       34   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       35   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       36   define variable v-vssrevis-logger                   as handle    no-undo .
+       37   procedure vss-logevent :
+       38     define input  parameter p-extra-paramters as character no-undo .
+       39     define variable v-vssrevis-parameters as character no-undo .
+       40     do
+       41     on error undo, return error return-value
+       42     :
+       43       if  valid-handle(v-vssrevis-logger)
+       44       and v-vssrevis-logger :get-signature("logevent") <> ""
+       45       then do:
+       46         run vss-get-parameters in this-procedure
+       47           (output v-vssrevis-parameters
+       48           ).
+       49         run logevent in v-vssrevis-logger
+       50           (input vss-workfile
+       51           ,input vss-revision
+       52           ,input v-vssrevis-parameters
+       53           ,input p-extra-paramters
+       54           ).
+       55       end.
+       56     end.
+       57   end procedure.
+       58   assign
+       59     v-vssrevis-logger = g#vssrevis-logger
+       60   .
+       61   if  valid-handle(v-vssrevis-logger)
+       62   and v-vssrevis-logger :get-signature("logevent") <> ""
+       63   then do:
+       64     assign
+       65       v-vssrevis-logevent = true
+       66     .
+       67     run vss-logevent in this-procedure (input vss-description) .
+       68   end.
+       69   define new global shared variable g#language as character no-undo .
+       70   if g#language <> '' and g#language <> 'rus':U then do:
+       71     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       72   end.
+       73   define new global shared variable g#library  as handle no-undo .
+       74   define new global shared variable g#library2 as handle no-undo .
+       75   define   shared variable g#auto as logical no-undo.
+       76   define   shared variable g#news as logical no-undo.
+       77   define   shared variable g#oxml as logical no-undo.
+       78   define   shared variable g#esys as logical no-undo.
+       79   define   shared variable g#news-source-db as integer no-undo.
+       80   define   shared variable g#esys-source-esys as integer no-undo.
+       81   define   shared variable g#db-num as integer   no-undo .
+       82   define   shared variable g#userid as character no-undo .
+       83   define   shared variable g#passwd as character no-undo .
+       84   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       85   PROCEDURE LastDate:
+       86       def input parameter in-date as date no-undo.
+       87       def output parameter LastDate as date no-undo.
+       88       LastDate = ((DATE(MONTH(in-date),28,YEAR(in-date)) + 4) - DAY(DATE(MONTH(in-date),28,YEAR(in-date)) + 4)).
+       89   END PROCEDURE.
+       90   define variable vss-include-info1 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       91   procedure create-hold-time :
+       92   define input parameter p-cat-code like ub.hold-time.cat-code no-undo .
+       93   define input parameter p-start-date like ub.hold-time.start-date no-undo .
+       94   DEFINE VARIABLE v-end-date like ub.hold-time.end-date no-undo .
+       95   define buffer buf_hold-time for ub.hold-time .
+       96   define buffer last_hold-time for ub.hold-time .
+       97     do
+       98     on error undo, return error
+       99     :
+      100       find last last_hold-time no-lock
+      101         where last_hold-time.cat-code = p-cat-code
+      102         use-index pi
+      103         no-error .
+      104       run gbl/lastdate.p
+      105         (input p-start-date
+      106         ,output v-end-date)
+      107         no-error .
+      108       if error-status :error then do:
+      109         message
+      110         vss-workfile vss-revision vss-description skip
+      111         "Ошибка поиска последней даты периода" skip
+      112         "Дата начала периода" p-start-date
+      113         error-status :get-message(1) skip
+      114         return-value skip
+      115         view-as alert-box error .
+      116         undo, return error.
+      117       end.
+      118       create buf_hold-time.
+      119       assign
+      120         buf_hold-time.cat-code       = p-cat-code
+      121         buf_hold-time.time-code      = (if available last_hold-time
+      122                                         then (last_hold-time.time-code + 1)
+      123                                         else 1)
+      124         buf_hold-time.time-type      = 'мес':U
+      125         buf_hold-time.start-date     = p-start-date
+      126         buf_hold-time.end-date       = v-end-date
+      127         buf_hold-time.create-date    = today
+      128         buf_hold-time.update-date    = today
+      129         buf_hold-time.grpupdate-date = today
+      130       .
+      131     end.
+      132   end procedure.
+      133   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      134   define variable v-waitfram-action01         as character   no-undo .
+      135   define variable v-waitfram-action02         as character   no-undo .
+      136   define variable v-waitfram-action03         as character   no-undo .
+      137   define variable mWaitFramTextBeg            as character   no-undo.
+      138   define variable mWaitFramTextEnd            as character   no-undo.
+      139   define variable mWaitFramView               as logical     no-undo.
+      140   define variable mWaitProcEvent              as logical     no-undo init yes.
+      141   define variable mWaitFramInterval           as integer     no-undo init 1 .
+      142   define variable mWaitFramStop               as logical     no-undo.
+      143   define variable mWaitFramStopUser           as logical     no-undo.
+      144   define variable mWaitFramStopTimeOut        as logical     no-undo.
+      145   define variable mWaitFramStartProc          as datetime-tz no-undo.
+      146   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+      147   define button B-WaitFramStop auto-end-key
+      148        label "Стоп"
+      149        size 10 by 1 tooltip "Остоновить процесс".
+      150   define button B-viewProcInfo
+      151        label "Информация"
+      152        size 15 by 1 tooltip "Информация о процесс".
+      153   define frame waitfram
+      154     v-waitfram-action01 format "x(72)" no-label skip
+      155     v-waitfram-action02 format "x(72)" no-label skip
+      156     v-waitfram-action03 format "x(72)" no-label skip
+      157     B-viewProcInfo
+      158     B-WaitFramStop at row 4 col 30
+      159     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+      160     .
+      161   define new global shared variable mBatchMode as logical no-undo init ?.
+      162   define variable mFramBachModHandle as handle no-undo.
+      163   mFramBachModHandle = frame waitfram:handle.
+      164   define variable mFameOldVis as logical no-undo.
+      165   define variable mVisCUrentVin as logical no-undo.
+      166   if session:batch-mode
+      167   then
+      168      mBatchMode = yes.
+      169   if mBatchMode = ? then do:
+      170     mVisCUrentVin = current-window:visible.
+      171     mFameOldVis = mFramBachModHandle:visible.
+      172     mFramBachModHandle:visible  = yes.
+      173     mBatchMode = mFramBachModHandle:visible ne yes.
+      174     mFramBachModHandle:visible = mFameOldVis.
+      175     current-window:visible = mVisCUrentVin.
+      176   end.
+      177    if  log-manager:logfile-name ne ?
+      178     then DO:
+      179         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      180         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      181         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+      182     end.
+      183   on choose of B-WaitFramStop in frame waitfram
+      184   do:
+      185     mWaitFramStop = yes.
+      186     mWaitFramStopUser = yes.
+      187   end.
+      188   function waitfram-check-timeout returns logical():
+      189      define variable vtime as int64 no-undo.
+      190      if mWaitFramStopTimeOut
+      191      then
+      192         return yes.
+      193      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      194      if     mWaitFramTimeOut ne ?
+      195         and mWaitFramTimeOut ne 0
+      196         and mWaitFramTimeOut lt vtime
+      197      then do:
+      198         mWaitFramStopTimeOut = yes.
+      199      end.
+      200      return mWaitFramStopTimeOut.
+      201   end.
+      202   procedure waitfram-hide :
+      203     if not session:batch-mode
+      204     then do
+      205     on error undo, return error return-value
+      206     :
+      207       pause 0 before-hide .
+      208       if not mBatchMode then
+      209         hide frame waitfram .
+      210     if     not mWaitFramView
+      211        and mWaitProcEvent
+      212     then
+      213       process events .
+      214     end.
+      215   end procedure.
+      216   procedure waitfram-show :
+      217     define input  parameter p-message as character no-undo .
+      218     define variable v-left-margin as integer   no-undo .
+      219     if not session:batch-mode
+      220     then do
+      221     on error undo, return error return-value
+      222     :
+      223       if length(p-message) <= 70 then do:
+      224         assign
+      225           v-left-margin = integer((70 - length(p-message)) / 2)
+      226         .
+      227         assign
+      228           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      229         .
+      230         assign
+      231           v-waitfram-action01 = " "
+      232           v-waitfram-action02 = " "
+      233                                    + fill(" ", v-left-margin)
+      234                                    + p-message
+      235           v-waitfram-action03 = " "
+      236         .
+      237       end.
+      238       else do:
+      239         define variable vRindex1 as integer no-undo.
+      240         define variable vRindex2 as integer no-undo.
+      241         vRindex1 = r-index(p-message," ",70).
+      242         if vRindex1 = 0
+      243         then
+      244            vRindex1 = 70.
+      245         if length(p-message)  <= vRindex1 + 70 then do:
+      246           assign
+      247             v-waitfram-action01 = " "
+      248             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+      249             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+      250           .
+      251         end.
+      252         else do:
+      253           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+      254           if vRindex2 <= vRindex1
+      255           then
+      256              vRindex2 = vRindex1 + 70.
+      257           assign
+      258             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+      259             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+      260             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+      261           .
+      262         end.
+      263       end.
+      264       B-viewProcInfo:visible   in frame waitfram = no.
+      265       B-viewProcInfo:sensitive in frame waitfram = no.
+      266       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      267       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      268       if  (   mWaitFramView
+      269          or  mWaitProcEvent)
+      270          and not mBatchMode
+      271       then
+      272          display
+      273             v-waitfram-action01 skip
+      274             v-waitfram-action02 skip
+      275             v-waitfram-action03 skip
+      276          with frame waitfram .
+      277       if     mWaitFramView
+      278          then do:
+      279             if     mWaitFramInterval ne ?
+      280                and not mBatchMode
+      281             then
+      282                wait-for go of frame waitfram pause mWaitFramInterval.
+      283          end.
+      284          else
+      285             if     mWaitProcEvent
+      286                and not mBatchMode
+      287             then
+      288                process events .
+      289     end.
+      290   end procedure.
+      291      procedure waitfram-show-this:
+      292         define input  parameter iInterval as int64 no-undo.
+      293         define variable vtime as int64 no-undo.
+      294         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      295         mWaitFramInterval = iInterval.
+      296         run waitfram-show (substitute("&1&2 &3&4" ,
+      297                                       mWaitFramTextBeg ,
+      298                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+      299                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+      300                                       mWaitFramTextEnd
+      301                                      )
+      302                           ).
+      303      end.
+      304      procedure WaitFramRunPause:
+      305         define input  parameter iInterval as dec no-undo.
+      306         define variable vStart  as datetime-tz no-undo.
+      307         define variable vend    as datetime-tz no-undo.
+      308         define variable vint as int64 no-undo.
+      309         define variable vOk as logical no-undo.
+      310         vStart = now.
+      311         vend   = vStart.
+      312         publish "WaitFramPause" (iInterval,output vOk).
+      313         vend   =  now.
+      314         vint = vend - vStart.
+      315         vint = iInterval - vint / 1000.
+      316         if     not mWaitFramStop
+      317            and (   vint > 0
+      318                 or (    not vOk
+      319                     and iInterval eq ?
+      320                     )
+      321                 )
+      322         then
+      323            run waitfram-show-this (iInterval).
+      324         vend   =  now.
+      325         vint = vend - vStart.
+      326         vint = iInterval - vint / 1000.
+      327         if     not mWaitFramStop
+      328            and vint > 0
+      329         then do:
+      330            run gbl/pause.p (vint * 1000).
+      331         end.
+      332         if iInterval ne ?
+      333         then
+      334            publish "WaitFramStop".
+      335         waitfram-check-timeout().
+      336      end.
+      337      procedure WaitFramWaitFor:
+      338         define input  parameter iInterval as dec no-undo.
+      339         assign
+      340            mWaitFramStartProc   = now
+      341            mWaitFramStopUser    = no
+      342            mWaitFramStopTimeOut = no
+      343         .
+      344         block-wait:
+      345         do while not mWaitFramStop:
+      346            run WaitFramRunPause (iInterval).
+      347            if  waitfram-check-timeout()
+      348            then do:
+      349               leave block-wait.
+      350            end.
+      351         end.
+      352         run waitfram-hide.
+      353      end.
+      354   procedure waitfram-join :
+      355     define input  parameter p-line-1  as character no-undo .
+      356     define input  parameter p-line-2  as character no-undo .
+      357     define input  parameter p-line-3  as character no-undo .
+      358     define output parameter p-message as character no-undo .
+      359     do
+      360     on error undo, return error return-value
+      361     :
+      362       assign
+      363         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+      364                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+      365                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+      366       .
+      367     end.
+      368   end procedure.
+      369   function waitfram-join-function returns character
+      370     (input p-line-1 as character
+      371     ,input p-line-2 as character
+      372     ,input p-line-3 as character
+      373     ).
+      374     define variable v-message as character no-undo .
+      375     run waitfram-join in this-procedure
+      376       (input  p-line-1
+      377       ,input  p-line-2
+      378       ,input  p-line-3
+      379       ,output v-message
+      380       ) .
+      381     return v-message .
+      382   end function .
+      383   define buffer del_hold-time           for ub.hold-time .
+      384   define buffer del_hold-trn            for ub.hold-trn .
+      385   define buffer del_hold-goods          for ub.hold-goods .
+      386   define buffer del_hold-gds-grp        for ub.hold-gds-grp .
+      387   define buffer del_hold-purch          for ub.hold-purch .
+      388   define buffer del_hold-purch-grp      for ub.hold-purch-grp .
+      389   define buffer del_hold-purch-supp     for ub.hold-purch-supp .
+      390   define buffer del_hold-purch-supp-gds for ub.hold-purch-supp-gds .
+      391   define buffer del_hold-sale           for ub.hold-sale .
+      392   define buffer del_hold-sale-grp       for ub.hold-sale-grp .
+      393   define buffer buf_trn-doc for ub.trn-doc .
+      394   define buffer buf_db      for ub.db .
+      395   define buffer buf_clients for ub.clients .
+      396   do
+      397   on error undo, return error
+      398   :
+      399     find first del_hold-time exclusive-lock
+      400       where del_hold-time.cat-code   = p-cat-code
+      401         and del_hold-time.time-type  = 'мес':U
+      402         and del_hold-time.start-date = p-start-date
+      403       no-error .
+      404     if not available del_hold-time
+      405     then do:
+      406       message
+      407         vss-workfile vss-revision vss-description skip
+      408         "Не найдена запись межфирменного архива" skip
+      409         "cat-code" p-cat-code skip
+      410         "time-type" 'мес':U skip
+      411         "start-date" p-start-date skip
+      412         view-as alert-box error .
+      413       undo, return error.
+      414     end.
+      415     assign
+      416       del_hold-time.status_        = 'удаленные':U
+      417       del_hold-time.grpupdate-date = today
+      418       del_hold-time.update-date    = today
+      419     .
+      420     define variable v-ind as integer   no-undo .
+      421     assign
+      422       v-ind = 0
+      423     .
+      424     for each del_hold-trn
+      425       where del_hold-trn.cat-code  = del_hold-time.cat-code
+      426         and del_hold-trn.time-code = del_hold-time.time-code
+      427     on error undo, return error
+      428     :
+      429       assign
+      430         v-ind = v-ind + 1
+      431       .
+      432       if v-ind modulo 10 = 0
+      433       then do:
+      434         run waitfram-show in this-procedure
+      435           (input substitute("Перерасчет межфирменных архивов. Удаление списка документов за период. Удалено &1."
+      436                             ,v-ind
+      437                             )
+      438           ) .
+      439       end.
+      440       delete del_hold-trn .
+      441     end.
+      442     assign
+      443       v-ind = 0
+      444     .
+      445     for each del_hold-goods
+      446       where del_hold-goods.cat-code  = del_hold-time.cat-code
+      447         and del_hold-goods.time-code = del_hold-time.time-code
+      448     on error undo, return error
+      449     :
+      450       assign
+      451         v-ind = v-ind + 1
+      452       .
+      453       if v-ind modulo 10 = 0
+      454       then do:
+      455         run waitfram-show in this-procedure
+      456           (input substitute("Перерасчет межфирменных архивов. Удаление списка товаров за период. Удалено &1."
+      457                             ,v-ind
+      458                             )
+      459           ) .
+      460       end.
+      461       delete del_hold-goods .
+      462     end.
+      463     assign
+      464       v-ind = 0
+      465     .
+      466     for each del_hold-gds-grp
+      467       where del_hold-gds-grp.cat-code  = del_hold-time.cat-code
+      468         and del_hold-gds-grp.time-code = del_hold-time.time-code
+      469     on error undo, return error
+      470     :
+      471       assign
+      472         v-ind = v-ind + 1
+      473       .
+      474       if v-ind modulo 10 = 0
+      475       then do:
+      476         run waitfram-show in this-procedure
+      477           (input substitute("Перерасчет межфирменных архивов. Удаление списка групп товаров за период. Удалено &1."
+      478                             ,v-ind
+      479                             )
+      480           ) .
+      481       end.
+      482       delete del_hold-gds-grp .
+      483     end.
+      484     assign
+      485       v-ind = 0
+      486     .
+      487     for each del_hold-purch
+      488       where del_hold-purch.cat-code  = del_hold-time.cat-code
+      489         and del_hold-purch.time-code = del_hold-time.time-code
+      490     on error undo, return error
+      491     :
+      492       assign
+      493         v-ind = v-ind + 1
+      494       .
+      495       if v-ind modulo 10 = 0
+      496       then do:
+      497         run waitfram-show in this-procedure
+      498           (input substitute("Перерасчет межфирменных архивов. Удаление списка приходов за период. Удалено &1."
+      499                             ,v-ind
+      500                             )
+      501           ) .
+      502       end.
+      503       delete del_hold-purch .
+      504     end.
+      505     assign
+      506       v-ind = 0
+      507     .
+      508     for each del_hold-purch-grp
+      509       where del_hold-purch-grp.cat-code  = del_hold-time.cat-code
+      510         and del_hold-purch-grp.time-code = del_hold-time.time-code
+      511     on error undo, return error
+      512     :
+      513       assign
+      514         v-ind = v-ind + 1
+      515       .
+      516       if v-ind modulo 10 = 0
+      517       then do:
+      518         run waitfram-show in this-procedure
+      519           (input substitute("Перерасчет межфирменных архивов. Удаление списка приходов по группам за период. Удалено &1."
+      520                             ,v-ind
+      521                             )
+      522           ) .
+      523       end.
+      524       delete del_hold-purch-grp .
+      525     end.
+      526     assign
+      527       v-ind = 0
+      528     .
+      529     for each del_hold-purch-supp
+      530       where del_hold-purch-supp.cat-code  = del_hold-time.cat-code
+      531         and del_hold-purch-supp.time-code = del_hold-time.time-code
+      532     on error undo, return error
+      533     :
+      534       assign
+      535         v-ind = v-ind + 1
+      536       .
+      537       if v-ind modulo 10 = 0
+      538       then do:
+      539         run waitfram-show in this-procedure
+      540           (input substitute("Перерасчет межфирменных архивов. Удаление списка приходов по поставщикам за период. Удалено &1."
+      541                             ,v-ind
+      542                             )
+      543           ) .
+      544       end.
+      545       delete del_hold-purch-supp .
+      546     end.
+      547     assign
+      548       v-ind = 0
+      549     .
+      550     for each del_hold-purch-supp-gds
+      551       where del_hold-purch-supp-gds.cat-code  = del_hold-time.cat-code
+      552         and del_hold-purch-supp-gds.time-code = del_hold-time.time-code
+      553     on error undo, return error
+      554     :
+      555       assign
+      556         v-ind = v-ind + 1
+      557       .
+      558       if v-ind modulo 10 = 0
+      559       then do:
+      560         run waitfram-show in this-procedure
+      561           (input substitute("Перерасчет межфирменных архивов. Удаление списка приходов по поставщикам по товарам за период. Удалено &1."
+      562                             ,v-ind
+      563                             )
+      564           ) .
+      565       end.
+      566       delete del_hold-purch-supp-gds .
+      567     end.
+      568     assign
+      569       v-ind = 0
+      570     .
+      571     for each del_hold-sale
+      572       where del_hold-sale.cat-code  = del_hold-time.cat-code
+      573         and del_hold-sale.time-code = del_hold-time.time-code
+      574     on error undo, return error
+      575     :
+      576       assign
+      577         v-ind = v-ind + 1
+      578       .
+      579       if v-ind modulo 10 = 0
+      580       then do:
+      581         run waitfram-show in this-procedure
+      582           (input substitute("Перерасчет межфирменных архивов. Удаление списка продаж за период. Удалено &1."
+      583                             ,v-ind
+      584                             )
+      585           ) .
+      586       end.
+      587       delete del_hold-sale .
+      588     end.
+      589     assign
+      590       v-ind = 0
+      591     .
+      592     for each del_hold-sale-grp
+      593       where del_hold-sale-grp.cat-code  = del_hold-time.cat-code
+      594         AND del_hold-sale-grp.time-code = del_hold-time.time-code
+      595     on error undo, return error
+      596     :
+      597       assign
+      598         v-ind = v-ind + 1
+      599       .
+      600       if v-ind modulo 10 = 0
+      601       then do:
+      602         run waitfram-show in this-procedure
+      603           (input substitute("Перерасчет межфирменных архивов. Удаление списка продаж по группам за период. Удалено &1."
+      604                             ,v-ind
+      605                             )
+      606           ) .
+      607       end.
+      608       delete del_hold-sale-grp .
+      609     end.
+      610     for each buf_db no-lock
+      611     ,each buf_clients no-lock
+      612       where buf_clients.db-num = buf_db.db-num
+      613     ,each buf_trn-doc no-lock
+      614       where buf_trn-doc.obj-type = buf_clients.obj-type
+      615         and buf_trn-doc.obj-code = buf_clients.obj-code
+      616         and buf_trn-doc.status_ = 'факт':U
+      617         and buf_trn-doc.fact-date >= del_hold-time.start-date
+      618         and buf_trn-doc.fact-date <= del_hold-time.end-date
+      619     on error undo, return error
+      620     :
+      621       run waitfram-show in this-procedure
+      622         (input substitute("Перерасчет межфирменных архивов. Документ &1. Дата &2"
+      623                           ,buf_trn-doc.doc-code
+      624                           ,buf_trn-doc.fact-date
+      625                           )
+      626         ) .
+      627       define buffer buf_BatchProcess for ub.BatchProcess .
+      628       find first buf_BatchProcess exclusive-lock
+      629         where buf_BatchProcess.bp_type     = p-btpr-type-code
+      630           and buf_BatchProcess.bp_status   = 'N':U
+      631           and buf_batchprocess.charkey_one = buf_trn-doc.doc-code
+      632         no-error .
+      633       if available buf_BatchProcess
+      634       then do:
+      635         delete buf_BatchProcess .
+      636       end.
+      637       run trg/harhtclc.p
+      638         (input p-cat-code
+      639         ,input p-lock-code
+      640         ,input p-btpr-type-code
+      641         ,input buf_trn-doc.doc-code
+      642         ) no-error .
+      643       if error-status :error
+      644       then do:
+      645         undo,
+      646         return error ("Ошибка при расчете межфирменного архива:" + chr(10) +
+      647                       "cat-code:" + chr(32) + string(p-cat-code) + chr(10) +
+      648                       "time-code:" + chr(32) + string(del_hold-time.time-code) + chr(10) +
+      649                       "документ:" + chr(32) + buf_trn-doc.doc-code + chr(10)
+      650                       ).
+      651       end.
+      652     end.
+      653     assign
+      654       del_hold-time.status_ = 'текущие':U
+      655     .
+      656     run waitfram-hide in this-procedure .
+      657   end.

@@ -1,0 +1,211 @@
+        1   block-level on error undo, throw.
+        2   define input  parameter p-doc-code    as character no-undo .
+        3   define input  parameter p-gds-code    as integer   no-undo .
+        4   define input  parameter p-dens-source as character no-undo .
+        5   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        6   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        7   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        8   define variable vss-workfile    as character no-undo init "$Workfile: crdocpl.p $":U .
+        9   define variable vss-archive     as character no-undo init "$Archive: str/crdocpl.p $":U .
+       10   define variable vss-description as character no-undo init "Пересчет и создание doc-pl по документу".
+       11   procedure vss-get-info :
+       12     define output parameter p-vss-revision    like vss-revision    no-undo .
+       13     define output parameter p-vss-author      like vss-author      no-undo .
+       14     define output parameter p-vss-date        like vss-date        no-undo .
+       15     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       16     define output parameter p-vss-archive     like vss-archive     no-undo .
+       17     define output parameter p-vss-description like vss-description no-undo .
+       18     assign
+       19       p-vss-revision    = vss-revision
+       20       p-vss-author      = vss-author
+       21       p-vss-date        = vss-date
+       22       p-vss-workfile    = vss-workfile
+       23       p-vss-archive     = vss-archive
+       24       p-vss-description = vss-description
+       25     .
+       26   end procedure.
+       27   procedure vss-get-parameters :
+       28     define output parameter p-vss-parameters as character no-undo .
+       29   end procedure.
+       30   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       31   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       32   define variable v-vssrevis-logger                   as handle    no-undo .
+       33   procedure vss-logevent :
+       34     define input  parameter p-extra-paramters as character no-undo .
+       35     define variable v-vssrevis-parameters as character no-undo .
+       36     do
+       37     on error undo, return error return-value
+       38     :
+       39       if  valid-handle(v-vssrevis-logger)
+       40       and v-vssrevis-logger :get-signature("logevent") <> ""
+       41       then do:
+       42         run vss-get-parameters in this-procedure
+       43           (output v-vssrevis-parameters
+       44           ).
+       45         run logevent in v-vssrevis-logger
+       46           (input vss-workfile
+       47           ,input vss-revision
+       48           ,input v-vssrevis-parameters
+       49           ,input p-extra-paramters
+       50           ).
+       51       end.
+       52     end.
+       53   end procedure.
+       54   assign
+       55     v-vssrevis-logger = g#vssrevis-logger
+       56   .
+       57   if  valid-handle(v-vssrevis-logger)
+       58   and v-vssrevis-logger :get-signature("logevent") <> ""
+       59   then do:
+       60     assign
+       61       v-vssrevis-logevent = true
+       62     .
+       63     run vss-logevent in this-procedure (input vss-description) .
+       64   end.
+       65   define new global shared variable g#language as character no-undo .
+       66   if g#language <> '' and g#language <> 'rus':U then do:
+       67     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       68   end.
+       69   define new global shared variable g#lib-trn  as handle no-undo .
+       70   define new global shared variable g#lib-trn2 as handle no-undo .
+       71   define new global shared variable g#lib-trn3 as handle no-undo .
+       72   define new global shared variable g#lib-trn4 as handle no-undo .
+       73   do
+       74   on error  undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       75   on stop   undo, return error substitute( "&1. stop", vss-workfile )
+       76   on endkey undo, return error substitute( "&1. endkey", vss-workfile )
+       77   :
+       78     define buffer buf_doc-pl   for ub.doc-pl .
+       79     define buffer buf_parts    for ub.parts .
+       80     define buffer buf_goods    for ub.goods .
+       81     define buffer buf_trn-doc  for ub.trn-doc .
+       82     define buffer buf_doc-line for ub.doc-line .
+       83     define variable v-density               as decimal no-undo .
+       84     define variable vardoc-qnty-doc-pl      as decimal no-undo.
+       85     define variable varfact-qnty-doc-pl     as decimal no-undo.
+       86     define variable varcli-doc-qnty-doc-pl  as decimal no-undo.
+       87     define variable varcli-fact-qnty-doc-pl as decimal no-undo.
+       88     define variable is-petrol               as logical no-undo.
+       89     define variable is-pieces               as logical no-undo.
+       90     if p-dens-source <> "dens_parts":U
+       91       and p-dens-source <> "dens_doc-line":U
+       92       and ( not ( p-dens-source begins "dens_value":U )
+       93             or ( ( p-dens-source begins "dens_value":U )
+       94                    and num-entries( p-dens-source, ":":U ) <> 2
+       95                )
+       96           )
+       97     then do:
+       98       return error substitute( "&1. Ошибка задания входящих параметров. Неверно задан параметр p-dens-source (&2)", vss-workfile, p-dens-source ) .
+       99     end.
+      100     find first buf_trn-doc
+      101       where buf_trn-doc.doc-code = p-doc-code
+      102       .
+      103     if p-gds-code <> ? then do:
+      104       find first buf_goods no-lock
+      105         where buf_goods.gds-code = p-gds-code
+      106         .
+      107     end.
+      108     for each buf_doc-line
+      109       where ( buf_doc-line.doc-code      = p-doc-code
+      110               and p-gds-code = ?
+      111             )
+      112             or
+      113             ( buf_doc-line.doc-code      = p-doc-code
+      114               and buf_doc-line.artic     = buf_goods.artic
+      115               and buf_doc-line.prod-type = buf_goods.prod-type
+      116               and buf_doc-line.prod-code = buf_goods.prod-code
+      117             )
+      118     on error undo, return error return-value
+      119     :
+      120       find first buf_goods no-lock
+      121         where buf_goods.artic     = buf_doc-line.artic
+      122           and buf_goods.prod-type = buf_doc-line.prod-type
+      123           and buf_goods.prod-code = buf_doc-line.prod-code
+      124         .
+      125   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_is-petrl in g#lib-trn
+      126     (
+      127        input buf_goods.artic
+      128     ,  input buf_goods.prod-type
+      129     ,  input buf_goods.prod-code
+      130     , output is-petrol
+      131     , output is-pieces
+      132     ) .
+      133       if is-petrol = true
+      134         and is-pieces <> true
+      135       then do:
+      136         if p-dens-source = "dens_doc-line":U then do:
+      137           assign
+      138             v-density = 1 / buf_doc-line.cli-base-rate
+      139           .
+      140         end.
+      141         else do:
+      142           if p-dens-source begins "dens_value":U then do:
+      143             assign
+      144               v-density = decimal( entry( 2, p-dens-source, ":":U ) )
+      145             .
+      146           end.
+      147         end.
+      148         for each buf_doc-pl
+      149           where buf_doc-pl.out-code = buf_trn-doc.doc-code
+      150             and buf_doc-pl.gds-code = buf_goods.gds-code
+      151         on error undo, return error return-value
+      152         :
+      153           delete buf_doc-pl.
+      154         end.
+      155         for each buf_parts
+      156           where buf_parts.out-code  = buf_trn-doc.doc-code
+      157             and buf_parts.obj-type  = buf_trn-doc.obj-type
+      158             and buf_parts.obj-code  = buf_trn-doc.obj-code
+      159             and buf_parts.artic     = buf_goods.artic
+      160             and buf_parts.prod-type = buf_goods.prod-type
+      161             and buf_parts.prod-code = buf_goods.prod-code
+      162           break by buf_parts.pl-code
+      163         on error undo, return error return-value
+      164         :
+      165           if p-dens-source = "dens_parts":U then do:
+      166             assign
+      167               v-density = 1 / buf_parts.cli-base-rate
+      168             .
+      169           end.
+      170           if first-of(buf_parts.pl-code) then do:
+      171             create buf_doc-pl.
+      172             assign
+      173               buf_doc-pl.obj-type = buf_parts.obj-type
+      174               buf_doc-pl.obj-code = buf_parts.obj-code
+      175               buf_doc-pl.pl-code  = buf_parts.pl-code
+      176               buf_doc-pl.out-code = buf_parts.out-code
+      177               buf_doc-pl.gds-code = buf_goods.gds-code
+      178             .
+      179             assign
+      180               vardoc-qnty-doc-pl      = 0.00
+      181               varfact-qnty-doc-pl     = 0.00
+      182               varcli-doc-qnty-doc-pl  = 0.00
+      183               varcli-fact-qnty-doc-pl = 0.00
+      184             .
+      185           end.
+      186           if v-density = ?
+      187             or v-density >= 1
+      188             or v-density <= 0
+      189           then do:
+      190             return error substitute( "&1. Плотность имеет некорректное значение &2. Параметр p-dens-source: &3", vss-workfile, v-density, p-dens-source ) .
+      191           end.
+      192           assign
+      193             vardoc-qnty-doc-pl      = vardoc-qnty-doc-pl       + buf_parts.qnty
+      194             varfact-qnty-doc-pl     = varfact-qnty-doc-pl      + buf_parts.fact-qnty
+      195             varcli-doc-qnty-doc-pl  = varcli-doc-qnty-doc-pl   + buf_parts.qnty * v-density
+      196             varcli-fact-qnty-doc-pl = varcli-fact-qnty-doc-pl  + buf_parts.fact-qnty * v-density
+      197           .
+      198           if last-of(buf_parts.pl-code) then do:
+      199             assign
+      200               buf_doc-pl.doc-qnty      = vardoc-qnty-doc-pl
+      201               buf_doc-pl.fact-qnty     = varfact-qnty-doc-pl
+      202               buf_doc-pl.cli-qnty      = varcli-doc-qnty-doc-pl
+      203               buf_doc-pl.cli-doc-qnty  = varcli-doc-qnty-doc-pl
+      204               buf_doc-pl.cli-fact-qnty = varcli-fact-qnty-doc-pl
+      205             .
+      206           end.
+      207         end.
+      208       end.
+      209     end.
+      210     return.
+      211   end.

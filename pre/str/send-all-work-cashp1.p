@@ -1,0 +1,898 @@
+block-level on error undo, throw.
+define variable vss-revision    as character no-undo init "$Revision:$":U .
+define variable vss-author      as character no-undo init "$Author:$":U .
+define variable vss-date        as character no-undo init "$Date:$":U .
+define variable vss-workfile    as character no-undo init "$Workfile:$":U .
+define variable vss-archive     as character no-undo init "$Archive:$":U .
+define variable vss-description as character no-undo init "".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define variable mdb-num   as integer   no-undo.
+define variable mObjType  as character no-undo.
+define variable mObjCode  as integer   no-undo.
+define variable mPostType as character no-undo.
+define variable mCashNum  as integer   no-undo.
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define new global shared variable g#attr-lib  as handle no-undo .
+define variable v-attr-lib-variable as handle no-undo .
+procedure cd-attr-code :
+  define input  parameter p-ucode          as character no-undo .
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-type           as character no-undo .
+  define output parameter p-format         as character no-undo .
+  define output parameter p-label          as character no-undo .
+  define output parameter p-user-can-edit  as logical   no-undo .
+  define output parameter p-output-display as logical   no-undo .
+  define output parameter p-other          as character no-undo .
+  define output parameter p-prop-list      as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-code in g#attr-lib
+      (input  p-ucode
+      ,input  p-code
+      ,output p-type
+      ,output p-format
+      ,output p-label
+      ,output p-user-can-edit
+      ,output p-output-display
+      ,output p-other
+      ,output p-prop-list
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-tooltip :
+  define input  parameter p-ucode   as character no-undo .
+  define input  parameter p-code    as character no-undo .
+  define output parameter p-tooltip as character no-undo .
+  define output parameter p-label   as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-tooltip in g#attr-lib
+      (input  p-ucode
+      ,input  p-code
+      ,output p-tooltip
+      ,output p-label
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-value :
+  define input  parameter p-db-num    like ub.cash-desk-attr.db-num        no-undo .
+  define input  parameter p-obj-code  like ub.cash-desk-attr.obj-code      no-undo .
+  define input  parameter p-pos-type  like ub.cash-desk-attr.pos-type      no-undo .
+  define input  parameter p-cash-num  like ub.cash-desk-attr.cash-num      no-undo .
+  define input  parameter p-ucode     like ub.cash-desk-attr.upper-attr-code      no-undo .
+  define input  parameter p-code      like ub.cash-desk-attr.attr-code      no-undo .
+  define output parameter p-character like ub.cash-desk-attr.attr-value-character    no-undo .
+  define output parameter p-date      like ub.cash-desk-attr.attr-value-date         no-undo .
+  define output parameter p-decimal   like ub.cash-desk-attr.attr-value-decimal      no-undo .
+  define output parameter p-integer   like ub.cash-desk-attr.attr-value-integer      no-undo .
+  define output parameter p-logical   like ub.cash-desk-attr.attr-value-logical      no-undo .
+  define output parameter p-type      as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-value in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input  p-ucode
+      ,input  p-code
+      ,output p-character
+      ,output p-date
+      ,output p-decimal
+      ,output p-integer
+      ,output p-logical
+      ,output p-type
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-write :
+  define input parameter p-db-num    like ub.cash-desk-attr.db-num     no-undo .
+  define input parameter p-obj-code  like ub.cash-desk-attr.obj-code   no-undo .
+  define input parameter p-pos-type  like ub.cash-desk-attr.pos-type   no-undo .
+  define input parameter p-cash-num  like ub.cash-desk-attr.cash-num   no-undo .
+  define input parameter p-ucode     like ub.cash-desk-attr.upper-attr-code  no-undo .
+  define input parameter p-code      like ub.cash-desk-attr.attr-code  no-undo .
+  define input parameter p-character like ub.cash-desk-attr.attr-value-character no-undo .
+  define input parameter p-date      like ub.cash-desk-attr.attr-value-date      no-undo .
+  define input parameter p-decimal   like ub.cash-desk-attr.attr-value-decimal   no-undo .
+  define input parameter p-integer   like ub.cash-desk-attr.attr-value-integer   no-undo .
+  define input parameter p-logical   like ub.cash-desk-attr.attr-value-logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-write in g#attr-lib
+      (input p-db-num
+      ,input p-obj-code
+      ,input p-pos-type
+      ,input p-cash-num
+      ,input p-ucode
+      ,input p-code
+      ,input p-character
+      ,input p-date
+      ,input p-decimal
+      ,input p-integer
+      ,input p-logical
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-exist :
+  define input  parameter p-db-num   like ub.cash-desk-attr.db-num     no-undo .
+  define input  parameter p-obj-code like ub.cash-desk-attr.obj-code   no-undo .
+  define input  parameter p-pos-type like ub.cash-desk-attr.pos-type   no-undo .
+  define input  parameter p-cash-num like ub.cash-desk-attr.cash-num   no-undo .
+  define input  parameter p-ucode    like ub.cash-desk-attr.upper-attr-code  no-undo .
+  define input  parameter p-code     like ub.cash-desk-attr.attr-code  no-undo .
+  define output parameter p-exist    as logical  no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-exist in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input  p-ucode
+      ,input  p-code
+      ,output p-exist
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-delete :
+  define input parameter  p-db-num   like ub.cash-desk-attr.db-num     no-undo .
+  define input parameter  p-obj-code like ub.cash-desk-attr.obj-code   no-undo .
+  define input parameter  p-pos-type like ub.cash-desk-attr.pos-type   no-undo .
+  define input parameter  p-cash-num like ub.cash-desk-attr.cash-num   no-undo .
+  define input parameter  p-ucode     like ub.cash-desk-attr.upper-attr-code  no-undo .
+  define input parameter  p-code     like ub.cash-desk-attr.attr-code  no-undo .
+  define output parameter p-deleted  as logical no-undo.
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-delete in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input  p-ucode
+      ,input  p-code
+      ,output p-deleted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-news :
+  define input  parameter p-ucode          as character no-undo .
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-news           as logical   no-undo .
+  define output parameter p-from-gbd       as logical   no-undo .
+  define output parameter p-from-ubd       as logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-news in g#attr-lib
+      (
+       input  p-ucode
+      ,input  p-code
+      ,output p-news
+      ,output p-from-gbd
+      ,output p-from-ubd
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-hist :
+  define input  parameter p-ucode          as character no-undo .
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-hist           as logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-hist in g#attr-lib
+      (input  p-ucode
+      ,input  p-code
+      ,output p-hist
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+function cd-attr-parse-date-time returns date
+(input  p-string as character
+,output p-time   as integer
+):
+  define variable v-return-value as date      no-undo .
+    if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-parse-date-time-proc in g#attr-lib
+    (input  p-string
+    ,output p-time
+    ,output v-return-value
+    ) no-error .
+  if error-status :error
+  then do:
+    return ? .
+  end.
+  return v-return-value .
+end function.
+procedure last-check-date-time :
+  define input parameter parparentproc as widget-handle no-undo .
+  define input parameter p-db-num like ub.cash-desk-attr.db-num no-undo .
+  define input parameter p-obj-code like ub.cash-desk-attr.obj-code no-undo .
+  define input parameter p-pos-type like ub.cash-desk-attr.pos-type no-undo .
+  define input parameter p-cash-num like ub.cash-desk-attr.cash-num no-undo .
+  define input-output parameter p-character as character no-undo .
+  define input-output parameter p-date      as date      no-undo .
+  define input-output parameter p-decimal   as decimal   no-undo .
+  define input-output parameter p-integer   as integer   no-undo .
+  define input-output parameter p-logical   as logical   no-undo .
+  define output parameter p-setted as logical no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run last-check-date-time in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input-output p-character
+      ,input-output p-date
+      ,input-output p-decimal
+      ,input-output p-integer
+      ,input-output p-logical
+      ,output p-setted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+function cd-attr-cd-datetostring returns character
+(input  p-date as date
+):
+  define variable v-return-value as character no-undo .
+    if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-cd-datetostring-proc in g#attr-lib
+    (input  p-date
+    ,output v-return-value
+    ) no-error .
+  if error-status :error
+  then do:
+    return ? .
+  end.
+  return v-return-value .
+end function.
+procedure cd-attr-last-report-params :
+  define input parameter parparentproc as widget-handle no-undo .
+  define input parameter p-db-num like ub.cash-desk-attr.db-num no-undo .
+  define input parameter p-obj-code like ub.cash-desk-attr.obj-code no-undo .
+  define input parameter p-pos-type like ub.cash-desk-attr.pos-type no-undo .
+  define input parameter p-cash-num like ub.cash-desk-attr.cash-num no-undo .
+  define input-output parameter p-character as character no-undo .
+  define input-output parameter p-date      as date      no-undo .
+  define input-output parameter p-decimal   as decimal   no-undo .
+  define input-output parameter p-integer   as integer   no-undo .
+  define input-output parameter p-logical   as logical   no-undo .
+  define output parameter p-setted as logical no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-last-report-params in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input-output p-character
+      ,input-output p-date
+      ,input-output p-decimal
+      ,input-output p-integer
+      ,input-output p-logical
+      ,output p-setted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-last-check-params :
+  define input parameter parparentproc as widget-handle no-undo .
+  define input parameter p-db-num like ub.cash-desk-attr.db-num no-undo .
+  define input parameter p-obj-code like ub.cash-desk-attr.obj-code no-undo .
+  define input parameter p-pos-type like ub.cash-desk-attr.pos-type no-undo .
+  define input parameter p-cash-num like ub.cash-desk-attr.cash-num no-undo .
+  define input-output parameter p-character as character no-undo .
+  define input-output parameter p-date      as date      no-undo .
+  define input-output parameter p-decimal   as decimal   no-undo .
+  define input-output parameter p-integer   as integer   no-undo .
+  define input-output parameter p-logical   as logical   no-undo .
+  define output parameter p-setted as logical no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-last-check-params in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input-output p-character
+      ,input-output p-date
+      ,input-output p-decimal
+      ,input-output p-integer
+      ,input-output p-logical
+      ,output p-setted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-last-check-date-time :
+  define input parameter parparentproc as widget-handle no-undo .
+  define input  parameter p-db-num like ub.cash-desk-attr.db-num no-undo .
+  define input  parameter p-obj-code like ub.cash-desk-attr.obj-code no-undo .
+  define input  parameter p-pos-type like ub.cash-desk-attr.pos-type no-undo .
+  define input  parameter p-cash-num like ub.cash-desk-attr.cash-num no-undo .
+  define input-output parameter p-character as character no-undo .
+  define input-output parameter p-date      as date      no-undo .
+  define input-output parameter p-decimal   as decimal   no-undo .
+  define input-output parameter p-integer   as integer   no-undo .
+  define input-output parameter p-logical   as logical   no-undo .
+  define output parameter p-setted as logical no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-last-check-maria in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input-output p-character
+      ,input-output p-date
+      ,input-output p-decimal
+      ,input-output p-integer
+      ,input-output p-logical
+      ,output p-setted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-periodic-tasks :
+define input  parameter p-db-num like ub.cash-desk-attr.db-num no-undo .
+define input  parameter p-obj-code like ub.cash-desk-attr.obj-code no-undo .
+define input  parameter p-pos-type like ub.cash-desk-attr.pos-type no-undo .
+define input  parameter p-cash-num like ub.cash-desk-attr.cash-num no-undo .
+define input-output parameter p-value as character no-undo .
+define output parameter p-setted as logical no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-periodic-tasks in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input-output p-value
+      ,output p-setted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+function cd-attr_get-attr-int returns integer
+(buffer buf_cash-desk for ub.cash-desk
+,input p-upper-attr-code as character
+,input p-attr-code as character
+,output p-mes as character
+):
+  define variable v-return-value as integer   no-undo .
+    if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr_get-attr-int-proc in g#attr-lib
+    (buffer buf_cash-desk
+    ,input  p-upper-attr-code
+    ,input  p-attr-code
+    ,output p-mes
+    ,output v-return-value
+    ) no-error .
+  if error-status :error
+  then do:
+    assign
+      p-mes = substitute("Неизвестная ошибка при вызове процедуры cd-attr_get-attr-int-proc &1 &2"
+                        ,error-status :get-message(1)
+                        ,return-value
+                        )
+    .
+    return ? .
+  end.
+  return v-return-value .
+end function.
+function cd-attr_get-attr-log returns logical
+(buffer buf_cash-desk for ub.cash-desk
+,input p-upper-attr-code as character
+,input p-attr-code as character
+,output p-mes as character
+):
+  define variable v-return-value as logical   no-undo .
+    if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr_get-attr-log-proc in g#attr-lib
+    (buffer buf_cash-desk
+    ,input  p-upper-attr-code
+    ,input  p-attr-code
+    ,output p-mes
+    ,output v-return-value
+    ) no-error .
+  if error-status :error
+  then do:
+    assign
+      p-mes = substitute("Неизвестная ошибка при вызове процедуры cd-attr_get-attr-log-proc &1 &2"
+                        ,error-status :get-message(1)
+                        ,return-value
+                        )
+    .
+    return ? .
+  end.
+  return v-return-value .
+end function.
+procedure cd-attr_check-marketer :
+  define input parameter p-db-num   like ub.cash-desk-attr.db-num     no-undo .
+  define input parameter p-obj-code like ub.cash-desk-attr.obj-code   no-undo .
+  define input parameter p-pos-type like ub.cash-desk-attr.pos-type   no-undo .
+  define input parameter p-cash-num like ub.cash-desk-attr.cash-num   no-undo .
+  define input parameter p-ucode     like ub.cash-desk-attr.upper-attr-code  no-undo .
+  define input parameter p-code     like ub.cash-desk-attr.attr-code  no-undo .
+  define input parameter p-value as character no-undo .
+  define input parameter p-mode  as character no-undo .
+  define output parameter p-correct     as logical no-undo .
+  define output parameter p-error-code  as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr_check-marketer in g#attr-lib
+      (input  p-db-num
+      ,input  p-obj-code
+      ,input  p-pos-type
+      ,input  p-cash-num
+      ,input  p-ucode
+      ,input  p-code
+      ,input  p-value
+      ,input  p-mode
+      ,output p-correct
+      ,output p-error-code
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-manual-edit :
+  define input  parameter p-ucode          as character no-undo .
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-section-num    as integer no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-manual-edit in g#attr-lib
+      (input  p-ucode
+      ,input  p-code
+      ,output p-section-num
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-batch-edit :
+  define input  parameter p-ucode          as character no-undo .
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-section-num    as integer no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-batch-edit in g#attr-lib
+      (input  p-ucode
+      ,input  p-code
+      ,output p-section-num
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure cd-attr-send-param :
+  define input  parameter p-ucode          as character no-undo .
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-send-param     as logical no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run cd-attr-send-param in g#attr-lib
+      (input  p-ucode
+      ,input  p-code
+      ,output p-send-param
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+define variable Mfirst as logical no-undo.
+function getValueConvert returns character  (igroup as char,
+                                             iparam as char,
+                                             ivalue as char):
+   define variable v-param-empty as character no-undo.
+   v-param-empty = "MACC_IP,MaxApiToken,Proxy_*,LmCHzLogin,LmCHzPass,TspiotHostAddr".
+   if igroup eq "FUCO"
+   then do:
+      if iparam eq "TrkDispAdr"
+      then
+         ivalue = "".
+   end.
+   else if igroup eq "GS1"
+   then do:
+      if can-do(v-param-empty, iparam)
+      then
+         ivalue = "".
+   end.
+   else if igroup eq "INTFACE"
+   then do:
+      if    iparam eq "DOMS_IP"
+         or iparam eq "DOMSPASSWORD"
+         or iparam eq "IFSFIP"
+         or iparam eq "LOGURL"
+         or iparam eq "MW20ADDRESS"
+         or iparam eq "ONLINEADDR"
+         or iparam eq "PRCATCHHOST"
+         or iparam begins "MSG_Cas_"
+      then
+         ivalue = "".
+   end.
+   else if igroup eq "TABLEMENU"
+   then do:
+      if iparam eq "URL"
+      then
+         ivalue = "".
+   end.
+   else if igroup eq "UFO2"
+   then do:
+      if iparam eq "VPNtestIP"
+      then
+         ivalue = "".
+   end.
+   return ivalue.
+end.
+function getDevice returns integer ():
+   define variable v-attr-value as character no-undo .
+   define variable v-attr-type  as character no-undo .
+   define variable v-device-kind as integer no-undo.
+   define variable v-date as date no-undo.
+   define variable v-decimal as decimal no-undo.
+   define variable v-logical as logical no-undo.
+   define variable v-dop as character no-undo.
+   run cd-attr-value in this-procedure
+      ( input mdb-num
+         ,input mObjCode
+         ,input mPostType
+         ,input mCashNum
+         ,input  (if mPostType = 'IBM-XML':U
+                                                           then 'IBM-XML_operative':U
+                                                           else 'AUTOTANK_operative':U)
+         ,input  (if mPostType = 'IBM-XML':U
+                                                           then 'device-kind':U
+                                                           else 'device-kind':U)
+         ,output v-attr-value
+         ,output v-date
+         ,output v-decimal
+         ,output v-device-kind
+         ,output v-logical
+         ,output v-dop
+         ) no-error.
+   if v-device-kind = ?
+   then v-device-kind = 0.
+   return v-device-kind.
+end.
+define variable mParent as character no-undo.
+define variable mDevice as integer   no-undo.
+procedure putc :
+   define input parameter iSAXWriter as handle no-undo .
+   define input parameter i-action   as character  no-undo .
+   define input parameter p-value    as character  no-undo .
+   define output parameter oSend      as logical    no-undo.
+   define buffer code-group for ub.code.
+   define buffer code-param for ub.code.
+   mDevice = getDevice().
+   mParent = "cash-param" + chr(4) + string(mDevice).
+   for each code-group where code-group.parent     eq mParent
+                         and code-group.code       eq "1"
+   no-lock:
+      iSAXWriter:start-element("Param").
+      do:
+         iSAXWriter:insert-attribute("ctrl",   "READ"              )   no-error.
+         iSAXWriter:insert-attribute("group",  "*"                 )   no-error.
+         iSAXWriter:insert-attribute("key",    "*"                 )   no-error.
+      end.
+      iSAXWriter:end-element("Param" ).
+      oSend = yes.
+      leave.
+   end.
+    mParent = mParent + chr(4) + string("1" ).
+end procedure.
+procedure get-cash-types:
+   define output parameter otypes as character no-undo init "Autotank,IBM-XML".
+end.
+procedure get-root-teg:
+   define output parameter otypes as character no-undo init "config".
+end.
+define variable parparentproc as handle no-undo.
+define variable mLogHandle    as handle no-undo.
+define variable mLogFile      as character no-undo.
+procedure set-context:
+   define input         parameter iparparentproc as handle      no-undo.
+   define input         parameter i-log-handle   as handle      no-undo.
+   define input         parameter iLogFile       as character   no-undo.
+   define output        parameter oProcIndo      as character   no-undo init "Настроек параметров".
+   assign
+      parparentproc = iparparentproc
+      mLogHandle    = i-log-handle
+      mLogFile      = iLogFile
+   .
+end.
+procedure set-cash-info:
+   define input         parameter iDB-num        as integer     no-undo.
+   define input         parameter iObjType       as character   no-undo.
+   define input         parameter iObjCode       as integer     no-undo.
+   define input         parameter iPostType      as character   no-undo.
+   define input         parameter iCashNum       as integer     no-undo.
+   assign
+      mDB-num       = iDB-num
+      mObjType      = iObjType
+      mObjCode      = iObjCode
+      mPostType     = iPostType
+      mCashNum      = iCashNum
+      Mfirst        = yes
+   .
+end.
+define variable mOk      as logical   no-undo init ?.
+procedure parse-result:
+   define input         parameter iWebRespMptr  as memptr      no-undo.
+   define input-output  parameter pViewLog      as logical     no-undo.
+   mOk = ?.
+   define variable hParser as handle no-undo.
+   create sax-reader hParser.
+   hParser:set-input-source("memptr", iWebRespMptr).
+   hParser:sax-parse () no-error.
+   if error-status:error
+   then do:
+      if error-status:num-messages > 0 then
+         return error error-status:get-message(1).
+      else
+         return error return-value.
+   end.
+   delete object hParser.
+   if not mOk
+   then
+      pViewLog = yes.
+end.
+procedure StartDocument:
+end procedure.
+define temp-table tt-cash-param-hist no-undo like ub.cash-param-hist .
+define variable mElement as character no-undo.
+define variable mtstamp as decimal no-undo.
+procedure StartElement:
+  define input parameter namespaceURI as character.
+  define input parameter localName as character.
+  define input parameter qname as character.
+  define input parameter attributes as handle.
+  mElement = qname.
+  if mElement = "Param" then do:
+    empty temp-table tt-cash-param-hist.
+    create tt-cash-param-hist.
+    assign
+      tt-cash-param-hist.obj-type    = mObjType
+      tt-cash-param-hist.obj-code    = mObjCode
+      tt-cash-param-hist.device      = mDevice
+      tt-cash-param-hist.cash-num    = mCashNum
+      tt-cash-param-hist.param_section      = "1"
+      tt-cash-param-hist.param_group = attributes:get-value-by-qname("group")
+      tt-cash-param-hist.param_name  = attributes:get-value-by-qname("key")
+      tt-cash-param-hist.tstamp      = mtstamp + timezone(now) * 60
+    .
+  end.
+  else if mElement = "config"
+  then do:
+     mtstamp = dec(attributes:get-value-by-qname("tstamp")).
+  end.
+end procedure.
+procedure Characters:
+  define input parameter charData as memptr.
+  define input parameter numChars as integer.
+  define variable vCurrContent as longchar no-undo.
+  define variable vLengthMemptr as int64 no-undo.
+  define variable vReadByte as int64 no-undo.
+  define variable vRead     as integer no-undo.
+  vLengthMemptr = numChars.
+  do while vLengthMemptr - vReadByte > 0 :
+     vRead = min(vLengthMemptr - vReadByte,30000).
+     vCurrContent = vCurrContent + GET-STRING(charData,vReadByte + 1,vRead).
+     vReadByte = vReadByte + vRead.
+  end.
+  if trim(vCurrContent) = "" then return.
+  case mElement:
+    when "ParamValue" then
+      tt-cash-param-hist.param_value = vCurrContent .
+    when "ParamDesc" then
+      tt-cash-param-hist.description = vCurrContent .
+    when "ErrorMessage" then do:
+      run write-log-and-file in mLogHandle (
+                               input 1
+                             , input mLogFile
+                             , input 1
+                             , input (if available tt-cash-param-hist
+                                      then substitute ('Group = "&1" key="&2":&3',
+                                      tt-cash-param-hist.param_group,
+                                      tt-cash-param-hist.param_name,
+                                      chr(10))
+                                      else "") + vCurrContent ).
+                                      end.
+  end case.
+end procedure.
+procedure EndElement:
+  define input parameter name_ as character.
+  define input parameter localName as character.
+  define input parameter qName as character.
+  define buffer Cash-param-hist for Cash-param-hist.
+  define buffer code for code.
+  define variable ii as integer no-undo .
+  if qname = "ErrorMessage" then do:
+     mOk = false.
+  end.
+  else if qname = "Param" then do:
+    do:
+    tt-cash-param-hist.param_value = getValueConvert(tt-cash-param-hist.param_group, tt-cash-param-hist.param_name, tt-cash-param-hist.param_value).
+    define variable vParantNotCaseSens as character no-undo.
+    define variable vCodeNotCaseSens as character no-undo.
+    vParantNotCaseSens = mParent +  chr(4) + tt-cash-param-hist.param_group.
+    vCodeNotCaseSens   = tt-cash-param-hist.param_name.
+    find first code where code.parent eq vParantNotCaseSens
+                      and code.code   eq vCodeNotCaseSens
+    no-lock no-error.
+    if not available code
+    then
+       find first code where code.parent eq vParantNotCaseSens
+                         and can-do(code.code, tt-cash-param-hist.param_name) no-lock no-error.
+       if Mfirst
+       then do:
+          for each cash-param-hist where cash-param-hist.obj-type      = tt-cash-param-hist.obj-type
+                                     and cash-param-hist.obj-code      = tt-cash-param-hist.obj-code
+                                     and cash-param-hist.cash-num      = tt-cash-param-hist.cash-num
+                                     and cash-param-hist.param_section = tt-cash-param-hist.param_section
+          exclusive-lock:
+             delete Cash-param-hist.
+          end.
+          Mfirst = false.
+       end.
+       find first cash-param-hist where cash-param-hist.obj-type      = tt-cash-param-hist.obj-type
+                                    and cash-param-hist.obj-code      = tt-cash-param-hist.obj-code
+                                    and cash-param-hist.cash-num      = tt-cash-param-hist.cash-num
+                                    and cash-param-hist.param_section = tt-cash-param-hist.param_section
+                                    and cash-param-hist.param_group   = tt-cash-param-hist.param_group
+                                    and cash-param-hist.param_name    = if available code then code.code else tt-cash-param-hist.param_name
+                                     no-error .
+       buffer-copy tt-cash-param-hist except param_name to cash-param-hist
+       assign
+          cash-param-hist.param_name    = if available code then code.code else tt-cash-param-hist.param_name
+        .
+     end.
+  end.
+end procedure.
+procedure EndDocument:
+  if mOk eq ?
+  then
+     mOk = true.
+end procedure.
+procedure Warning:
+  define input parameter ErrMessage as character no-undo.
+  message "The following WARNING was generated:~n" + ErrMessage
+       view-as alert-box info buttons ok.
+end procedure.
+procedure Error:
+  define input parameter ErrMessage as character no-undo.
+  message "The following NONFATAL ERROR was generated:~n" + ErrMessage
+       view-as alert-box info buttons ok.
+end procedure.
+procedure FatalError:
+  define input parameter ErrMessage as character no-undo.
+  return error "The following FATAL ERROR was generated:~n" + ErrMessage.
+end procedure.

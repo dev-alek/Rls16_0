@@ -1,0 +1,292 @@
+        1   block-level on error undo, throw.
+        2   define input  parameter p-file-name            as character no-undo .
+        3   define input  parameter p-write-string         as longchar  no-undo .
+        4   define input  parameter p-time-to-wait-seconds as integer   no-undo .
+        5   define variable vss-revision    as character no-undo init "$Revision: d3f7ea4aa09e, 3307, rls $":U .
+        6   define variable vss-author      as character no-undo init "$Author: DRuban $":U .
+        7   define variable vss-date        as character no-undo init "$Date: 2023/05/19 13:37:07 $":U .
+        8   define variable vss-workfile    as character no-undo init "$Workfile: fileapnd.p $":U .
+        9   define variable vss-archive     as character no-undo init "$Archive: gbl/fileapnd.p $":U .
+       10   define variable vss-description as character no-undo init "Записать информацию в файл в режиме добавления. Версия с позиционированием на конец файла".
+       11   procedure vss-get-info :
+       12     define output parameter p-vss-revision    like vss-revision    no-undo .
+       13     define output parameter p-vss-author      like vss-author      no-undo .
+       14     define output parameter p-vss-date        like vss-date        no-undo .
+       15     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       16     define output parameter p-vss-archive     like vss-archive     no-undo .
+       17     define output parameter p-vss-description like vss-description no-undo .
+       18     assign
+       19       p-vss-revision    = vss-revision
+       20       p-vss-author      = vss-author
+       21       p-vss-date        = vss-date
+       22       p-vss-workfile    = vss-workfile
+       23       p-vss-archive     = vss-archive
+       24       p-vss-description = vss-description
+       25     .
+       26   end procedure.
+       27   procedure vss-get-parameters :
+       28     define output parameter p-vss-parameters as character no-undo .
+       29       assign
+       30         p-vss-parameters = substitute('&1|&2|&3',p-file-name,p-write-string,p-time-to-wait-seconds)
+       31       .
+       32   end procedure.
+       33   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       34   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       35   define variable v-vssrevis-logger                   as handle    no-undo .
+       36   procedure vss-logevent :
+       37     define input  parameter p-extra-paramters as character no-undo .
+       38     define variable v-vssrevis-parameters as character no-undo .
+       39     do
+       40     on error undo, return error return-value
+       41     :
+       42       if  valid-handle(v-vssrevis-logger)
+       43       and v-vssrevis-logger :get-signature("logevent") <> ""
+       44       then do:
+       45         run vss-get-parameters in this-procedure
+       46           (output v-vssrevis-parameters
+       47           ).
+       48         run logevent in v-vssrevis-logger
+       49           (input vss-workfile
+       50           ,input vss-revision
+       51           ,input v-vssrevis-parameters
+       52           ,input p-extra-paramters
+       53           ).
+       54       end.
+       55     end.
+       56   end procedure.
+       57   assign
+       58     v-vssrevis-logger = g#vssrevis-logger
+       59   .
+       60   if  valid-handle(v-vssrevis-logger)
+       61   and v-vssrevis-logger :get-signature("logevent") <> ""
+       62   then do:
+       63     assign
+       64       v-vssrevis-logevent = true
+       65     .
+       66     run vss-logevent in this-procedure (input vss-description) .
+       67   end.
+       68   define new global shared variable g#language as character no-undo .
+       69   if g#language <> '' and g#language <> 'rus':U then do:
+       70     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       71   end.
+       72   define variable v-memptr-file-name       as memptr    no-undo .
+       73   define variable v-memptr-write-string    as memptr    no-undo .
+       74   define variable v-file-handle            as integer   no-undo .
+       75   define variable v-error-value            as integer   no-undo .
+       76   define variable v-result                 as integer   no-undo .
+       77   define variable v-random-wait-time       as integer   no-undo .
+       78   define variable v-start-time             as int64     no-undo .
+       79   do
+       80   on error  undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+       81   on stop   undo, return error substitute( "&1. stop", vss-workfile )
+       82   on endkey undo, return error substitute( "&1. endkey", vss-workfile )
+       83   :
+       84     if p-file-name = ?
+       85     or p-file-name = '':u
+       86     then do:
+       87       undo, return error "Ошибка задания входных параметров. Не задано имя файла" .
+       88     end.
+       89     if length(p-file-name) > 260
+       90     then do:
+       91       undo, return error
+       92         substitute("Ошибка задания входных параметров. Имя файла превышает максимально возможную длину. Имя файла &1"
+       93                   ,p-file-name
+       94                   ) .
+       95     end.
+       96     if p-write-string = ?
+       97     then do:
+       98       undo, return error "Ошибка задания входных параметров. Не задана строка" .
+       99     end.
+      100     if p-write-string = '':u
+      101     then do:
+      102       return .
+      103     end.
+      104     if p-time-to-wait-seconds = ?
+      105     then do:
+      106       undo, return error "Ошибка задания входных параметров. Не задано время ожидания" .
+      107     end.
+      108     if p-time-to-wait-seconds < 0
+      109     then do:
+      110       undo, return error substitute("Ошибка задания входных параметров. Время ожидания не может быть отрицательным. Задано время ожидания &1"
+      111                                    ,p-time-to-wait-seconds
+      112                                    ) .
+      113     end.
+      114     assign
+      115       v-start-time = etime
+      116     .
+      117     wait_block:
+      118     do while true
+      119     :
+      120       run CreateFileA
+      121         (input  p-file-name
+      122         ,input  1073741824
+      123         ,input  1
+      124         ,input  0
+      125         ,input  4
+      126         ,input  128
+      127         ,input  0
+      128         ,output v-file-handle
+      129         ) .
+      130       if v-file-handle = -1
+      131       then do:
+      132         run GetLastError
+      133           (output v-error-value
+      134           ) .
+      135       end.
+      136       assign
+      137         set-size(v-memptr-file-name) = 0
+      138       .
+      139       if v-file-handle <> -1
+      140       then do:
+      141         leave wait_block .
+      142       end.
+      143       if v-file-handle = -1
+      144       then do:
+      145         case v-error-value
+      146         :
+      147           when 32
+      148           then do:
+      149             if p-time-to-wait-seconds <> 0
+      150             and (etime - v-start-time) / 1000 > p-time-to-wait-seconds
+      151             then do:
+      152               undo, return error
+      153                 substitute("Запись в файл &1. Превышено допустимое время ожидания открытия файла &2"
+      154                           ,p-file-name
+      155                           ,p-time-to-wait-seconds
+      156                           ) .
+      157             end.
+      158             assign
+      159               v-random-wait-time = random(50, 300)
+      160             .
+      161             run Sleep
+      162               (input v-random-wait-time
+      163               ) .
+      164           end.
+      165           otherwise do:
+      166             undo, return error
+      167               substitute("Ошибка открытия файла &1. Номер ошибки &2"
+      168                         ,p-file-name
+      169                         ,v-error-value
+      170                         ) .
+      171           end.
+      172         end case .
+      173       end.
+      174     end.
+      175     define variable v-bytes-to-write as int64   no-undo .
+      176     define variable v-written-bytes  as int64   no-undo .
+      177     assign
+      178       v-bytes-to-write = length(p-write-string)
+      179     .
+      180     run SetFilePointer
+      181       (input v-file-handle
+      182       ,input 0
+      183       ,input 0
+      184       ,input 2
+      185       ,output v-result
+      186       ) .
+      187     if v-result = -1
+      188     then do:
+      189       run GetLastError
+      190         (output v-error-value
+      191         ) .
+      192       if v-error-value <> 0
+      193       then do:
+      194         if v-file-handle <> -1
+      195         then do:
+      196           run CloseHandle
+      197             (input  v-file-handle
+      198             ,output v-result
+      199             ) .
+      200           assign
+      201             v-file-handle = -1
+      202           .
+      203         end.
+      204         undo, return error
+      205           substitute("Ошибка позиционирования в конец файла &1. Номер ошибки &2"
+      206                     ,p-file-name
+      207                     ,v-error-value
+      208                     ) .
+      209       end.
+      210     end.
+      211     assign
+      212       set-size(v-memptr-write-string) = v-bytes-to-write + 5
+      213     .
+      214     assign
+      215       put-string(v-memptr-write-string, 5) = p-write-string
+      216     .
+      217     run WriteFile
+      218       (input  v-file-handle
+      219       ,input  get-pointer-value(v-memptr-write-string) + 4
+      220       ,input  v-bytes-to-write
+      221       ,input  get-pointer-value(v-memptr-write-string)
+      222       ,input  0
+      223       ,output v-result
+      224       ) .
+      225     assign
+      226       v-written-bytes = get-long(v-memptr-write-string, 1)
+      227     .
+      228     if v-written-bytes <> v-bytes-to-write
+      229     then do:
+      230       run GetLastError
+      231         (output v-error-value
+      232         ) .
+      233     end.
+      234     assign
+      235       set-size(v-memptr-write-string) = 0
+      236     .
+      237     run CloseHandle
+      238       (input  v-file-handle
+      239       ,output v-result
+      240       ) .
+      241     if v-written-bytes <> v-bytes-to-write
+      242     then do:
+      243       undo, return error
+      244         substitute("Ошибка при записи данных в файл &1. Была запрошена запись &2 байт. Записано &3 байт. Номер ошибки &4."
+      245                   ,p-file-name
+      246                   ,v-bytes-to-write
+      247                   ,v-written-bytes
+      248                   ,v-error-value
+      249                   ) .
+      250     end.
+      251   end.
+      252   PROCEDURE CreateFileA EXTERNAL "kernel32.dll"
+      253   :
+      254       DEFINE INPUT        PARAMETER lpFileName            as character .
+      255       DEFINE INPUT        PARAMETER dwDesiredAccess       AS LONG .
+      256       DEFINE INPUT        PARAMETER dwShareMode           AS LONG .
+      257       DEFINE INPUT        PARAMETER lpSecurityAttributes  AS LONG .
+      258       DEFINE INPUT        PARAMETER dwCreationDisposition AS LONG .
+      259       DEFINE INPUT        PARAMETER dwFlagsAndAttributes  AS LONG .
+      260       DEFINE INPUT        PARAMETER hTemplateFile         AS LONG .
+      261       DEFINE RETURN       PARAMETER RetParam              AS LONG .
+      262   END PROCEDURE.
+      263   PROCEDURE CloseHandle EXTERNAL "kernel32.dll"
+      264   :
+      265       DEFINE INPUT        PARAMETER hObject   AS LONG .
+      266       DEFINE RETURN       PARAMETER RetParam  AS LONG .
+      267   END PROCEDURE.
+      268   PROCEDURE GetLastError EXTERNAL "kernel32.dll"
+      269   :
+      270       DEFINE RETURN       PARAMETER RetParam  AS LONG .
+      271   END PROCEDURE.
+      272   PROCEDURE Sleep EXTERNAL "kernel32.dll"
+      273   :
+      274       DEFINE INPUT        PARAMETER pMilliseconds AS LONG .
+      275   END PROCEDURE.
+      276   PROCEDURE WriteFile EXTERNAL "kernel32.dll"
+      277   :
+      278       DEFINE INPUT        PARAMETER hFile                  AS LONG .
+      279       DEFINE INPUT        PARAMETER lpBuffer               AS LONG .
+      280       DEFINE INPUT        PARAMETER nNumberOfBytesToWrite  AS LONG .
+      281       DEFINE INPUT        PARAMETER lpNumberOfBytesWritten AS LONG .
+      282       DEFINE INPUT        PARAMETER lpOverlapped           AS LONG .
+      283       DEFINE RETURN       PARAMETER RetParam               AS LONG .
+      284   END PROCEDURE .
+      285   PROCEDURE SetFilePointer EXTERNAL "kernel32.dll"
+      286   :
+      287       DEFINE INPUT        PARAMETER hFile                AS LONG .
+      288       DEFINE INPUT        PARAMETER lDistanceToMove      AS LONG .
+      289       DEFINE INPUT        PARAMETER lpDistanceToMoveHigh AS LONG .
+      290       DEFINE INPUT        PARAMETER dwMoveMethod         AS LONG .
+      291       DEFINE RETURN       PARAMETER RetParam             AS LONG .
+      292   END PROCEDURE .

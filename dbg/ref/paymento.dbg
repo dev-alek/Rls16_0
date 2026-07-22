@@ -1,0 +1,2380 @@
+        1   DEFINE BUFFER buf_clients FOR ub.clients.
+        2   DEFINE BUFFER buf_currency FOR ub.currency.
+        3   DEFINE BUFFER locked_payment FOR ub.payment.
+        4   DEFINE TEMP-TABLE tt-payment NO-UNDO LIKE ub.payment.
+        5   define input parameter parparentproc as widget-handle no-undo .
+        6   define input parameter p-mode as char  no-undo.
+        7   define input-output param  p-rid   as   recid           no-undo.
+        8   define input parameter p-cli-type as character no-undo .
+        9   define input parameter p-cli-code as integer no-undo .
+       10   define input parameter p-curr-host-code like ub.sysconf.host-code no-undo .
+       11   DEFINE INPUT PARAMETER psource-type like ub.payment.source-type no-undo.
+       12   DEFINE INPUT PARAMETER psource-ref  like ub.payment.source-ref no-undo.
+       13   define input parameter p-d-card as character no-undo .
+       14   DEFINE INPUT PARAMETER ptot-cli like ub.payment.tot-cli no-undo.
+       15   DEFINE INPUT PARAMETER pexch-code like ub.payment.exch-code no-undo.
+       16   DEFINE INPUT PARAMETER pbase-rate like ub.payment.base-rate no-undo.
+       17   DEFINE INPUT PARAMETER pbase-scale like ub.payment.base-scale no-undo.
+       18   DEFINE INPUT PARAMETER pexch-rate like ub.payment.exch-rate no-undo.
+       19   DEFINE INPUT PARAMETER pexch-scale like ub.payment.exch-scale no-undo.
+       20   DEFINE INPUT PARAMETER pexch-date like ub.payment.exch-date no-undo.
+       21   DEFINE INPUT PARAMETER ppay-code like ub.payment.pay-code no-undo.
+       22   DEFINE INPUT PARAMETER pdate-pay like ub.payment.fact-date no-undo.
+       23   define variable vss-revision    as character no-undo init "$Revision$":u .
+       24   define variable vss-author      as character no-undo init "$Author$":u .
+       25   define variable vss-date        as character no-undo init "$Date$":u .
+       26   define variable vss-workfile    as character no-undo init "$Workfile$":u .
+       27   define variable vss-archive     as character no-undo init "$Archive$":u .
+       28   define variable vss-description as character no-undo init "Обещанный платеж" .
+       29   procedure vss-get-info :
+       30     define output parameter p-vss-revision    like vss-revision    no-undo .
+       31     define output parameter p-vss-author      like vss-author      no-undo .
+       32     define output parameter p-vss-date        like vss-date        no-undo .
+       33     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       34     define output parameter p-vss-archive     like vss-archive     no-undo .
+       35     define output parameter p-vss-description like vss-description no-undo .
+       36     assign
+       37       p-vss-revision    = vss-revision
+       38       p-vss-author      = vss-author
+       39       p-vss-date        = vss-date
+       40       p-vss-workfile    = vss-workfile
+       41       p-vss-archive     = vss-archive
+       42       p-vss-description = vss-description
+       43     .
+       44   end procedure.
+       45   procedure vss-get-parameters :
+       46     define output parameter p-vss-parameters as character no-undo .
+       47   end procedure.
+       48   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       49   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       50   define variable v-vssrevis-logger                   as handle    no-undo .
+       51   procedure vss-logevent :
+       52     define input  parameter p-extra-paramters as character no-undo .
+       53     define variable v-vssrevis-parameters as character no-undo .
+       54     do
+       55     on error undo, return error return-value
+       56     :
+       57       if  valid-handle(v-vssrevis-logger)
+       58       and v-vssrevis-logger :get-signature("logevent") <> ""
+       59       then do:
+       60         run vss-get-parameters in this-procedure
+       61           (output v-vssrevis-parameters
+       62           ).
+       63         run logevent in v-vssrevis-logger
+       64           (input vss-workfile
+       65           ,input vss-revision
+       66           ,input v-vssrevis-parameters
+       67           ,input p-extra-paramters
+       68           ).
+       69       end.
+       70     end.
+       71   end procedure.
+       72   assign
+       73     v-vssrevis-logger = g#vssrevis-logger
+       74   .
+       75   if  valid-handle(v-vssrevis-logger)
+       76   and v-vssrevis-logger :get-signature("logevent") <> ""
+       77   then do:
+       78     assign
+       79       v-vssrevis-logevent = true
+       80     .
+       81     run vss-logevent in this-procedure (input vss-description) .
+       82   end.
+       83   define new global shared variable g#language as character no-undo .
+       84   if g#language <> '' and g#language <> 'rus':U then do:
+       85     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       86   end.
+       87   define new global shared variable g#library  as handle no-undo .
+       88   define new global shared variable g#library2 as handle no-undo .
+       89   define   shared variable g#auto as logical no-undo.
+       90   define   shared variable g#news as logical no-undo.
+       91   define   shared variable g#oxml as logical no-undo.
+       92   define   shared variable g#esys as logical no-undo.
+       93   define   shared variable g#news-source-db as integer no-undo.
+       94   define   shared variable g#esys-source-esys as integer no-undo.
+       95   define   shared variable g#db-num as integer   no-undo .
+       96   define   shared variable g#userid as character no-undo .
+       97   define   shared variable g#passwd as character no-undo .
+       98   procedure proc-alt-shift-f2:
+       99     if not ibs.th.gbl.gbl-var:rcode
+      100   then
+      101     run gbl\inidebug.p .
+      102   end.
+      103   procedure proc-alt-shift-f3:
+      104     run gbl/prvssinf.p
+      105       ( input this-procedure
+      106       ) .
+      107   end.
+      108   define variable v-inform-launched as logical no-undo initial false .
+      109   procedure proc-alt-shift-f4:
+      110     define variable v-action as character no-undo .
+      111     if v-inform-launched = false then do:
+      112       assign
+      113         v-inform-launched = true
+      114       .
+      115       run gbl/d-inform.w
+      116         (  input self
+      117         ,  input this-procedure
+      118         , output v-action
+      119         ) no-error .
+      120       run gbl/infrmact.p (input self, input this-procedure, input v-action) no-error .
+      121       assign
+      122         v-inform-launched = false
+      123       .
+      124     end.
+      125   end.
+      126   procedure proc-alt-f1:
+      127     run gbl/corrhelp.p
+      128       (input this-procedure
+      129       ) .
+      130   end .
+      131   on alt-shift-f2 anywhere do:
+      132     run proc-alt-shift-f2.
+      133   end.
+      134   on alt-shift-f3 anywhere do:
+      135     run proc-alt-shift-f3 in this-procedure .
+      136   end.
+      137   on alt-shift-f4 anywhere do:
+      138     run proc-alt-shift-f4 in this-procedure.
+      139   end.
+      140   on alt-f1 anywhere do:
+      141     run proc-alt-f1 in this-procedure .
+      142   end.
+      143   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      144     define variable v-cntxt-db-num        as integer   no-undo .
+      145     define variable v-cntxt-userid        as character no-undo .
+      146     define variable v-cntxt-level         as character no-undo .
+      147     define variable v-cntxt-host-code-obj as integer   no-undo .
+      148     define variable v-cntxt-obj-type      as character no-undo .
+      149     define variable v-cntxt-obj-code      as integer   no-undo .
+      150     define variable v-cntxt-db-num-obj    as integer   no-undo .
+      151     define variable v-cntxt-is-admin      as logical   no-undo .
+      152   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      153   procedure cur-time :
+      154      define output parameter p-today as date      no-undo .
+      155      define output parameter p-time  as integer   no-undo .
+      156     do
+      157     on error undo, return error
+      158     :
+      159       define variable v-date1 as date      no-undo .
+      160       define variable v-date2 as date      no-undo .
+      161       define variable v-time  as integer   no-undo .
+      162       assign
+      163         v-date1 = today
+      164         v-time  = time
+      165         v-date2 = today
+      166       .
+      167       if v-date1 <> v-date2
+      168       then do:
+      169         assign
+      170           v-date1 = today
+      171           v-time  = v-time
+      172         .
+      173       end.
+      174       assign
+      175         p-today = v-date1
+      176         p-time  = v-time
+      177       .
+      178     end.
+      179   end.
+      180   function cur-time-date returns character
+      181   :
+      182     return string(today, '99/99/9999':U) .
+      183   end.
+      184   function cur-time-mjd returns decimal
+      185   :
+      186     define variable v-date as date      no-undo .
+      187     define variable v-time as integer   no-undo .
+      188     run cur-time in this-procedure
+      189       (output v-date
+      190       ,output v-time
+      191       ) .
+      192     return integer(v-date) - 2400002 + (v-time / 86400) .
+      193   end.
+      194   function cur-time-get-ending-index returns integer
+      195   (input p-number as integer
+      196   )
+      197   :
+      198     if p-number < 0
+      199     or p-number = ?
+      200     then do:
+      201       return 1 .
+      202     end.
+      203     define variable v-rest as integer   no-undo .
+      204     assign
+      205       p-number = p-number modulo 100
+      206     .
+      207     if p-number < 20
+      208     then do:
+      209       assign
+      210         v-rest = p-number
+      211       .
+      212     end.
+      213     else do:
+      214       assign
+      215         v-rest = p-number modulo 10
+      216       .
+      217     end.
+      218     case v-rest :
+      219       when 1
+      220       then do:
+      221         return 2 .
+      222       end.
+      223       when 2 or
+      224       when 3 or
+      225       when 4
+      226       then do:
+      227         return 3 .
+      228       end.
+      229       otherwise do:
+      230         return 1 .
+      231       end.
+      232     end case .
+      233   end.
+      234   procedure cur-time-mjd-to-date :
+      235      define input  parameter i-mjd-diff as decimal no-undo.
+      236      define output parameter o-Date     as date    no-undo.
+      237      define output parameter o-Time     as integer no-undo.
+      238      define variable v-day-number as integer   no-undo .
+      239      if    i-mjd-diff < 0
+      240         or i-mjd-diff = ?
+      241      then do:
+      242         return "?" .
+      243      end.
+      244      assign
+      245         v-day-number = truncate(i-mjd-diff,0).
+      246         o-Date = date(v-day-number + 2400002).
+      247         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      248     .
+      249   end.
+      250   function cur-time-mjd-to-string returns character
+      251   (input p-mjd-diff as decimal
+      252   )
+      253   :
+      254     define variable v-day-number as integer   no-undo .
+      255     define variable v-seconds    as integer   no-undo .
+      256     define variable v-hour       as integer   no-undo .
+      257     define variable v-min        as integer   no-undo .
+      258     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      259     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      260     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      261     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      262     if p-mjd-diff < 0
+      263     or p-mjd-diff = ?
+      264     then do:
+      265       return "?" .
+      266     end.
+      267     assign
+      268       v-day-number = integer(truncate(p-mjd-diff,0))
+      269       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      270     .
+      271     if v-seconds > 86400
+      272     then do:
+      273       assign
+      274         v-seconds = 86400 - 1
+      275       .
+      276     end.
+      277     if v-seconds < 0
+      278     then do:
+      279       assign
+      280         v-seconds = 0
+      281       .
+      282     end.
+      283     assign
+      284       v-hour = truncate(v-seconds / 3600, 0)
+      285     .
+      286     assign
+      287       v-seconds = v-seconds modulo 3600
+      288     .
+      289     assign
+      290       v-min = truncate(v-seconds / 60, 0)
+      291     .
+      292     assign
+      293       v-seconds = v-seconds modulo 60
+      294     .
+      295     return
+      296         (if v-day-number <> 0
+      297           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      298           else ""
+      299         )
+      300       + (if v-day-number <> 0 or v-hour <> 0
+      301           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      302           else ""
+      303         )
+      304       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      305           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      306           else ""
+      307         )
+      308       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      309       .
+      310   end.
+      311   function cur-time-string returns character
+      312   :
+      313     define variable v-date as date      no-undo .
+      314     define variable v-time as integer   no-undo .
+      315     run cur-time in this-procedure
+      316       (output v-date
+      317       ,output v-time
+      318       ) .
+      319     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      320   end.
+      321   function cur-time-string-sec returns character
+      322   :
+      323     define variable v-date as date      no-undo .
+      324     define variable v-time as integer   no-undo .
+      325     run cur-time in this-procedure
+      326       (output v-date
+      327       ,output v-time
+      328       ) .
+      329     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      330   end.
+      331   function cur-time-custom  returns character
+      332   (input p-prefix as character
+      333   ,input p-date-format as character
+      334   ,input p-delimiter as character
+      335   ,input p-time-format as character
+      336   ,input p-suffix as character
+      337   )
+      338   :
+      339     define variable v-date as date      no-undo .
+      340     define variable v-time as integer   no-undo .
+      341     run cur-time in this-procedure
+      342       (output v-date
+      343       ,output v-time
+      344       ) .
+      345     return
+      346       p-prefix
+      347       + string(v-date, p-date-format)
+      348       + p-delimiter
+      349       + string(v-time, p-time-format)
+      350       + p-suffix
+      351       .
+      352   end.
+      353   function cur-time-print  returns character
+      354   :
+      355     define variable v-date as date      no-undo .
+      356     define variable v-time as integer   no-undo .
+      357     run cur-time in this-procedure
+      358       (output v-date
+      359       ,output v-time
+      360       ) .
+      361     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      362   end.
+      363   function cur-time-datetime returns datetime
+      364   :
+      365     define variable v-char as character no-undo .
+      366     define variable v-datetime as datetime no-undo .
+      367     v-char = cur-time-string().
+      368     v-datetime = datetime(v-char).
+      369     return  v-datetime.
+      370   end.
+      371   function cur-time-string-msec returns character
+      372   :
+      373     define variable v-date as datetime  no-undo .
+      374     v-date = now.
+      375     return string(v-date) .
+      376   end.
+      377   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      378   define NEW SHARED temp-table temp-labels no-undo
+      379   field f_name as character
+      380   field l_name as character
+      381   field v_old as character
+      382   field v_new as character
+      383   field t_name as character
+      384   field num_ as integer
+      385   field uniq-key-rec as character
+      386   field action as integer
+      387   field fNotChange as logical
+      388   field f_update as logical
+      389   field f_can_update as logical
+      390   field f_parent as character
+      391   field f_visible as logical
+      392   field f_root as character
+      393   index iu f_update
+      394   index ivisible  f_visible
+      395   index iparent f_root f_parent
+      396   index pi is unique primary
+      397   num_
+      398   t_name
+      399   f_name
+      400   index
+      401   Chan
+      402   fnotChange
+      403   t_name
+      404   f_name
+      405   index imain uniq-key-rec
+      406   .
+      407   FUNCTION get-all-fields returns character (p-file-name as character ):
+      408   define variable v-dop as character no-undo .
+      409     find first _file no-lock where _file._file-name = p-file-name no-error .
+      410     if not available _file then return "":U.
+      411     for each _field no-lock where
+      412              _field._file-recid = recid(_file) :
+      413       assign
+      414       v-dop = v-dop + _field._field-name + chr(44)
+      415       .
+      416     end.
+      417     return trim(v-dop).
+      418   END FUNCTION.
+      419   procedure tempchgs-create-lable-record :
+      420   define input parameter p-t_name as character no-undo .
+      421   define input parameter p-f_name as character no-undo .
+      422   define input parameter p-l_name as character no-undo .
+      423   define input parameter p-f_update as logical no-undo .
+      424   define input parameter p-f_parent as character no-undo .
+      425   define input parameter p-f_visible as logical no-undo .
+      426   define buffer buf_temp-labels for temp-labels.
+      427     do
+      428     on error undo, return error
+      429     :
+      430        find first buf_temp-labels where
+      431                 buf_temp-labels.t_name = p-t_name
+      432             and buf_temp-labels.f_name = p-f_name no-error.
+      433        if not available buf_temp-labels then do:
+      434         create buf_temp-labels.
+      435         assign
+      436         buf_temp-labels.t_name = p-t_name
+      437         buf_temp-labels.f_name = p-f_name
+      438         buf_temp-labels.l_name = p-l_name
+      439         .
+      440        end.
+      441        assign
+      442        buf_temp-labels.f_can_update = p-f_update
+      443        buf_temp-labels.f_parent = p-f_parent
+      444        buf_temp-labels.f_visible = p-f_visible
+      445        buf_temp-labels.f_root = (if p-f_parent = '':U then p-f_name else p-f_parent)
+      446        buf_temp-labels.num_ = 0
+      447        .
+      448     end.
+      449   end procedure.
+      450   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      451   define  temp-table temp-changes no-undo
+      452   field f_name as character
+      453   field l_name as character
+      454   field v_old as character
+      455   field v_new as character
+      456   field t_name as character
+      457   field num_ as integer
+      458   field uniq-key-rec as character
+      459   field action as integer
+      460   field fNotChange as logical
+      461   index pi is unique primary
+      462   num_
+      463   t_name
+      464   f_name
+      465   index
+      466   Chan
+      467   fnotChange
+      468   t_name
+      469   f_name
+      470   index imain uniq-key-rec
+      471   .
+      472   PROCEDURE proc-full-temp-changes :
+      473     define input  parameter p-hst-handle as handle    no-undo .
+      474     define input  parameter p-main-table as character no-undo .
+      475     define input  parameter p-field-list as character no-undo .
+      476     define input  parameter p-label-form as character no-undo .
+      477     define variable h-new-buf         as handle    no-undo .
+      478     define variable h-main-buf        as handle    no-undo .
+      479     define variable h-for-comp        as handle    no-undo .
+      480     define variable v-inform          as character no-undo .
+      481     define variable v-ind             as integer   no-undo .
+      482     define variable v-idx-field-qnty  as integer   no-undo .
+      483     define variable v-num-entries     as integer   no-undo .
+      484     define variable fh                as handle    no-undo .
+      485     define variable fh-main           as handle    no-undo .
+      486     define variable fh-old            as handle    no-undo .
+      487     define variable fh-new            as handle    no-undo .
+      488     define variable v-field-name      as character no-undo .
+      489     define variable v-field-lvl       as character no-undo .
+      490     define variable v-field-form      as character no-undo .
+      491     define variable v-search-exp      as character no-undo .
+      492     define variable v-srch-main       as character no-undo .
+      493     define variable v-word-link       as character no-undo .
+      494     define variable v-av-chip-num     as logical   no-undo .
+      495     define variable v-main-pi-fld-lst as character no-undo .
+      496     define variable v-main-fld-lst    as character no-undo .
+      497     define variable v-delim-list      as character no-undo .
+      498     define variable v-label           as character no-undo .
+      499     define variable v-old-value       as character no-undo case-sensitive.
+      500     define variable v-new-value       as character no-undo case-sensitive.
+      501     define variable v-chg-fields as character no-undo.
+      502     for each temp-changes:
+      503       delete temp-changes.
+      504     end.
+      505     if not p-hst-handle:available then do:
+      506       return .
+      507     end.
+      508     create buffer h-new-buf  for table p-hst-handle .
+      509     create buffer h-main-buf for table p-main-table .
+      510     assign
+      511       v-inform = h-main-buf:index-information(1)
+      512       v-ind    = 2
+      513     .
+      514     do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      515     on error undo, return error
+      516     :
+      517       assign
+      518         v-inform = h-main-buf:index-information( v-ind )
+      519         v-ind    = v-ind + 1
+      520       .
+      521     end.
+      522     if v-inform = ?
+      523       or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      524       or entry( 3, v-inform, ",":U ) <> "1":U
+      525     then do:
+      526       return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-workfile, h-main-buf:name ).
+      527     end.
+      528     assign
+      529       v-idx-field-qnty = num-entries( v-inform ) - 4
+      530     .
+      531     if v-idx-field-qnty < 2 then do:
+      532       return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-workfile, v-inform, h-main-buf:name ).
+      533     end.
+      534     assign
+      535       v-srch-main   = "where":U
+      536       v-word-link   = "":U
+      537       v-av-chip-num = false
+      538       v-delim-list  = "":U
+      539     .
+      540     do v-ind = 1 to v-idx-field-qnty by 2
+      541     on error undo, return error
+      542     :
+      543       assign
+      544         v-field-name      = entry( 4 + v-ind, v-inform, ",":U )
+      545         fh                = p-hst-handle:buffer-field( v-field-name )
+      546         fh-main           = h-main-buf:buffer-field( v-field-name )
+      547         v-srch-main       = substitute( "&1 &2 &3.&4 =", v-srch-main, v-word-link, fh-main:table, v-field-name )
+      548         v-main-pi-fld-lst = v-main-pi-fld-lst + v-delim-list + v-field-name
+      549       .
+      550       if fh:data-type ="character":U then do:
+      551         assign
+      552           v-srch-main = substitute( '&1 "&2"', v-srch-main, replace( replace( fh:buffer-value(), '"':U, '""':U ), '~~':U, '~~~~':U ) )
+      553         .
+      554       end.
+      555       else do:
+      556         assign
+      557           v-srch-main = substitute( "&1 &2", v-srch-main, fh:buffer-value() )
+      558         .
+      559       end.
+      560       if v-delim-list = "":U then do:
+      561         assign
+      562           v-delim-list = ",":U
+      563         .
+      564       end.
+      565       if v-word-link = "":U then do:
+      566         assign
+      567           v-word-link = "and":U
+      568         .
+      569       end.
+      570     end.
+      571     assign
+      572       v-delim-list  = "":U
+      573     .
+      574     do v-ind = 1 to h-main-buf:num-fields
+      575     on error undo, return error
+      576     :
+      577       assign
+      578         fh-main      = h-main-buf:buffer-field( v-ind )
+      579         v-field-name = fh-main:name
+      580       .
+      581         assign
+      582           v-main-fld-lst = v-main-fld-lst + v-delim-list + v-field-name
+      583         .
+      584         if v-delim-list = "":U then do:
+      585           assign
+      586             v-delim-list = ",":U
+      587           .
+      588         end.
+      589     end.
+      590     assign
+      591       v-inform = p-hst-handle:index-information(1)
+      592       v-ind    = 2
+      593     .
+      594     do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      595     on error undo, return error
+      596     :
+      597       assign
+      598         v-inform = p-hst-handle:index-information( v-ind )
+      599         v-ind    = v-ind + 1
+      600       .
+      601     end.
+      602     if v-inform = ?
+      603       or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      604       or entry( 3, v-inform, ",":U ) <> "1":U
+      605     then do:
+      606       return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-workfile, p-hst-handle:name ).
+      607     end.
+      608     assign
+      609       v-idx-field-qnty = num-entries( v-inform ) - 4
+      610     .
+      611     if v-idx-field-qnty < 2 then do:
+      612       return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-workfile, v-inform, p-hst-handle:name ).
+      613     end.
+      614     assign
+      615       v-search-exp  = "where":U
+      616       v-word-link   = "":U
+      617       v-av-chip-num = false
+      618     .
+      619     do v-ind = 1 to v-idx-field-qnty by 2
+      620     on error undo, return error
+      621     :
+      622       assign
+      623         v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      624         fh           = p-hst-handle:buffer-field( v-field-name )
+      625         v-search-exp = substitute( "&1 &2 &3.&4", v-search-exp, v-word-link, fh:table, v-field-name )
+      626       .
+      627       if v-field-name = "chip-num":U then do:
+      628         assign
+      629           v-search-exp  = substitute( "&1 >", v-search-exp )
+      630           v-av-chip-num = true
+      631         .
+      632       end.
+      633       else do:
+      634         assign
+      635           v-search-exp = substitute( "&1 =", v-search-exp )
+      636         .
+      637       end.
+      638       if fh:data-type ="character":U then do:
+      639         assign
+      640           v-search-exp = substitute( '&1 "&2"', v-search-exp, replace( replace( fh:buffer-value(), '"':U, '""':U ), '~~':U, '~~~~':U ) )
+      641         .
+      642       end.
+      643       else do:
+      644         assign
+      645           v-search-exp = substitute( '&1 &2', v-search-exp, fh:buffer-value() )
+      646         .
+      647       end.
+      648       if v-word-link = "":U then do:
+      649         assign
+      650           v-word-link = "and":U
+      651         .
+      652       end.
+      653     end.
+      654     if v-av-chip-num = false then do:
+      655       message
+      656         vss-workfile vss-revision vss-description skip
+      657         substitute( "Таблица &2 не содержит поля chip-num.", vss-workfile, p-hst-handle:name ) skip
+      658         "Использование данной процедуры невозможно!" skip
+      659         view-as alert-box error .
+      660       return error .
+      661     end.
+      662     h-new-buf:find-first( v-search-exp, no-lock ) no-error .
+      663     if not h-new-buf:available then do:
+      664       h-main-buf:find-first( v-srch-main, no-lock ) no-error .
+      665       if not h-main-buf:available then do:
+      666         assign
+      667           h-for-comp = ?
+      668         .
+      669       end.
+      670       else do:
+      671         assign
+      672           h-for-comp = h-main-buf
+      673         .
+      674       end.
+      675     end.
+      676     else do:
+      677       assign
+      678         h-for-comp = h-new-buf
+      679       .
+      680     end.
+      681     assign
+      682       v-num-entries = num-entries( v-main-fld-lst, ",":U )
+      683     .
+      684     do v-ind = 1 to v-num-entries
+      685     on error undo, return error return-value
+      686     :
+      687       assign
+      688         v-field-name = entry( v-ind, v-main-fld-lst )
+      689         fh-old       = p-hst-handle:buffer-field( v-field-name )
+      690         v-old-value  = fh-old:buffer-value()
+      691         v-label      = trim( fh-old:label )
+      692       .
+      693       if ( trim( p-field-list ) <> "":U
+      694            and lookup( v-field-name, p-field-list ) > 0
+      695          )
+      696          or trim( p-field-list ) = "":U
+      697       then do:
+      698         if h-for-comp <> ? then do:
+      699           assign
+      700             fh-new      = h-for-comp:buffer-field( v-field-name )
+      701             v-new-value = fh-new:buffer-value()
+      702           .
+      703         end.
+      704         else do:
+      705           assign
+      706             v-new-value = "":U
+      707           .
+      708         end.
+      709         if v-old-value <> v-new-value
+      710         then do:
+      711           create temp-changes.
+      712           assign
+      713             temp-changes.t_name = p-main-table
+      714             temp-changes.f_name = v-field-name
+      715             temp-changes.l_name = replace( v-label, "&":U, "":U )
+      716             temp-changes.v_old  = trim( v-old-value )
+      717             temp-changes.v_new  = trim( v-new-value )
+      718             temp-changes.num_   = 0
+      719             temp-changes.fNotChange = v-old-value eq v-new-value
+      720           .
+      721         end.
+      722       end.
+      723     end.
+      724     assign
+      725       v-num-entries = num-entries( p-label-form, chr(8) )
+      726     .
+      727     do v-ind = 1 to v-num-entries
+      728     on error undo, return error return-value
+      729     :
+      730       if num-entries( entry( v-ind, p-label-form, chr(8) ), chr(4) ) = 3 then do:
+      731         assign
+      732           v-field-name = entry( 1, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+      733           v-field-lvl  = entry( 2, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+      734           v-field-form = entry( 3, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+      735         .
+      736         find first temp-changes
+      737           where temp-changes.f_name = v-field-name
+      738           no-error .
+      739         if available temp-changes then do:
+      740           if trim( v-field-lvl ) <> "":U then do:
+      741             assign
+      742               temp-changes.l_name = v-field-lvl
+      743             .
+      744           end.
+      745           if trim( v-field-form ) <> "":U then do:
+      746             assign
+      747               temp-changes.v_old = dynamic-function( v-field-form, temp-changes.v_old )
+      748             .
+      749             if h-for-comp <> ? then do:
+      750               assign
+      751                 temp-changes.v_new = dynamic-function( v-field-form, temp-changes.v_new )
+      752               .
+      753             end.
+      754           end.
+      755         end.
+      756       end.
+      757       else do:
+      758         message
+      759           vss-workfile vss-revision vss-description skip
+      760           "Ошибка! Список должен содержать три поля с разделителем delim-par!" skip
+      761           substitute( "список для поля '&1': '&2'"
+      762                       ,entry( 1, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+      763                       ,entry( v-ind, p-label-form, chr(8) )
+      764                     ) skip
+      765           substitute( "полный список: &2", p-label-form ) skip
+      766           view-as alert-box error .
+      767       end.
+      768     end.
+      769     delete object h-new-buf .
+      770     delete object h-main-buf .
+      771   END PROCEDURE.
+      772   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      773   define variable tempcont_v-num_ as integer no-undo .
+      774   define  temp-table temp-tables no-undo
+      775   field tbl-name as character
+      776   field new-tbl-handle as handle
+      777   field new-table-handle as handle
+      778   index pi is unique primary
+      779   tbl-name.
+      780   define  temp-table temp-records no-undo
+      781   field tbl-name as character
+      782   field uniq-key-rec as character
+      783   index pi is unique primary
+      784   tbl-name
+      785   uniq-key-rec
+      786   .
+      787   procedure tempcont_create-changes :
+      788   define input  parameter p-tbl-name   as character no-undo.
+      789   define input  parameter p-tbl-handle as handle    no-undo.
+      790   define input  parameter p-ttbl-handle as handle    no-undo.
+      791   define input  parameter p-action as integer no-undo .
+      792   define variable v-chg-fields as character no-undo .
+      793   define variable v-ii as integer no-undo .
+      794   define variable fh-main as handle no-undo .
+      795   define variable fh-temp as handle no-undo .
+      796   define variable fh as handle no-undo .
+      797   define variable th as handle no-undo .
+      798   define variable v-main-value as character no-undo .
+      799   define variable v-temp-value as character no-undo .
+      800   define variable v-uniq-key-rec as character no-undo .
+      801   define variable v-ind as integer no-undo .
+      802   define variable v-keys as character no-undo .
+      803   if p-tbl-handle:available then do:
+      804     if p-tbl-handle:buffer-compare( p-ttbl-handle) = yes then return.
+      805   end.
+      806   do v-ii = 1 to min(p-tbl-handle:num-fields, p-ttbl-handle:num-fields):
+      807     assign
+      808     fh-main      = p-tbl-handle:buffer-field( v-ii )
+      809     fh-temp      = p-ttbl-handle:buffer-field( v-ii )
+      810     .
+      811     if fh-main:name = fh-temp:name
+      812     and fh-main:data-type = fh-temp:data-type then do:
+      813       if fh-main:buffer-value ne fh-temp:buffer-value then do:
+      814         if p-action = integer('1':U) then do:
+      815           assign
+      816           fh = fh-temp
+      817           th = p-ttbl-handle
+      818           v-main-value = fh-main:initial
+      819           v-keys  = p-ttbl-handle:keys
+      820           .
+      821         end.
+      822         else do:
+      823           assign
+      824           fh = fh-main
+      825           th = p-tbl-handle
+      826           v-main-value = fh-main:string-value
+      827           v-keys  = p-tbl-handle:keys
+      828           .
+      829         end.
+      830         assign
+      831         v-temp-value = fh-temp:string-value
+      832        .
+      833        if v-uniq-key-rec = '':U then do:
+      834           v-uniq-key-rec = p-tbl-name.
+      835           do v-ind = 1 to num-entries(v-keys)
+      836           on error undo, return error
+      837           :
+      838             assign
+      839             fh = th:buffer-field(entry(v-ind, v-keys))
+      840             v-uniq-key-rec = v-uniq-key-rec + chr(3) + substitute("&1", fh:buffer-value())
+      841             .
+      842           end.
+      843         end.
+      844         create temp-changes.
+      845         assign
+      846         temp-changes.t_name = p-tbl-name
+      847         temp-changes.f_name = fh-main:name
+      848         temp-changes.l_name = '':U
+      849         temp-changes.v_old  = v-main-value
+      850         temp-changes.v_new  = v-temp-value
+      851         temp-changes.action = p-action
+      852         temp-changes.uniq-key-rec = v-uniq-key-rec
+      853         temp-changes.num_   = tempcont_v-num_ + 1
+      854         tempcont_v-num_     = tempcont_v-num_ + 1
+      855         .
+      856       end.
+      857     end.
+      858   end.
+      859   end procedure.
+      860   procedure tempcont_create-record :
+      861   define input  parameter p-tbl-name   as character no-undo.
+      862   define input  parameter p-new-tbl-handle as handle    no-undo.
+      863   define input  parameter p-action as integer no-undo .
+      864   do
+      865   on error  undo, return error substitute( "&1 (tempcont_create-record). &2&3&4", vss-include-info4, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      866   on stop   undo, return error substitute( "&1 (tempcont_create-record). stop", vss-include-info4 )
+      867   on endkey undo, return error substitute( "&1 (tempcont_create-record). endkey", vss-include-info4 )
+      868   :
+      869     define variable tt-name          as character no-undo .
+      870     define variable tth              as handle    no-undo .
+      871     define variable bh_tt            as handle    no-undo .
+      872     define variable v-ok             as logical   no-undo .
+      873     define variable v-full-tbl-name  as character no-undo .
+      874     define variable v-inform         as character no-undo .
+      875     define variable v-ind            as integer   no-undo .
+      876     define variable v-idx-field-qnty as integer   no-undo .
+      877     define variable v-where          as character no-undo .
+      878     define variable v-word-link      as character no-undo .
+      879     define variable v-field-name     as character no-undo .
+      880     define variable fh_tbl-name      as handle    no-undo .
+      881     define variable fh_tt            as handle    no-undo .
+      882     define variable v-field-val      as character no-undo .
+      883     define variable compare-log      as logical no-undo .
+      884     define buffer buf_temp-tables  for temp-tables.
+      885     if not p-new-tbl-handle:available then do:
+      886       return error substitute( "&1. Переданный буфер таблицы &2 не доступен", vss-include-info4, p-tbl-name ).
+      887     end.
+      888     assign
+      889       v-full-tbl-name = substitute( "ub.&1":U, p-tbl-name )
+      890     .
+      891     find first buf_temp-tables where
+      892               buf_temp-tables.tbl-name = p-tbl-name no-error .
+      893     if not available buf_temp-tables then do:
+      894       create temp-table tth.
+      895       assign
+      896         tt-name = "wt-" + p-tbl-name
+      897         tth:undo = no
+      898       .
+      899       v-ok = yes.
+      900       assign
+      901         v-ok = tth:create-like( v-full-tbl-name ) no-error
+      902       .
+      903       if v-ok <> true then do:
+      904         return error substitute( "&1 (tempcont_create-record). Ошибка при создании временной таблицы &2 (1)", vss-include-info4, tt-name ) .
+      905       end.
+      906       assign
+      907         v-ok = tth:temp-table-prepare( tt-name ) no-error
+      908       .
+      909       if v-ok <> true then do:
+      910         return error substitute( "&1 (tempcont_create-record). Ошибка при создании временной таблицы &2 (2)", vss-include-info4, tt-name ) .
+      911       end.
+      912       create buf_temp-tables.
+      913       assign
+      914       buf_temp-tables.tbl-name = p-tbl-name
+      915       buf_temp-tables.new-tbl-handle = tth:default-buffer-handle
+      916       buf_temp-tables.new-table-handle = tth
+      917       .
+      918       assign
+      919       bh_tt = buf_temp-tables.new-tbl-handle
+      920       .
+      921     end.
+      922     else do:
+      923       if p-new-tbl-handle:table-handle = buf_temp-tables.new-tbl-handle:table-handle then do:
+      924         assign
+      925         bh_tt = p-new-tbl-handle
+      926         .
+      927       end.
+      928       else do:
+      929         assign
+      930         bh_tt = buf_temp-tables.new-tbl-handle
+      931         .
+      932       end.
+      933     end.
+      934     assign
+      935     v-inform = bh_tt:index-information(1)
+      936     v-ind    = 2
+      937     .
+      938     do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      939     on error undo, return error
+      940     :
+      941       assign
+      942         v-inform = bh_tt:index-information( v-ind )
+      943         v-ind    = v-ind + 1
+      944       .
+      945     end.
+      946     if v-inform = ?
+      947       or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      948       or entry( 3, v-inform, ",":U ) <> "1":U
+      949     then do:
+      950       return error substitute( "&1 (tempcont_create-record). Таблица &2 не имеет первичного ключа в БД", vss-include-info4, p-tbl-name ).
+      951     end.
+      952     assign
+      953       v-idx-field-qnty = num-entries( v-inform ) - 4
+      954     .
+      955     if v-idx-field-qnty < 2 then do:
+      956       return error substitute( "&1 (tempcont_create-record). Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info4, v-inform, p-tbl-name ).
+      957     end.
+      958     assign
+      959       v-where     = "where":U
+      960       v-word-link = "":U
+      961     .
+      962     block_where:
+      963     do v-ind = 1 to v-idx-field-qnty by 2
+      964     on error undo, return error
+      965     :
+      966       assign
+      967         v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      968         fh_tbl-name  = bh_tt:buffer-field( v-field-name )
+      969         fh_tt        = p-new-tbl-handle:buffer-field( v-field-name )
+      970         v-field-val  = fh_tt:buffer-value
+      971         v-where      = substitute( "&1 &2 &3.&4 =", v-where, v-word-link, fh_tbl-name:table, v-field-name )
+      972       .
+      973       if fh_tbl-name:data-type ="character":U then do:
+      974           assign
+      975           v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+      976           v-field-val = replace( v-field-val, '"':U, '~~"':U )
+      977           v-field-val = replace( v-field-val, "'":U, "~~'":U )
+      978           v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+      979           v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+      980           v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+      981           v-field-val = replace( v-field-val, chr(10), '~~n':U )
+      982           v-field-val = replace( v-field-val, chr(9), '~~t':U )
+      983           v-field-val = replace( v-field-val, chr(13), '~~r':U )
+      984           v-field-val = replace( v-field-val, chr(27), '~~E':U )
+      985           v-field-val = replace( v-field-val, chr(8), '~~b':U )
+      986           v-field-val = replace( v-field-val, chr(12), '~~f':U )
+      987           v-field-val = substitute( '"&1"', v-field-val )
+      988           .
+      989       end.
+      990       assign
+      991         v-where = substitute( "&1 &2", v-where, v-field-val )
+      992       .
+      993       if v-word-link = "":U then do:
+      994         assign
+      995           v-word-link = "and":U
+      996         .
+      997       end.
+      998     end.
+      999     bh_tt:find-first( v-where, exclusive-lock ) no-error .
+     1000     if not bh_tt:available then do:
+     1001       assign
+     1002         v-ok = false
+     1003       .
+     1004       assign
+     1005         v-ok = bh_tt:buffer-create no-error
+     1006       .
+     1007       if v-ok <> true then do:
+     1008         return error substitute( "&1 (tempcont_create-record). Ошибка при создании буфера временной таблицы.", vss-include-info4, p-tbl-name ).
+     1009       end.
+     1010       assign
+     1011         compare-log = false
+     1012       .
+     1013     end.
+     1014     else do:
+     1015       assign
+     1016         compare-log = bh_tt:buffer-compare( p-new-tbl-handle )
+     1017       .
+     1018     end.
+     1019     if compare-log = false then do:
+     1020       assign
+     1021         v-ok = false
+     1022       .
+     1023       assign
+     1024         v-ok = bh_tt:buffer-copy( p-new-tbl-handle ) no-error
+     1025       .
+     1026       if v-ok <> true then do:
+     1027         return error substitute( "&1 (tempcont_create-record). BUFFER-COPY не прошел для таблицы &2", vss-include-info4, p-tbl-name ).
+     1028       end.
+     1029     end.
+     1030     assign
+     1031       v-ok = false
+     1032     .
+     1033     assign
+     1034       v-ok = bh_tt:buffer-release() no-error
+     1035     .
+     1036     if v-ok <> true then do:
+     1037       return error substitute( "&1 (tempcont_create-record). buffer-release не прошел для таблицы &2", vss-include-info4, p-tbl-name ).
+     1038     end.
+     1039     assign
+     1040       v-ok = false
+     1041     .
+     1042     assign
+     1043       fh_tbl-name  = ?
+     1044       fh_tt        = ?
+     1045       bh_tt        = ?
+     1046     .
+     1047   end.
+     1048   end procedure.
+     1049   procedure tempcont_get-buffer-handle :
+     1050   define input parameter p-tbl-name as character no-undo .
+     1051   define output parameter p-new-tbl-handle as handle no-undo .
+     1052   do
+     1053   on error undo, return error
+     1054   :
+     1055     define variable tth              as handle    no-undo .
+     1056     define variable tt-name          as character no-undo .
+     1057     define variable v-ok             as logical   no-undo .
+     1058     define variable v-full-tbl-name  as character no-undo .
+     1059     define buffer buf_temp-tables  for temp-tables.
+     1060     find first buf_temp-tables where
+     1061              buf_temp-tables.tbl-name = p-tbl-name no-error .
+     1062     if not available buf_temp-tables then do:
+     1063       create temp-table tth.
+     1064       assign
+     1065       tt-name = "wt-" + p-tbl-name
+     1066       tth:undo = no
+     1067       v-full-tbl-name = substitute( "ub.&1":U, p-tbl-name )
+     1068       .
+     1069       v-ok = yes.
+     1070       assign
+     1071       v-ok = tth:create-like( v-full-tbl-name ) no-error
+     1072       .
+     1073       if v-ok <> true then do:
+     1074         return error substitute( "&1 (tempcont_get-buffer-handle). Ошибка при создании временной таблицы &2 (1)", vss-include-info4, tt-name ) .
+     1075       end.
+     1076       assign
+     1077         v-ok = tth:temp-table-prepare( tt-name ) no-error
+     1078       .
+     1079       if v-ok <> true then do:
+     1080         return error substitute( "&1 (tempcont_get-buffer-handle). Ошибка при создании временной таблицы &2 (2)", vss-include-info4, tt-name ) .
+     1081       end.
+     1082       create buf_temp-tables.
+     1083       assign
+     1084       buf_temp-tables.new-table-handle = tth
+     1085       buf_temp-tables.tbl-name = p-tbl-name
+     1086       buf_temp-tables.new-tbl-handle = tth:default-buffer-handle
+     1087       .
+     1088     end.
+     1089     p-new-tbl-handle = buf_temp-tables.new-tbl-handle.
+     1090   end.
+     1091   end procedure.
+     1092   procedure tempcont_clear :
+     1093   define buffer buf_temp-tables for temp-tables.
+     1094   do
+     1095   on error undo, return error return-value
+     1096   :
+     1097     for each buf_temp-tables:
+     1098       if valid-handle(buf_temp-tables.new-table-handle) then do:
+     1099         buf_temp-tables.new-tbl-handle:empty-temp-table().
+     1100       end.
+     1101       delete object buf_temp-tables.new-table-handle.
+     1102     end.
+     1103   end.
+     1104   end procedure.
+     1105   DEFINE VARIABLE for-pay-name like ub.pay-type.obj-name no-undo.
+     1106   DEFINE BUFFER payer for ub.clients.
+     1107   DEFINE BUFFER buf_Dis-card for ub.dis-card.
+     1108   DEFINE BUFFER buf_ord-doc for ub.ord-doc.
+     1109   DEFINE BUFFER buf_pay-type for ub.pay-type.
+     1110   DEFINE BUFFER buf_curr-chk FOR ub.currency.
+     1111   DEFINE BUTTON B-exch-code
+     1112        IMAGE-UP FILE "btn-down-arrow":U
+     1113        IMAGE-DOWN FILE "btn-down-arrow":U
+     1114        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+     1115        LABEL "B"
+     1116        SIZE 3 BY 1.
+     1117   DEFINE BUTTON B-exit AUTO-GO
+     1118        LABEL "&Ввод"
+     1119        SIZE 10 BY 1
+     1120        BGCOLOR 8 .
+     1121   DEFINE BUTTON B-Help
+     1122        LABEL "Помо&щь"
+     1123        SIZE 3 BY 1
+     1124        BGCOLOR 8 .
+     1125   DEFINE BUTTON B-pay-code
+     1126        IMAGE-UP FILE "btn-down-arrow":U
+     1127        IMAGE-DOWN FILE "btn-down-arrow":U
+     1128        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+     1129        LABEL "B"
+     1130        SIZE 3 BY 1.
+     1131   DEFINE BUTTON B-payer
+     1132        IMAGE-UP FILE "btn-down-arrow":U
+     1133        IMAGE-DOWN FILE "btn-down-arrow":U
+     1134        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+     1135        LABEL "B"
+     1136        SIZE 3 BY 1.
+     1137   DEFINE BUTTON b-quit AUTO-END-KEY
+     1138        LABEL "&Отмена"
+     1139        SIZE 10 BY 1
+     1140        BGCOLOR 8 .
+     1141   DEFINE VARIABLE exch-code-name AS CHARACTER FORMAT "X(3)"
+     1142         VIEW-AS TEXT
+     1143        SIZE 7.6 BY 1
+     1144        FGCOLOR 4 .
+     1145   DEFINE VARIABLE pay-type-name AS CHARACTER FORMAT "X(256)":U
+     1146         VIEW-AS TEXT
+     1147        SIZE 33 BY 1
+     1148        FGCOLOR 4  NO-UNDO.
+     1149   DEFINE VARIABLE payer-name AS CHARACTER FORMAT "X(40)"
+     1150         VIEW-AS TEXT
+     1151        SIZE 41 BY 1
+     1152        FGCOLOR 4  NO-UNDO.
+     1153   DEFINE QUERY Dialog-Frame FOR
+     1154         ub.payment,
+     1155         ub.clients,
+     1156         ub.currency,
+     1157         tt-payment SCROLLING.
+     1158   DEFINE FRAME Dialog-Frame
+     1159        B-exit AT ROW 1 COL 1.1
+     1160        b-quit AT ROW 1 COL 11.1
+     1161        B-Help AT ROW 1 COL 95
+     1162        tt-payment.fact-date AT ROW 3.13 COL 83.4 COLON-ALIGNED
+     1163             LABEL "Дата"
+     1164             VIEW-AS FILL-IN
+     1165             SIZE 12 BY 1
+     1166             FGCOLOR 4
+     1167        tt-payment.cli-type AT ROW 3.2 COL 11.8 COLON-ALIGNED
+     1168             LABEL "Контрагент"
+     1169             VIEW-AS FILL-IN
+     1170             SIZE 5 BY 1
+     1171        tt-payment.cli-code AT ROW 3.2 COL 19 COLON-ALIGNED NO-LABEL
+     1172             VIEW-AS FILL-IN
+     1173             SIZE 13 BY 1
+     1174        tt-payment.due-date AT ROW 4.43 COL 83.8 COLON-ALIGNED
+     1175             LABEL "Ожид."
+     1176             VIEW-AS FILL-IN
+     1177             SIZE 12 BY 1.07
+     1178             FGCOLOR 4
+     1179        tt-payment.payer-type AT ROW 4.53 COL 11.8 COLON-ALIGNED
+     1180             VIEW-AS FILL-IN
+     1181             SIZE 5 BY 1
+     1182        tt-payment.payer-code AT ROW 4.53 COL 19 COLON-ALIGNED NO-LABEL
+     1183             VIEW-AS FILL-IN
+     1184             SIZE 12.5 BY 1
+     1185        B-payer AT ROW 4.53 COL 33.9
+     1186        tt-payment.status_ AT ROW 5.67 COL 80 COLON-ALIGNED
+     1187             LABEL "Статус"
+     1188             VIEW-AS FILL-IN
+     1189             SIZE 15.8 BY 1
+     1190             FGCOLOR 4
+     1191        tt-payment.pay-code AT ROW 5.8 COL 11.8 COLON-ALIGNED
+     1192             LABEL "Код оплаты"
+     1193             VIEW-AS FILL-IN
+     1194             SIZE 7.5 BY 1
+     1195        B-pay-code AT ROW 5.8 COL 22.5
+     1196        tt-payment.creid AT ROW 6.93 COL 80 COLON-ALIGNED
+     1197             LABEL "Создал"
+     1198             VIEW-AS FILL-IN
+     1199             SIZE 15.8 BY 1
+     1200             FGCOLOR 4
+     1201        tt-payment.source-type AT ROW 7.13 COL 13 COLON-ALIGNED
+     1202             LABEL "К документу"
+     1203             VIEW-AS FILL-IN
+     1204             SIZE 13.3 BY 1
+     1205        tt-payment.source-ref AT ROW 7.17 COL 33.3 COLON-ALIGNED
+     1206             LABEL "№"
+     1207             VIEW-AS FILL-IN
+     1208             SIZE 18.4 BY 1
+     1209        tt-payment.closid AT ROW 8.2 COL 80 COLON-ALIGNED
+     1210             LABEL "Закрыл"
+     1211             VIEW-AS FILL-IN
+     1212             SIZE 15.8 BY 1
+     1213             FGCOLOR 4
+     1214        tt-payment.tot-cli AT ROW 9.63 COL 14 COLON-ALIGNED
+     1215             LABEL "Сумма платежа"
+     1216             VIEW-AS FILL-IN
+     1217             SIZE 20 BY 1
+     1218             FGCOLOR 4
+     1219        tt-payment.exch-code AT ROW 9.63 COL 41.6 COLON-ALIGNED
+     1220             LABEL "Вал."
+     1221             VIEW-AS FILL-IN
+     1222             SIZE 4.5 BY .97
+     1223        B-exch-code AT ROW 9.63 COL 49
+     1224        tt-payment.exch-rate AT ROW 9.63 COL 64.4 COLON-ALIGNED
+     1225             LABEL "Курс"
+     1226             VIEW-AS FILL-IN
+     1227             SIZE 11 BY 1.17
+     1228             FGCOLOR 4
+     1229        tt-payment.exch-scale AT ROW 9.63 COL 76.4 COLON-ALIGNED NO-LABEL
+     1230             VIEW-AS FILL-IN
+     1231             SIZE 4.9 BY 1
+     1232        tt-payment.exch-date AT ROW 9.63 COL 82.5 COLON-ALIGNED NO-LABEL
+     1233             VIEW-AS FILL-IN
+     1234             SIZE 13.3 BY 1.17
+     1235        tt-payment.tot-base AT ROW 10.8 COL 14 COLON-ALIGNED
+     1236             LABEL "Сумма (б.в.)"
+     1237             VIEW-AS FILL-IN
+     1238             SIZE 20 BY 1
+     1239        tt-payment.base-rate AT ROW 10.8 COL 64.4 COLON-ALIGNED
+     1240             LABEL "Курс б.в."
+     1241             VIEW-AS FILL-IN
+     1242             SIZE 11.1 BY 1
+     1243             FGCOLOR 4
+     1244        tt-payment.base-scale AT ROW 10.8 COL 76.4 COLON-ALIGNED NO-LABEL
+     1245             VIEW-AS FILL-IN
+     1246             SIZE 4.9 BY 1
+     1247        tt-payment.tot-rubl AT ROW 12.03 COL 14 COLON-ALIGNED
+     1248             LABEL "Сумма (rub)"
+     1249             VIEW-AS FILL-IN
+     1250             SIZE 20 BY 1
+     1251        tt-payment.PS AT ROW 14 COL 1 NO-LABEL
+     1252             VIEW-AS EDITOR SCROLLBAR-VERTICAL
+     1253             SIZE 98 BY 2
+     1254       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+     1255            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+     1256            DEFAULT-BUTTON B-exit CANCEL-BUTTON b-quit.
+     1257   DEFINE FRAME Dialog-Frame
+     1258        buf_clients.obj-name AT ROW 3.2 COL 34 COLON-ALIGNED NO-LABEL
+     1259              VIEW-AS TEXT
+     1260             SIZE 43 BY 1
+     1261             FGCOLOR 4
+     1262        payer-name AT ROW 4.53 COL 35.1 COLON-ALIGNED NO-LABEL
+     1263        pay-type-name AT ROW 5.8 COL 27 NO-LABEL
+     1264        exch-code-name AT ROW 9.63 COL 50.4 COLON-ALIGNED NO-LABEL
+     1265        SPACE(39.00) SKIP(6.23)
+     1266       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+     1267            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+     1268            TITLE "Платеж"
+     1269            DEFAULT-BUTTON B-exit CANCEL-BUTTON b-quit.
+     1270   ASSIGN
+     1271          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+     1272          FRAME Dialog-Frame:HIDDEN           = TRUE.
+     1273   ON WINDOW-CLOSE OF FRAME Dialog-Frame
+     1274   DO:
+     1275     APPLY "END-ERROR":U TO SELF.
+     1276   END.
+     1277   ON CHOOSE OF B-exch-code IN FRAME Dialog-Frame
+     1278   DO:
+     1279     RUN local-curr-chk in this-procedure ("exch-code", "button").
+     1280     apply "entry" to tt-payment.exch-code in FRAME Dialog-Frame.
+     1281     run calc-sums in this-procedure ( input "exch-code") no-error.
+     1282     return no-apply.
+     1283   END.
+     1284   ON CHOOSE OF B-exit IN FRAME Dialog-Frame
+     1285   DO:
+     1286   IF p-mode = 'ПРОСМОТР':U THEN DO:
+     1287     UNDO, RETURN NO-APPLY.
+     1288   END.
+     1289   RUN proc-save IN THIS-PROCEDURE NO-ERROR.
+     1290   IF ERROR-STATUS:ERROR THEN RETURN NO-APPLY.
+     1291   END.
+     1292   ON CHOOSE OF B-pay-code IN FRAME Dialog-Frame
+     1293   DO:
+     1294   define variable v-ref-rec as character no-undo .
+     1295       run ref/paytype.w ( input parparentproc
+     1296                          ,input "b-sel"
+     1297                          ,output  v-ref-rec ).
+     1298       find FIRST buf_pay-type where
+     1299                  recid(buf_pay-type) = integer(v-ref-rec) no-lock no-error.
+     1300      if not available buf_pay-type then return no-apply.
+     1301      DISPLAY
+     1302      buf_pay-type.obj-code @ tt-payment.pay-code
+     1303      buf_pay-type.obj-name @ pay-type-name
+     1304      WITH FRAME Dialog-Frame.
+     1305      RETURN NO-APPLY.
+     1306   END.
+     1307   ON CHOOSE OF B-payer IN FRAME Dialog-Frame
+     1308   DO:
+     1309   DEFINE VARIABLE ref-list as char no-undo.
+     1310   define variable v-ref-rec as recid no-undo .
+     1311   run ref/cli-all.w ( input parparentproc
+     1312                  ,input "b-sel"
+     1313                  ,input 'все':U
+     1314                  ,input ?
+     1315                  ,input ?
+     1316                  ,input ?
+     1317                  ,input ?
+     1318                  ,input ?
+     1319                  ,output ref-list) NO-ERROR .
+     1320   if ref-list <> "" then do:
+     1321     v-ref-rec = integer (ref-list).
+     1322     find payer where recid ( payer ) = v-ref-rec no-lock.
+     1323     display
+     1324     payer.obj-code @ tt-payment.payer-code
+     1325     payer.obj-type @ tt-payment.payer-type
+     1326     payer.obj-name @ payer-name
+     1327     with frame Dialog-Frame.
+     1328   END.
+     1329   RUN check-payer in this-procedure No-error.
+     1330   IF error-status:error then do:
+     1331       return no-apply.
+     1332   end.
+     1333   END.
+     1334   ON LEAVE OF tt-payment.base-rate IN FRAME Dialog-Frame
+     1335   DO:
+     1336     APPLY "RETURN" TO tt-payment.base-rate.
+     1337   END.
+     1338   ON RETURN OF tt-payment.base-rate IN FRAME Dialog-Frame
+     1339   DO:
+     1340     run calc-sums in this-procedure ( input "base-rate") no-error.
+     1341   END.
+     1342   ON LEAVE OF tt-payment.base-scale IN FRAME Dialog-Frame
+     1343   DO:
+     1344     APPLY "RETURN" TO tt-payment.base-scale.
+     1345   END.
+     1346   ON RETURN OF tt-payment.base-scale IN FRAME Dialog-Frame
+     1347   DO:
+     1348     run calc-sums in this-procedure ( input "base-rate") no-error.
+     1349   END.
+     1350   ON LEAVE OF tt-payment.exch-code IN FRAME Dialog-Frame
+     1351   DO:
+     1352     if input frame Dialog-Frame tt-payment.exch-code <> tt-payment.exch-code then do:
+     1353       run local-curr-chk in this-procedure ("exch-code", "leave").
+     1354     end.
+     1355   END.
+     1356   ON MOUSE-SELECT-DBLCLICK OF tt-payment.exch-code IN FRAME Dialog-Frame
+     1357   OR RETURN OF tt-payment.exch-code IN FRAME Dialog-Frame DO:
+     1358     run local-curr-chk in this-procedure ("exch-code", "ret-mouse").
+     1359     apply "entry" to tt-payment.exch-code in frame Dialog-Frame.
+     1360     return no-apply.
+     1361   END.
+     1362   ON LEAVE OF tt-payment.exch-date IN FRAME Dialog-Frame
+     1363   DO:
+     1364     APPLY "RETURN" TO tt-payment.exch-date.
+     1365   END.
+     1366   ON RETURN OF tt-payment.exch-date IN FRAME Dialog-Frame
+     1367   DO:
+     1368   END.
+     1369   ON LEAVE OF tt-payment.exch-rate IN FRAME Dialog-Frame
+     1370   DO:
+     1371     APPLY "RETURN" to tt-payment.exch-rate.
+     1372   END.
+     1373   ON RETURN OF tt-payment.exch-rate IN FRAME Dialog-Frame
+     1374   DO:
+     1375     run calc-sums in this-procedure ( input "exch-code") no-error.
+     1376   END.
+     1377   ON LEAVE OF tt-payment.exch-scale IN FRAME Dialog-Frame
+     1378   DO:
+     1379     APPLY "RETURN" to tt-payment.exch-scale.
+     1380   END.
+     1381   ON RETURN OF tt-payment.exch-scale IN FRAME Dialog-Frame
+     1382   DO:
+     1383     run calc-sums in this-procedure ( input "exch-code") no-error.
+     1384   END.
+     1385   ON LEAVE OF tt-payment.pay-code IN FRAME Dialog-Frame
+     1386   DO:
+     1387     APPLY "RETURN" to tt-payment.pay-code.
+     1388   END.
+     1389   ON RETURN OF tt-payment.pay-code IN FRAME Dialog-Frame
+     1390   DO:
+     1391   run check-pay-code in this-procedure no-error.
+     1392   if error-status:error then return no-apply.
+     1393   display
+     1394   buf_pay-type.obj-name @ pay-type-name
+     1395   with frame Dialog-Frame.
+     1396   END.
+     1397   ON LEAVE OF tt-payment.payer-code IN FRAME Dialog-Frame
+     1398   DO:
+     1399      FIND FIRST payer No-LOCK WHERE
+     1400                 payer.obj-type = input frame Dialog-Frame tt-payment.payer-type
+     1401             AND payer.obj-code = input frame Dialog-Frame tt-payment.payer-code no-error.
+     1402      if available payer then
+     1403      DISPLAY
+     1404      payer.obj-name @ payer-name
+     1405      with frame Dialog-Frame.
+     1406      run check-payer in this-procedure no-error.
+     1407      if error-status:error then return no-apply.
+     1408   END.
+     1409   ON RETURN OF tt-payment.payer-code IN FRAME Dialog-Frame
+     1410   DO:
+     1411       DEFINE VARIABLE ref-list as char no-undo.
+     1412       define variable v-ref-rec as recid no-undo .
+     1413       FIND FIRST payer NO-LOCK WHERE
+     1414                  payer.obj-type = input frame Dialog-Frame tt-payment.payer-type
+     1415              AND payer.obj-code = input frame Dialog-Frame tt-payment.payer-code no-error.
+     1416       if available payer then do:
+     1417           DISPLAY
+     1418           payer.obj-name @ payer-name
+     1419           with frame Dialog-Frame.
+     1420           return no-apply.
+     1421       end.
+     1422       else do:
+     1423           run ref/cli-all.w ( input parparentproc
+     1424                           ,input "b-add,b-sel":U
+     1425                           ,input ?
+     1426                           ,input ?
+     1427                           ,input ?
+     1428                           ,input ?
+     1429                           ,input ?
+     1430                           ,input ?
+     1431                           ,output ref-list) .
+     1432           if ref-list = "" then do:
+     1433               apply "entry" to tt-payment.payer-code in frame Dialog-Frame.
+     1434               return no-apply.
+     1435           end.
+     1436           v-ref-rec = integer (ref-list).
+     1437           FIND FIRST payer NO-LOCK WHERE
+     1438                      recid (payer) = v-ref-rec .
+     1439           DISPLAY
+     1440           payer.obj-type @ tt-payment.payer-type
+     1441           payer.obj-code @ tt-payment.payer-code
+     1442           payer.obj-name @ payer-name
+     1443           with frame Dialog-Frame.
+     1444           return no-apply.
+     1445       end.
+     1446   END.
+     1447   ON LEAVE OF tt-payment.tot-cli IN FRAME Dialog-Frame
+     1448   DO:
+     1449     APPLY "RETURN" to tt-payment.tot-cli.
+     1450   END.
+     1451   ON RETURN OF tt-payment.tot-cli IN FRAME Dialog-Frame
+     1452   DO:
+     1453     run calc-sums in this-procedure ( input "tot-cli").
+     1454   END.
+     1455   IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+     1456   THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+     1457   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1458   on help of frame Dialog-Frame
+     1459   do:
+     1460     run gbl/app_help.p
+     1461       (input this-procedure :file-name
+     1462       ,input ''
+     1463       ,input ?
+     1464       ) no-error.
+     1465     if error-status :error then do:
+     1466       message
+     1467         "Ошибка при вызове помощи"
+     1468         error-status :get-message(1)
+     1469         view-as alert-box .
+     1470     end.
+     1471   end.
+     1472   run minbtn-set in this-procedure .
+     1473   on choose of b-help in frame Dialog-Frame
+     1474   do:
+     1475     apply "help":u to frame Dialog-Frame .
+     1476   end.
+     1477   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1478   procedure minbtn-set :
+     1479       do
+     1480           on error undo, return error return-value
+     1481           :
+     1482           define variable ii              as integer       no-undo .
+     1483           define variable fh              as widget-handle no-undo .
+     1484           define variable hh              as widget-handle no-undo .
+     1485           define variable v-h             as handle        extent 4 no-undo .
+     1486           define variable v-name-button   as character     no-undo .
+     1487           define variable v-help-old-x    as decimal       no-undo .
+     1488           define variable v-help-old-y    as decimal       no-undo .
+     1489           define variable v-help-old-size as decimal       no-undo .
+     1490           define variable v-frame-width   as decimal       no-undo .
+     1491           define variable jj              as integer       no-undo .
+     1492           do
+     1493               on error undo, return error
+     1494               :
+     1495               assign
+     1496                   v-frame-width = frame Dialog-Frame:width - 0.3
+     1497                   fh            = frame Dialog-Frame:first-child
+     1498                   hh            = fh:first-child
+     1499                   ii            = 1
+     1500                   .
+     1501               do while valid-handle(hh):
+     1502                   if LOOKUP(lc(hh:name), "b-help,b-print,b-history,b-hist,b-hist-user,b-sch") > 0  then
+     1503                   do:
+     1504                       case lc(hh:name) :
+     1505                           when "b-help" then
+     1506                               do:
+     1507                                   hh:load-image-up("cmp/b-help.bmp":u) .
+     1508                                   hh:load-image-down("cmp/b-help.bmp":u) .
+     1509                                   hh:load-image-insensitive("cmp/b-help.bmp":u) .
+     1510                                   hh:TOOLTIP = "Помощь" .
+     1511                                   v-help-old-x = hh:column .
+     1512                                   v-help-old-y = hh:row    .
+     1513                                   v-help-old-size = hh:width .
+     1514                                   hh:width-chars = 2.5 .
+     1515                               end.
+     1516                           when "b-print" then
+     1517                               do:
+     1518                                   hh:load-image("cmp/b-print.bmp":u) .
+     1519                                   hh:TOOLTIP = "Печать" .
+     1520                                   v-h[ii] = hh:handle .
+     1521                                   ii = ii + 1 .
+     1522                                   hh:width-chars = 3 .
+     1523                               end.
+     1524                           when "b-history" or
+     1525                           when "b-hist" then
+     1526                               do:
+     1527                                   hh:load-image("cmp/b-hist.bmp":u) .
+     1528                                   hh:TOOLTIP = "История" .
+     1529                                   v-h[ii] = hh:handle .
+     1530                                   ii = ii + 1 .
+     1531                                   hh:width-chars = 3 .
+     1532                               end.
+     1533                           when "b-sch" then
+     1534                               do:
+     1535                                   hh:load-image("cmp/b-sch.bmp":u) .
+     1536                                   hh:TOOLTIP = "Установка Фильтра" .
+     1537                                   v-h[ii] = hh:handle .
+     1538                                   ii = ii + 1 .
+     1539                                   hh:width-chars = 3 .
+     1540                               end.
+     1541                           when "b-hist-user" then
+     1542                               do:
+     1543                                   hh:load-image("cmp/b-hist.bmp":u) .
+     1544                                   hh:TOOLTIP = "История пользователя" .
+     1545                                   ii = ii + 1 .
+     1546                               end.
+     1547                       end case.
+     1548                   end.
+     1549                   hh = hh:next-sibling.
+     1550               end.
+     1551               b-help:column = v-frame-width - b-help:width-chars.
+     1552               jj = 0.
+     1553               repeat ii = 4 to 1 by -1 :
+     1554                   if valid-handle (v-h[ii] ) then
+     1555                   do:
+     1556                       jj  = jj + 1 .
+     1557                       v-h[ii]:column = v-frame-width - b-help:width-chars - ( 3 * jj ).
+     1558                       v-h[ii]:row    = v-help-old-y .
+     1559                   end.
+     1560               end.
+     1561           end.
+     1562       end.
+     1563   end procedure.
+     1564   MAIN-BLOCK:
+     1565   DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+     1566      ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+     1567      ON STOP UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+     1568      :
+     1569   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1570     run mainmenu_getcntxt in parparentproc
+     1571       (output v-cntxt-db-num
+     1572       ,output v-cntxt-userid
+     1573       ,output v-cntxt-level
+     1574       ,output v-cntxt-host-code-obj
+     1575       ,output v-cntxt-obj-type
+     1576       ,output v-cntxt-obj-code
+     1577       ,output v-cntxt-db-num-obj
+     1578       ,output v-cntxt-is-admin
+     1579       ) .
+     1580     if lookup(p-mode
+     1581               ,( 'ДОБАВЛЕНИЕ':U + chr(4) +
+     1582                 'ИЗМЕНЕНИЕ':U + chr(4) + 'ПРОСМОТР':U
+     1583                 )
+     1584               , chr(4) ) = 0 then do:
+     1585       message
+     1586       substitute("Неверное значение параметра вызова p-mode=&1", p-mode)
+     1587       view-as alert-box error .
+     1588       undo main-block, return error .
+     1589     end.
+     1590     if lookup ( psource-type, 'заказ':U + chr(4) + 'payment':U, chr(4)) = 0
+     1591     and p-mode <> 'ПРОСМОТР':U
+     1592     then do:
+     1593       message
+     1594       substitute("Неверное значение параметра вызова psource-type=&1", psource-type)
+     1595       view-as alert-box error .
+     1596       undo main-block, return error .
+     1597     end.
+     1598     if psource-type = 'payment':U
+     1599     and p-d-card = '':U then do:
+     1600       message
+     1601       substitute("Неверное значение параметра вызова p-d-card=&1", p-d-card)
+     1602       view-as alert-box error .
+     1603       undo main-block, return error .
+     1604     end.
+     1605     RUN fill-table IN THIS-PROCEDURE NO-ERROR.
+     1606     IF ERROR-STATUS:ERROR THEN DO:
+     1607       UNDO main-block, RETURN ERROR.
+     1608     END.
+     1609     RUN MYenable in this-procedure .
+     1610     WAIT-FOR GO OF FRAME Dialog-Frame.
+     1611   END.
+     1612   RUN disable_UI.
+     1613   PROCEDURE calc-sums :
+     1614   DEFIN INPUT PARAMETER changed as char no-undo.
+     1615   CASE changed:
+     1616       WHEN "exch-code" then do:
+     1617           tt-payment.tot-cli = tt-payment.tot-rubl * (input frame Dialog-Frame tt-payment.exch-rate) /
+     1618                                        (input frame Dialog-Frame tt-payment.exch-scale).
+     1619       END.
+     1620       WHEN "tot-cli" then do:
+     1621           assign
+     1622           tt-payment.tot-cli = input frame Dialog-Frame tt-payment.tot-cli
+     1623           tt-payment.tot-rubl = tt-payment.tot-cli / ( input frame Dialog-Frame tt-payment.exch-rate /
+     1624                                          input frame Dialog-Frame tt-payment.exch-scale
+     1625                                        )
+     1626           tt-payment.tot-base = tt-payment.tot-rubl / ( input frame Dialog-Frame tt-payment.base-rate /
+     1627                                          input frame Dialog-Frame tt-payment.base-scale
+     1628                                        )
+     1629           .
+     1630       END.
+     1631       WHEN "base-rate" then do:
+     1632           assign
+     1633           tt-payment.tot-base = tt-payment.tot-rubl / ( input frame Dialog-Frame tt-payment.base-rate /
+     1634                                          input frame Dialog-Frame tt-payment.base-scale
+     1635                                        )
+     1636           .
+     1637       END.
+     1638   END CASE.
+     1639   DISPLAY
+     1640   tt-payment.tot-cli
+     1641   tt-payment.tot-base
+     1642   tt-payment.tot-rubl
+     1643   with frame Dialog-Frame
+     1644   .
+     1645   END PROCEDURE.
+     1646   PROCEDURE check-pay-code :
+     1647   find FIRST buf_pay-type where
+     1648              buf_pay-type.obj-code = input frame Dialog-Frame tt-payment.pay-code no-lock no-error.
+     1649   if not available buf_pay-type then do:
+     1650     message "Нет вида оплаты с таким кодом.".
+     1651     apply "entry" TO tt-payment.pay-code in frame Dialog-Frame.
+     1652     return error.
+     1653   end.
+     1654   END PROCEDURE.
+     1655   PROCEDURE check-payer :
+     1656   if input frame Dialog-Frame tt-payment.payer-type = ? or
+     1657      input frame Dialog-Frame tt-payment.payer-type = "" then do:
+     1658      if can-find (ub.clients where
+     1659                   ub.clients.obj-code = input frame Dialog-Frame tt-payment.payer-code AND
+     1660                   ub.clients.obj-type = 'орг':U no-lock) then
+     1661       display
+     1662       'орг':U @ tt-payment.cli-type
+     1663       with frame Dialog-Frame.
+     1664       else
+     1665       display
+     1666       'чел':U @ tt-payment.cli-type with frame Dialog-Frame.
+     1667   end.
+     1668   find first payer where
+     1669             payer.obj-code = input frame Dialog-Frame tt-payment.payer-code
+     1670        AND payer.obj-type = input frame Dialog-Frame tt-payment.payer-type no-error.
+     1671   if not available payer then do:
+     1672     if input frame Dialog-Frame tt-payment.payer-code <> ? and
+     1673        input frame Dialog-Frame tt-payment.payer-type <> ? then
+     1674       message "Неправильный код или тип плательщика.".
+     1675     apply "entry" to tt-payment.payer-code in frame Dialog-Frame.
+     1676     return error.
+     1677   end.
+     1678   display
+     1679   payer.obj-type @ tt-payment.payer-type
+     1680   with frame Dialog-Frame.
+     1681   if payer.obj-type = 'орг':U
+     1682   and payer.obj-code = p-curr-host-code then do:
+     1683     release payer no-error.
+     1684     message "Запрещенный код и тип плательщика.".
+     1685     apply "entry" to tt-payment.payer-code in frame Dialog-Frame.
+     1686     return error.
+     1687   end.
+     1688   if payer.obj-type = 'маг':U
+     1689   or payer.obj-type = 'скл':U then do:
+     1690       release payer no-error.
+     1691       message "Выберите организацию или человека."
+     1692       view-as alert-box.
+     1693       apply "entry" to tt-payment.payer-type in frame Dialog-Frame.
+     1694       return error.
+     1695   end.
+     1696   display
+     1697   payer.obj-name @ payer-name
+     1698   with frame Dialog-Frame.
+     1699   END PROCEDURE.
+     1700   PROCEDURE disable_UI :
+     1701     HIDE FRAME Dialog-Frame.
+     1702   END PROCEDURE.
+     1703   PROCEDURE enable_UI :
+     1704     DISPLAY payer-name pay-type-name exch-code-name
+     1705         WITH FRAME Dialog-Frame.
+     1706     IF AVAILABLE buf_clients THEN
+     1707       DISPLAY buf_clients.obj-name
+     1708         WITH FRAME Dialog-Frame.
+     1709     IF AVAILABLE tt-payment THEN
+     1710       DISPLAY tt-payment.fact-date tt-payment.cli-type tt-payment.cli-code
+     1711             tt-payment.due-date tt-payment.payer-type tt-payment.payer-code
+     1712             tt-payment.status_ tt-payment.pay-code tt-payment.creid
+     1713             tt-payment.source-type tt-payment.source-ref tt-payment.closid
+     1714             tt-payment.tot-cli tt-payment.exch-code tt-payment.exch-rate
+     1715             tt-payment.exch-scale tt-payment.exch-date tt-payment.tot-base
+     1716             tt-payment.base-rate tt-payment.base-scale tt-payment.tot-rubl
+     1717             tt-payment.PS
+     1718         WITH FRAME Dialog-Frame.
+     1719     ENABLE B-exit b-quit B-Help tt-payment.fact-date tt-payment.due-date
+     1720            tt-payment.payer-type tt-payment.payer-code B-payer tt-payment.status_
+     1721            tt-payment.pay-code B-pay-code tt-payment.tot-cli tt-payment.exch-code
+     1722            B-exch-code tt-payment.exch-rate tt-payment.exch-scale
+     1723            tt-payment.exch-date tt-payment.base-rate tt-payment.base-scale
+     1724            tt-payment.PS payer-name pay-type-name exch-code-name
+     1725         WITH FRAME Dialog-Frame.
+     1726     VIEW FRAME Dialog-Frame.
+     1727   END PROCEDURE.
+     1728   PROCEDURE fill-table :
+     1729   DEFINE VARIABLE for-tot-cli as decimal No-UNDO.
+     1730   DEFINE VARIABLE for-tot-base as decimal No-UNDO.
+     1731   DEFINE VARIABLE for-date-pay as date no-undo.
+     1732   DEFINE VARIABLE for-fact-date as date no-undo.
+     1733   DEFINE VARIABLE for-status_ like ub.payment.status_ no-undo.
+     1734   DEFINE VARIABLE max-for-tot-base as decimal No-UNDO.
+     1735   DEFINE VARIABLE for-tot-rubl as decimal No-UNDO.
+     1736   DEFINE VARIABLE v-base-rate as decimal no-undo.
+     1737   DEFINE VARIABLE v-base-scale as decimal no-undo.
+     1738   DEFINE VARIABLE v-exch-rate as decimal no-undo.
+     1739   DEFINE VARIABLE v-exch-scale as decimal no-undo.
+     1740   DEFINE VARIABLE v-exch-date as date no-undo.
+     1741   DEFINE VARIABLE for-exch-code like ub.currency.curr-code no-undo.
+     1742   DEFINE VARIABLE for-pay-code like ub.pay-type.obj-code no-undo.
+     1743   DEFINE VARIABLE for-sign as decimal no-undo.
+     1744   DEFINE VARIABLE v-today as date no-undo .
+     1745   DEFINE VARIABLE v-time as integer no-undo .
+     1746   define variable v-base-code like ub.sysconf.base-code no-undo .
+     1747   define variable v-curr-abbr as character no-undo .
+     1748   define variable v-curr-r-b as character no-undo .
+     1749   DEFINE BUFFER buf_sysconf FOR ub.sysconf.
+     1750   FIND FIRST buf_clients NO-LOCK WHERE
+     1751              buf_clients.obj-type = p-cli-type
+     1752          and buf_clients.obj-code = p-cli-code  No-ERROR.
+     1753   IF NOT avail buf_clients then do:
+     1754       message
+     1755       substitute("Не найден контрагент &1&2 для ввода платежа"
+     1756                 , p-cli-type
+     1757                 , p-cli-code)
+     1758       view-as alert-box ERROR.
+     1759       p-rid = ?.
+     1760       return error.
+     1761   END.
+     1762   IF buf_clients.obj-type = 'скл':U OR
+     1763      buf_clients.obj-type = 'маг':U then do:
+     1764       message
+     1765       substitute("Неверный тип контрагента &1 для ввода платежа"
+     1766                   , buf_clients.obj-type )
+     1767       view-as alert-box ERROR.
+     1768       p-rid = ?.
+     1769       return error.
+     1770   end.
+     1771   IF buf_clients.obj-code = p-curr-host-code and
+     1772      buf_clients.obj-type = 'орг':U then do:
+     1773       message
+     1774       substitute("Неверный контрагент &1 для ввода платежа"
+     1775                 , buf_clients.obj-type )
+     1776       view-as alert-box ERROR.
+     1777       p-rid = ?.
+     1778       return error.
+     1779   end.
+     1780   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1781   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run basecode in g#library
+     1782     (input  p-curr-host-code
+     1783     ,output v-base-code
+     1784     )  .
+     1785   run cur-time in this-procedure ( output v-today, output v-time).
+     1786   for-date-pay = v-today.
+     1787   FIND FIRST buf_currency NO-LOCK WHERE
+     1788               buf_currency.curr-code = v-BASE-CODE No-ERROR.
+     1789   IF NOT AVAIL buf_currency then do:
+     1790       message
+     1791       substitute("Не найдена валюта с кодом &1 для платежа &2"
+     1792                   ,v-BASE-CODE
+     1793                   ,locked_payment.pmnt-code)
+     1794       view-as alert-box ERROR.
+     1795       p-rid = ?.
+     1796       return error.
+     1797   END.
+     1798   CASE p-mode:
+     1799   WHEN 'ДОБАВЛЕНИЕ':U then do:
+     1800     FIND FIRST payer No-LOCK WHERE
+     1801               payer.obj-type = p-cli-type
+     1802           and payer.obj-code = p-cli-code No-ERROR.
+     1803     CASE psource-type:
+     1804       WHEN 'заказ':U then do:
+     1805         FIND FIRST buf_ord-doc No-LOCK WHERE
+     1806                     buf_ord-doc.doc-code = psource-ref NO-ERROR.
+     1807         if not avail buf_ord-doc then do:
+     1808           message
+     1809           substitute("Не найден заказ с N &1 для платежа"
+     1810                       , psource-ref )
+     1811           view-as alert-box ERROR.
+     1812           p-rid = ?.
+     1813           return error.
+     1814         end.
+     1815         if buf_ord-doc.cli-type <> buf_clients.obj-type OR
+     1816         buf_ord-doc.cli-code <> buf_clients.obj-code then do:
+     1817           message
+     1818           substitute("Неверно выбран документ для платежа:&1" +
+     1819                       "Плательщик платежа =&2&3, клиент для заказа = &4&5"
+     1820                       ,buf_clients.obj-type
+     1821                       ,buf_clients.obj-code
+     1822                       ,buf_ord-doc.cli-type
+     1823                       ,buf_ord-doc.cli-code
+     1824                       )
+     1825           view-as alert-box ERROR.
+     1826         END.
+     1827         if buf_ord-doc.host-code <> p-curr-host-code then do:
+     1828             message
+     1829             "Выбран заказ чужой фирмы "
+     1830             view-as alert-box ERROR.
+     1831             return error.
+     1832         end.
+     1833         if buf_ord-doc.sum-cli = ?
+     1834         or buf_ord-doc.sum-cli = 0 then do:
+     1835             message "Нельзя создать платеж" skip
+     1836                     "сумма по заказу неопределена"
+     1837             view-as alert-box.
+     1838             return error.
+     1839         end.
+     1840         if NOT (buf_ord-doc.status_ = 'факт':U
+     1841                 and buf_ord-doc.flag_ = yes) then do:
+     1842             message
+     1843             substitute("Нельзя создать платеж&1" +
+     1844                         "для заказа в статусе &2"
+     1845                         , chr(10)
+     1846                         ,(buf_ord-doc.status_ + string(buf_ord-doc.flag_, "+/-"))
+     1847                         )
+     1848             view-as alert-box.
+     1849             return error.
+     1850         end.
+     1851         ASSIGN
+     1852         for-sign = (if (buf_ord-doc.doc-type = 'ПО':U)
+     1853                     then -1
+     1854                     else 1)
+     1855         for-tot-cli = for-sign * (buf_Ord-doc.sum-cli + buf_Ord-doc.sum-ship +  buf_ord-doc.Sum-service)
+     1856         for-exch-code = buf_ord-doc.exch-code
+     1857         v-base-rate = buf_ord-doc.base-rate
+     1858         v-base-scale = buf_ord-doc.base-scale
+     1859         v-exch-rate = buf_ord-doc.exch-rate
+     1860         v-exch-scale = buf_ord-doc.exch-scale
+     1861         v-exch-date = buf_ord-doc.exch-date
+     1862         for-pay-code = (if buf_ord-doc.pay-code <> ?
+     1863                         then buf_ord-doc.pay-code
+     1864                         else ?)
+     1865         for-date-pay = (if buf_ord-doc.date-pay <> ?
+     1866                         then buf_ord-doc.date-pay
+     1867                         else for-date-pay)
+     1868         for-status_ = 'ожид':U
+     1869         for-fact-date = ?
+     1870         .
+     1871       END.
+     1872       when 'payment':U then do:
+     1873         FIND FIRST buf_sysconf NO-LOCK WHERE
+     1874                   buf_sysconf.host-code = p-curr-host-code .
+     1875         FIND FIRST buf_pay-type NO-LOCK WHERE
+     1876                   buf_pay-type.obj-code = buf_sysconf.ret-credit-pay NO-ERROR.
+     1877         IF NOT AVAILABLE buf_pay-type THEN DO:
+     1878           MESSAGE
+     1879           substitute("Неверно определен код оплаты для возврата кредита для фирмы &1"
+     1880                      , p-curr-host-code)
+     1881           VIEW-AS ALERT-BOX ERROR.
+     1882           p-rid = ?.
+     1883           UNDO, RETURN ERROR.
+     1884         END.
+     1885         for-pay-code = buf_pay-type.obj-code.
+     1886         FIND FIRST buf_dis-card No-LOCK WHERE
+     1887                     buf_dis-card.d-card = p-d-card NO-ERROR.
+     1888         if not avail buf_dis-card then do:
+     1889             message
+     1890             substitute("Не найдена дисконтная карта с номером &1"
+     1891                         ,p-d-card)
+     1892             view-as alert-box ERROR.
+     1893             p-rid = ?.
+     1894             return error.
+     1895         end.
+     1896         if buf_dis-card.cli-type <> buf_clients.obj-type OR
+     1897             buf_dis-card.cli-code <> buf_clients.obj-code then do:
+     1898             message
+     1899             "Неверно выбрана карта для платежа "
+     1900             view-as alert-box ERROR.
+     1901         END.
+     1902         if buf_dis-card.emitent-host-code <> p-curr-host-code
+     1903         AND buf_dis-card.emitent-host-code <> 0 then do:
+     1904             message
+     1905             "Выбрана карта чужой фирмы "
+     1906             view-as alert-box ERROR.
+     1907             return error.
+     1908         end.
+     1909         if buf_dis-card.status_ = 'блок':U
+     1910         OR buf_dis-card.status_ = 'удал':U then do:
+     1911             message
+     1912             substitute("Нельзя создать платеж&1" +
+     1913                         "для карты в статусе &2"
+     1914                         ,chr(10)
+     1915                         ,buf_dis-card.status_)
+     1916             view-as alert-box.
+     1917             return error.
+     1918         end.
+     1919         run cur-time in this-procedure( output v-today, output v-time).
+     1920   define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1921   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run exchrate in g#library
+     1922     (input  v-base-code
+     1923     ,input  v-today
+     1924     ,output v-base-rate
+     1925     ,output v-base-scale
+     1926     ,output v-curr-abbr
+     1927     )  .
+     1928   define variable vss-include-info10 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+     1929   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+     1930     (output v-curr-r-b
+     1931     )  .
+     1932         if v-curr-r-b = 'rubl':U then do:
+     1933           assign
+     1934           for-exch-code = 0
+     1935           v-exch-rate = 1
+     1936           v-exch-scale = 1
+     1937           .
+     1938         end.
+     1939         else do:
+     1940           assign
+     1941           for-exch-code = v-base-code
+     1942           v-exch-rate   = v-base-rate
+     1943           v-exch-scale = v-base-scale
+     1944           .
+     1945         end.
+     1946         assign
+     1947         v-exch-date = v-today
+     1948         for-date-pay = v-today
+     1949         FOR-fact-date = v-today
+     1950         for-tot-cli = 0
+     1951         for-status_ = 'факт':U
+     1952         .
+     1953       end.
+     1954     END CASE.
+     1955     assign
+     1956     for-tot-rubl = for-tot-cli / ( v-exch-rate / v-exch-scale)
+     1957     for-tot-base = for-tot-rubl / (v-base-rate / v-base-scale)
+     1958     .
+     1959     if for-pay-code <> ? then do:
+     1960         FIND FIRST buf_pay-type where
+     1961                     buf_pay-type.obj-code = for-pay-code No-ERROR.
+     1962         IF NOT avail buf_pay-type then do:
+     1963             message
+     1964             substitute("Не найден вид оплаты с кодом &1"
+     1965                         ,for-pay-code)
+     1966             view-as alert-box ERROR.
+     1967             p-rid = ?.
+     1968             return error.
+     1969         END.
+     1970         for-pay-name = buf_pay-type.obj-name.
+     1971     end.
+     1972     CREATE tt-payment.
+     1973     ASSIGN
+     1974     tt-payment.host-code = p-curr-host-code
+     1975     tt-payment.payer-type = payer.obj-type
+     1976     tt-payment.payer-code = payer.obj-code
+     1977     tt-payment.cli-type = buf_clients.obj-type
+     1978     tt-payment.cli-code = buf_clients.obj-code
+     1979     tt-payment.pay-code = for-pay-code
+     1980     tt-payment.tot-cli  = for-tot-cli
+     1981     tt-payment.exch-code = for-exch-code
+     1982     tt-payment.base-rate = v-base-rate
+     1983     tt-payment.base-scale = v-base-scale
+     1984     tt-payment.exch-rate = v-exch-rate
+     1985     tt-payment.exch-scale = v-exch-scale
+     1986     tt-payment.exch-date = v-exch-date
+     1987     tt-payment.due-date = for-date-pay
+     1988     tt-payment.STATUS_ = for-status_
+     1989     tt-payment.fact-date = for-fact-date
+     1990     tt-payment.source-ref = psource-ref
+     1991     tt-payment.source-type = (if psource-type = 'payment':U
+     1992                               then '':U
+     1993                               else psource-type)
+     1994     tt-payment.creid = v-cntxt-userid
+     1995     tt-payment.closid = (if psource-type = 'payment':U
+     1996                          then v-cntxt-userid
+     1997                          else '':U)
+     1998     .
+     1999   END.
+     2000   otherwise  do:
+     2001       FIND FIRST locked_payment where
+     2002                  recid(locked_payment) = p-rid No-ERROR.
+     2003       IF NOT avail locked_payment then do:
+     2004           message "Не найден платеж"
+     2005           view-as alert-box ERROR.
+     2006           p-rid = ?.
+     2007           return error.
+     2008       end.
+     2009       if locked_payment.status_ =  'факт':U then do:
+     2010           message
+     2011           substitute("Нельзя редактировать платеж в статусе &1"
+     2012                      ,LOCKED_payment.status_)
+     2013           view-as alert-box ERROR.
+     2014           p-rid = ?.
+     2015           return error.
+     2016       END.
+     2017       IF locked_payment.host-code <> p-curr-host-code then do:
+     2018         message "Выбран платеж другой фирмы"
+     2019         view-as alert-box ERROR.
+     2020         p-rid = ?.
+     2021         return error.
+     2022       end.
+     2023       FIND FIRST payer No-LOCK WHERE
+     2024                  payer.obj-type = locked_payment.payer-type AND
+     2025                  payer.obj-code = locked_payment.payer-code No-ERROR.
+     2026       IF NOT AVAIL PAYER then do:
+     2027           message
+     2028           substitute("Не найден плательщик &1&2 для платежа &3"
+     2029                      ,LOCKED_payment.payer-type
+     2030                      ,locked_payment.payer-code
+     2031                      ,locked_payment.pmnt-code )
+     2032           view-as alert-box ERROR.
+     2033           p-rid = ?.
+     2034           return error.
+     2035       END.
+     2036       FIND FIRST buf_currency NO-LOCK WHERE
+     2037                  buf_currency.curr-code = locked_payment.exch-code No-ERROR.
+     2038       IF NOT AVAIL buf_currency then do:
+     2039           message
+     2040           substitute("Не найдена валюта с кодом &1 для платежа &2"
+     2041                     ,locked_payment.exch-code
+     2042                   ,locked_payment.pmnt-code)
+     2043           view-as alert-box ERROR.
+     2044           p-rid = ?.
+     2045           return error.
+     2046       END.
+     2047       FIND FIRST buf_pay-type No-LOCK WHERE
+     2048                  buf_pay-type.obj-code = locked_payment.pay-code No-ERROR.
+     2049       if not avail buf_pay-type then do:
+     2050           message
+     2051           substitute("Не найден вид оплаты с кодом &1 для платежа &2"
+     2052                      ,locked_payment.pay-code
+     2053                      ,locked_payment.pmnt-code)
+     2054           view-as alert-box ERROR.
+     2055           p-rid = ?.
+     2056           return error.
+     2057       end.
+     2058       CREATE tt-payment.
+     2059       BUFFER-COPY LOCKED_payment TO tt-payment
+     2060       .
+     2061       CASE psource-type:
+     2062         when 'заказ':U then do:
+     2063           FIND FIRST buf_ord-doc No-LOCK WHERE
+     2064                       buf_ord-doc.doc-code = psource-ref NO-ERROR.
+     2065           if not avail buf_ord-doc then do:
+     2066               message
+     2067               substitute("Не найден заказ с N &1 для платежа"
+     2068                          ,psource-ref )
+     2069               view-as alert-box ERROR.
+     2070               p-rid = ?.
+     2071               return error.
+     2072           end.
+     2073           frame Dialog-Frame:title = substitute("&1 N &1 к заказу &3"
+     2074                                                  ,frame Dialog-Frame:title
+     2075                                                  ,locked_payment.pmnt-code
+     2076                                                  ,buf_ord-doc.doc-code).
+     2077         END.
+     2078       END CASE.
+     2079   END.
+     2080   END CASE.
+     2081   END PROCEDURE.
+     2082   PROCEDURE local-curr-chk :
+     2083   define input parameter p-man    as character no-undo.
+     2084   define input parameter p-action as character no-undo.
+     2085   DEFINE VARIABLE ref-list AS CHARACTER NO-UNDO.
+     2086   if p-man = "exch-code" and p-action = "ret-mouse" then do:
+     2087   define variable vss-include-info11 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2088     define variable v-ref-rec12   as recid no-undo .
+     2089     find buf_curr-chk where buf_curr-chk.curr-code = input frame Dialog-Frame tt-payment.exch-code
+     2090                    no-lock no-error.
+     2091     if not available buf_curr-chk  then do:
+     2092       if input frame Dialog-Frame tt-payment.exch-code <> ""
+     2093          and input frame Dialog-Frame tt-payment.exch-code <> ? then
+     2094         message "Из справочника валют Вы должны выбрать валюту.".
+     2095       run ref/currency.w (
+     2096                       input parparentproc
+     2097                     , input "b-sel"
+     2098                     , input-output v-ref-rec12) no-error .
+     2099       find buf_curr-chk where recid (buf_curr-chk) = v-ref-rec12  no-lock no-error.
+     2100       if not available buf_curr-chk then
+     2101         find first buf_curr-chk where
+     2102             buf_curr-chk.curr-code = input frame Dialog-Frame tt-payment.exch-code
+     2103         no-lock no-error.
+     2104     end.
+     2105     if available buf_curr-chk then do:
+     2106       display buf_curr-chk.curr-code @ tt-payment.exch-code
+     2107               buf_curr-chk.curr-abbr @ exch-code-name with frame Dialog-Frame.
+     2108       assign frame Dialog-Frame tt-payment.exch-code.
+     2109     end.
+     2110     else display ? @ tt-payment.exch-code
+     2111                  ? @ exch-code-name with frame Dialog-Frame.
+     2112     apply "entry" to b-exit in frame Dialog-Frame.
+     2113     return no-apply.
+     2114   end.
+     2115   if p-man = "exch-code" and p-action = "button" then do:
+     2116   define variable vss-include-info13 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2117     define variable v-ref-rec14   as recid no-undo .
+     2118     find buf_curr-chk where buf_curr-chk.curr-code = input frame Dialog-Frame tt-payment.exch-code
+     2119                     no-lock no-error.
+     2120     assign v-ref-rec14 = ( if available buf_curr-chk then recid( buf_curr-chk ) else ? ).
+     2121     release buf_curr-chk.
+     2122     if not available buf_curr-chk  then do:
+     2123       run ref/currency.w (
+     2124                       input parparentproc
+     2125                     , input "b-sel"
+     2126                     , input-output v-ref-rec14) no-error .
+     2127       find buf_curr-chk where recid (buf_curr-chk) = v-ref-rec14  no-lock no-error.
+     2128       if not available buf_curr-chk then
+     2129         find first buf_curr-chk where
+     2130             buf_curr-chk.curr-code = input frame Dialog-Frame tt-payment.exch-code
+     2131         no-lock no-error.
+     2132     end.
+     2133     if available buf_curr-chk then do:
+     2134       display buf_curr-chk.curr-code @ tt-payment.exch-code
+     2135               buf_curr-chk.curr-abbr @ exch-code-name with frame Dialog-Frame.
+     2136       assign frame Dialog-Frame tt-payment.exch-code.
+     2137     end.
+     2138     else display ? @ tt-payment.exch-code
+     2139                  ? @ exch-code-name with frame Dialog-Frame.
+     2140     apply "entry" to b-exit in frame Dialog-Frame.
+     2141     return no-apply.
+     2142   end.
+     2143   if p-man = "exch-code" and p-action = "leave" then do:
+     2144   define variable vss-include-info15 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2145     define variable v-ref-rec16   as recid no-undo .
+     2146     find buf_curr-chk where buf_curr-chk.curr-code = input frame Dialog-Frame tt-payment.exch-code
+     2147                    no-lock no-error.
+     2148   if available buf_curr-chk then do:
+     2149       display
+     2150       buf_curr-chk.curr-code @ tt-payment.exch-code
+     2151       buf_curr-chk.curr-abbr @ exch-code-name with frame Dialog-Frame.
+     2152           assign frame Dialog-Frame tt-payment.exch-code.
+     2153   end.
+     2154   else display ? @ tt-payment.exch-code ? @ exch-code-name with frame Dialog-Frame.
+     2155   end.
+     2156   END PROCEDURE.
+     2157   PROCEDURE Myenable :
+     2158   assign
+     2159   tt-payment.tot-rubl :label in frame Dialog-Frame = "Сумма (руб)"
+     2160   .
+     2161   define variable vss-include-info17 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2162     define variable v-ref-rec18   as recid no-undo .
+     2163     find buf_curr-chk where buf_curr-chk.curr-code = input frame Dialog-Frame tt-payment.exch-code
+     2164                    no-lock no-error.
+     2165   if not available buf_curr-chk then do:
+     2166     display tt-payment.exch-code with frame Dialog-Frame.
+     2167     find buf_curr-chk no-lock where buf_curr-chk.curr-code = input frame Dialog-Frame tt-payment.exch-code
+     2168                             no-error.
+     2169   end.
+     2170   if available buf_curr-chk then do:
+     2171       display
+     2172       buf_curr-chk.curr-code @ tt-payment.exch-code
+     2173       buf_curr-chk.curr-abbr @ exch-code-name with frame Dialog-Frame.
+     2174   end.
+     2175   else display ? @ tt-payment.exch-code ? @ exch-code-name with frame Dialog-Frame.
+     2176   CASE psource-type:
+     2177     WHEN 'заказ':U THEN DO:
+     2178       assign
+     2179       frame Dialog-Frame:title = substitute("&1  к заказу &2"
+     2180                                                   ,frame Dialog-Frame:title
+     2181                                                   ,buf_ord-doc.doc-code).
+     2182     END.
+     2183     WHEN 'payment':U THEN DO:
+     2184         ASSIGN
+     2185         frame Dialog-Frame:title = substitute("&1 к карте &2"
+     2186                                           ,frame Dialog-Frame:title
+     2187                                           ,buf_dis-card.d-card).
+     2188     END.
+     2189   END CASE.
+     2190   DISPLAY
+     2191   tt-payment.cli-type
+     2192   tt-payment.cli-code
+     2193   buf_clients.obj-name
+     2194   tt-payment.payer-type
+     2195   tt-payment.payer-code
+     2196   payer.obj-name @ payer-name
+     2197   tt-payment.pay-code
+     2198   for-pay-name @ pay-type-name
+     2199   tt-payment.fact-date
+     2200   tt-payment.due-date
+     2201   tt-payment.status_
+     2202   tt-payment.exch-code
+     2203   tt-payment.exch-date
+     2204   tt-payment.base-rate
+     2205   tt-payment.base-scale
+     2206   tt-payment.exch-rate
+     2207   tt-payment.exch-scale
+     2208   tt-payment.source-type
+     2209   tt-payment.tot-cli
+     2210   tt-payment.tot-base
+     2211   tt-payment.tot-rubl
+     2212   tt-payment.creid
+     2213   tt-payment.closid
+     2214   tt-payment.PS
+     2215   WITH FRAME Dialog-Frame.
+     2216   ENABLE
+     2217   B-exit WHEN p-mode <> 'ПРОСМОТР':U
+     2218   b-quit
+     2219   B-Help
+     2220   tt-payment.payer-type when p-mode <> 'ПРОСМОТР':U
+     2221   tt-payment.payer-code when p-mode <> 'ПРОСМОТР':U
+     2222   B-payer when p-mode <> 'ПРОСМОТР':U
+     2223   tt-payment.pay-code when p-mode <> 'ПРОСМОТР':U
+     2224   B-pay-code when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2225   tt-payment.due-date when p-mode <> 'ПРОСМОТР':U AND tt-payment.status_ = 'ожид':U
+     2226   tt-payment.tot-cli when p-mode <> 'ПРОСМОТР':U
+     2227   tt-payment.exch-rate when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2228   tt-payment.exch-date when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2229   tt-payment.exch-code when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2230   B-exch-code when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2231   tt-payment.exch-scale when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2232   tt-payment.base-rate when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2233   tt-payment.base-scale when p-mode <> 'ПРОСМОТР':U AND NOT psource-type = 'payment':U
+     2234   tt-payment.PS when p-mode <> 'ПРОСМОТР':U
+     2235   WITH FRAME Dialog-Frame.
+     2236   CASE psource-type:
+     2237     when 'заказ':U then do:
+     2238       DISABLE
+     2239       tt-payment.exch-code
+     2240       tt-payment.base-rate
+     2241       tt-payment.base-scale
+     2242       tt-payment.exch-rate
+     2243       tt-payment.exch-code
+     2244       tt-payment.pay-code
+     2245       tt-payment.exch-date
+     2246       WITH FRAME Dialog-Frame.
+     2247     end.
+     2248   END.
+     2249   VIEW FRAME Dialog-Frame.
+     2250   END PROCEDURE.
+     2251   PROCEDURE proc-save :
+     2252   define variable v-rid as recid no-undo .
+     2253   define buffer buf_payment for ub.payment.
+     2254   ASSIGN
+     2255   FRAME Dialog-Frame
+     2256   tt-payment.due-date
+     2257   tt-payment.payer-type = payer.obj-type
+     2258   tt-payment.payer-code = payer.obj-code
+     2259   tt-payment.tot-cli
+     2260   tt-payment.PS
+     2261   tt-payment.exch-date
+     2262   tt-payment.exch-code
+     2263   tt-payment.exch-rate
+     2264   tt-payment.exch-scale
+     2265   tt-payment.base-rate
+     2266   tt-payment.base-scale
+     2267   tt-payment.tot-base
+     2268   tt-payment.tot-rubl
+     2269   tt-payment.source-type
+     2270   tt-payment.source-ref
+     2271   tt-payment.d-card = p-d-card
+     2272   tt-payment.fact-date = tt-payment.fact-date
+     2273   tt-payment.creid = v-cntxt-userid
+     2274   tt-payment.closid = (if tt-payment.status_ = 'факт':U
+     2275                    then v-cntxt-userid
+     2276                    else "")
+     2277   tt-payment.pay-code
+     2278   v-rid = (if p-mode = 'ИЗМЕНЕНИЕ':U then p-rid else ?)
+     2279   .
+     2280   main-block:
+     2281   do transaction
+     2282   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2283   on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2284   on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2285   :
+     2286     run ref/payment1.p (
+     2287                       input p-mode
+     2288                      ,input  no
+     2289                      ,input-output tt-payment.pmnt-code
+     2290                      ,input tt-payment.cli-type
+     2291                      ,input tt-payment.cli-code
+     2292                      ,input tt-payment.payer-type
+     2293                      ,input tt-payment.payer-code
+     2294                      ,input tt-payment.host-code
+     2295                      ,input tt-payment.tot-cli
+     2296                      ,input tt-payment.tot-base
+     2297                      ,input tt-payment.tot-rubl
+     2298                      ,input tt-payment.exch-date
+     2299                      ,input tt-payment.exch-code
+     2300                      ,input tt-payment.exch-rate
+     2301                      ,input tt-payment.exch-scale
+     2302                      ,input tt-payment.base-rate
+     2303                      ,input tt-payment.base-scale
+     2304                      ,input tt-payment.due-date
+     2305                      ,input tt-payment.fact-date
+     2306                      ,input tt-payment.source-type
+     2307                      ,input tt-payment.source-ref
+     2308                      ,input tt-payment.d-card
+     2309                      ,input tt-payment.pay-code
+     2310                      ,input tt-payment.status_
+     2311                      ,input tt-payment.PS
+     2312                      ,INPUT tt-payment.creid
+     2313                      ,INPUT tt-payment.closid
+     2314                      ) no-error .
+     2315     if error-status:error then do:
+     2316   define variable vss-include-info19 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2317   define variable fh as widget-handle no-undo .
+     2318   define variable hh as widget-handle no-undo .
+     2319   define variable rv as character no-undo .
+     2320   assign
+     2321   rv = entry(1, return-value , chr(4)).
+     2322   if rv <> "":U then do:
+     2323     assign
+     2324     fh = frame Dialog-Frame:first-child
+     2325     hh = fh:first-child
+     2326     .
+     2327     do while valid-handle(hh):
+     2328       if hh:name = rv then do:
+     2329         APPLY "ENTRY" to hh.
+     2330         undo ,
+     2331         return error.
+     2332       end.
+     2333       hh = hh:next-sibling.
+     2334     end.
+     2335   end.
+     2336       message error-status:get-message(1) skip
+     2337       return-value view-as alert-box .
+     2338       undo main-block, return error.
+     2339     end.
+     2340     find first buf_payment no-lock where
+     2341               buf_payment.pmnt-code = tt-payment.pmnt-code no-error.
+     2342     if not available buf_payment then do:
+     2343       message
+     2344       "Не удается найти созданный платеж"
+     2345       view-as alert-box error .
+     2346       undo, return error.
+     2347     end.
+     2348     if (psource-type = 'payment':U
+     2349        or
+     2350        psource-type = 'платеж':U )
+     2351     and p-d-card <> '':U then do:
+     2352       run str/saledc.p
+     2353         (
+     2354         input parparentproc
+     2355         ,input this-procedure :handle
+     2356         ,input ?
+     2357         ,input 'payment-on-card':U
+     2358         ,input ?
+     2359         ,input ""
+     2360         ,input 0
+     2361         ,input 0
+     2362         ,input 0
+     2363         ,input v-cntxt-db-num
+     2364         ,input buf_payment.pmnt-code
+     2365         ,input buf_payment.exch-date
+     2366         ,input buf_payment.fact-date
+     2367         ,input 0
+     2368         ,input 1
+     2369         ,input ?
+     2370         ,input yes
+     2371         ) no-error .
+     2372       if error-status:error then do:
+     2373         message error-status:get-message(1) skip
+     2374         return-value view-as alert-box .
+     2375         undo main-block, return error return-value .
+     2376       end.
+     2377     end.
+     2378     p-rid = recid(buf_payment).
+     2379   end.
+     2380   END PROCEDURE.

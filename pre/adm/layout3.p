@@ -1,0 +1,679 @@
+block-level on error undo, throw.
+define input parameter p-silent as logical no-undo .
+define input parameter p-rec as recid no-undo .
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+define variable vss-author      as character no-undo init "$Author: expertek $":U .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: layout3.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: adm/layout3.p $":U .
+define variable vss-description as character no-undo init "Удаление раскладки".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+define   shared variable g#auto as logical no-undo.
+define   shared variable g#news as logical no-undo.
+define   shared variable g#oxml as logical no-undo.
+define   shared variable g#esys as logical no-undo.
+define   shared variable g#news-source-db as integer no-undo.
+define   shared variable g#esys-source-esys as integer no-undo.
+define   shared variable g#db-num as integer   no-undo .
+define   shared variable g#userid as character no-undo .
+define   shared variable g#passwd as character no-undo .
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+FUNCTION get-region RETURNS CHARACTER
+  ( input parhost-code as integer, input parobj-type as character, input parobj-code as integer ) :
+  define variable par-region as character no-undo.
+  if parhost-code = 0 and
+       parobj-type = "":U and
+       parobj-code = 0 then do:
+       par-region = "Глобально".
+       return par-region.
+    end.
+    if parobj-type = 'орг':U then do:
+       par-region = fill(chr(32), 2) + "Фирма" + chr(32) + string(parhost-code).
+       return par-region.
+    end.
+    if parobj-type = 'регион':U
+    then do:
+       par-region = fill(chr(32), 2) + "Регион" + chr(32) + string(parobj-code).
+       return par-region.
+    end.
+    par-region = fill(chr(32), 4) + parobj-type + chr(32) + string(parobj-code).
+    return par-region.
+END FUNCTION.
+FUNCTION get-objregion RETURNS CHARACTER
+  (  input parobj-type as character, input parobj-code as integer ) :
+  define variable par-region as character no-undo.
+  if  parobj-type = "":U and
+      parobj-code = 0
+  then do:
+     par-region = "Глобально".
+  end.
+  else if parobj-type = 'орг':U
+  then do:
+     par-region = fill(chr(32), 2) + "Фирма" + chr(32) + string(parobj-code).
+  end.
+  else if parobj-type = 'регион':U
+  then do:
+     par-region = fill(chr(32), 2) + "Регион" + chr(32) + string(parobj-code).
+  end.
+  else
+     par-region = fill(chr(32), 4) + parobj-type + chr(32) + string(parobj-code).
+  return par-region.
+END FUNCTION.
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure cur-time :
+   define output parameter p-today as date      no-undo .
+   define output parameter p-time  as integer   no-undo .
+  do
+  on error undo, return error
+  :
+    define variable v-date1 as date      no-undo .
+    define variable v-date2 as date      no-undo .
+    define variable v-time  as integer   no-undo .
+    assign
+      v-date1 = today
+      v-time  = time
+      v-date2 = today
+    .
+    if v-date1 <> v-date2
+    then do:
+      assign
+        v-date1 = today
+        v-time  = v-time
+      .
+    end.
+    assign
+      p-today = v-date1
+      p-time  = v-time
+    .
+  end.
+end.
+function cur-time-date returns character
+:
+  return string(today, '99/99/9999':U) .
+end.
+function cur-time-mjd returns decimal
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return integer(v-date) - 2400002 + (v-time / 86400) .
+end.
+function cur-time-get-ending-index returns integer
+(input p-number as integer
+)
+:
+  if p-number < 0
+  or p-number = ?
+  then do:
+    return 1 .
+  end.
+  define variable v-rest as integer   no-undo .
+  assign
+    p-number = p-number modulo 100
+  .
+  if p-number < 20
+  then do:
+    assign
+      v-rest = p-number
+    .
+  end.
+  else do:
+    assign
+      v-rest = p-number modulo 10
+    .
+  end.
+  case v-rest :
+    when 1
+    then do:
+      return 2 .
+    end.
+    when 2 or
+    when 3 or
+    when 4
+    then do:
+      return 3 .
+    end.
+    otherwise do:
+      return 1 .
+    end.
+  end case .
+end.
+procedure cur-time-mjd-to-date :
+   define input  parameter i-mjd-diff as decimal no-undo.
+   define output parameter o-Date     as date    no-undo.
+   define output parameter o-Time     as integer no-undo.
+   define variable v-day-number as integer   no-undo .
+   if    i-mjd-diff < 0
+      or i-mjd-diff = ?
+   then do:
+      return "?" .
+   end.
+   assign
+      v-day-number = truncate(i-mjd-diff,0).
+      o-Date = date(v-day-number + 2400002).
+      o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+  .
+end.
+function cur-time-mjd-to-string returns character
+(input p-mjd-diff as decimal
+)
+:
+  define variable v-day-number as integer   no-undo .
+  define variable v-seconds    as integer   no-undo .
+  define variable v-hour       as integer   no-undo .
+  define variable v-min        as integer   no-undo .
+  define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+  define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+  define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+  define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+  if p-mjd-diff < 0
+  or p-mjd-diff = ?
+  then do:
+    return "?" .
+  end.
+  assign
+    v-day-number = integer(truncate(p-mjd-diff,0))
+    v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+  .
+  if v-seconds > 86400
+  then do:
+    assign
+      v-seconds = 86400 - 1
+    .
+  end.
+  if v-seconds < 0
+  then do:
+    assign
+      v-seconds = 0
+    .
+  end.
+  assign
+    v-hour = truncate(v-seconds / 3600, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 3600
+  .
+  assign
+    v-min = truncate(v-seconds / 60, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 60
+  .
+  return
+      (if v-day-number <> 0
+        then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0
+        then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+        then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+        else ""
+      )
+    + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+    .
+end.
+function cur-time-string returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-string-sec returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+end.
+function cur-time-custom  returns character
+(input p-prefix as character
+,input p-date-format as character
+,input p-delimiter as character
+,input p-time-format as character
+,input p-suffix as character
+)
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return
+    p-prefix
+    + string(v-date, p-date-format)
+    + p-delimiter
+    + string(v-time, p-time-format)
+    + p-suffix
+    .
+end.
+function cur-time-print  returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-datetime returns datetime
+:
+  define variable v-char as character no-undo .
+  define variable v-datetime as datetime no-undo .
+  v-char = cur-time-string().
+  v-datetime = datetime(v-char).
+  return  v-datetime.
+end.
+function cur-time-string-msec returns character
+:
+  define variable v-date as datetime  no-undo .
+  v-date = now.
+  return string(v-date) .
+end.
+procedure layouth_create-layout_h :
+define input parameter p-mode as character no-undo .
+define input parameter p-layout-id as character no-undo .
+define parameter buffer buf_layout for ub.layout.
+define output parameter p-chip-num as integer no-undo .
+define variable v-chip-num as integer no-undo .
+DEFINE VARIABLE v-today as date no-undo .
+DEFINE VARIABLE v-time as integer no-undo .
+define buffer buf_c-layout for ub.c-layout.
+do
+on error undo, return error
+:
+  run cur-time in this-procedure ( output v-today, output v-time).
+  find last buf_c-layout no-lock where
+            buf_c-layout.layout-id = p-layout-id
+       and  buf_c-layout.corr-user-db-num = g#db-num
+       use-index pi no-error.
+  assign
+  v-chip-num = (if available buf_c-layout
+                then buf_c-layout.chip-num + 1
+                else 0).
+  create buf_c-layout.
+  if available buf_layout
+  and p-mode <> 'ДОБАВЛЕНИЕ':U
+  then do:
+    buffer-copy buf_layout
+    to buf_c-layout.
+  end.
+  if not available buf_layout then do:
+    assign
+    buf_c-layout.layout-id = p-layout-id
+    .
+  end.
+  if p-mode = 'ДОБАВЛЕНИЕ':U then do:
+    assign
+    buf_c-layout.layout-id = p-layout-id
+    .
+  end.
+  assign
+  buf_c-layout.subject = 'layout':U
+  buf_c-layout.action = (if p-mode = 'ДОБАВЛЕНИЕ':U
+                         then integer('1':U)
+                         else (if p-mode = 'ИЗМЕНЕНИЕ':U
+                               then integer('2':U)
+                               else integer('99':U)
+                               )
+                        )
+  buf_c-layout.chip-num = v-chip-num
+  buf_c-layout.corr-user-db-num = g#db-num
+  buf_c-layout.corr-user-name = g#userid
+  buf_c-layout.corr-date = v-today
+  buf_c-layout.corr-time = v-time
+  p-chip-num = v-chip-num
+  .
+end.
+end procedure.
+procedure layouth_create-layout-elem-rule_h :
+define input parameter p-mode as character no-undo .
+define input parameter p-layout-id as character no-undo .
+define input parameter p-mode-id as character no-undo .
+define input parameter p-widget-id as character no-undo .
+define parameter buffer buf_layout-elem-rule for ub.layout-elem-rule.
+define input parameter p-chip-num as integer no-undo .
+DEFINE VARIABLE v-today as date no-undo .
+DEFINE VARIABLE v-time as integer no-undo .
+define buffer buf_c-layout-elem-rule for ub.c-layout-elem-rule.
+do
+on error undo, return error
+:
+  run cur-time in this-procedure ( output v-today, output v-time).
+  create buf_c-layout-elem-rule.
+  if available buf_layout-elem-rule
+  and p-mode <> 'ДОБАВЛЕНИЕ':U
+  then do:
+    buffer-copy buf_layout-elem-rule
+    to buf_c-layout-elem-rule.
+  end.
+  if p-mode = 'ДОБАВЛЕНИЕ':U then do:
+    assign
+    buf_c-layout-elem-rule.layout-id = p-layout-id
+    buf_c-layout-elem-rule.mode-id = p-mode-id
+    buf_c-layout-elem-rule.widget-id = p-widget-id
+    .
+  end.
+  assign
+  buf_c-layout-elem-rule.subject = 'layout-elem-rule':U
+  buf_c-layout-elem-rule.action = (if p-mode = 'ДОБАВЛЕНИЕ':U
+                         then integer('1':U)
+                         else (if p-mode = 'ИЗМЕНЕНИЕ':U
+                               then integer('2':U)
+                               else integer('99':U)
+                               )
+                        )
+  buf_c-layout-elem-rule.chip-num = p-chip-num
+  buf_c-layout-elem-rule.corr-user-db-num = g#db-num
+  buf_c-layout-elem-rule.corr-user-name = g#userid
+  buf_c-layout-elem-rule.corr-date = v-today
+  buf_c-layout-elem-rule.corr-time = v-time
+  .
+end.
+end procedure.
+procedure layouth_create-rule-call-param_h :
+define input parameter p-mode as character no-undo .
+define input parameter p-call#-id as integer no-undo .
+define input parameter p-codex-id as integer no-undo .
+define input parameter p-ruleset-id as integer no-undo .
+define input parameter p-order-id as integer no-undo .
+define input parameter p-param-name as character no-undo .
+define input parameter p-index as integer no-undo .
+define input parameter p-call-id as character no-undo .
+define parameter buffer buf_rule-call-param for ub.rule-call-param.
+define input parameter p-chip-num as integer no-undo .
+DEFINE VARIABLE v-today as date no-undo .
+DEFINE VARIABLE v-time as integer no-undo .
+define buffer buf_c-rule-call-param for ub.c-rule-call-param.
+do
+on error undo, return error
+:
+  run cur-time in this-procedure ( output v-today, output v-time).
+  create buf_c-rule-call-param.
+  if available buf_rule-call-param
+  and p-mode <> 'ДОБАВЛЕНИЕ':U
+  then do:
+    buffer-copy buf_rule-call-param
+    to buf_c-rule-call-param.
+  end.
+  if p-mode = 'ДОБАВЛЕНИЕ':U then do:
+    assign
+    buf_c-rule-call-param.call#_id = p-call#-id
+    buf_c-rule-call-param.codex_id = p-codex-id
+    buf_c-rule-call-param.ruleset_id = p-ruleset-id
+    buf_c-rule-call-param.order_id = p-order-id
+    buf_c-rule-call-param.param-name = p-param-name
+    buf_c-rule-call-param.p-index = p-index
+    buf_c-rule-call-param.call_id = p-call-id
+    .
+  end.
+  assign
+  buf_c-rule-call-param.action = (if p-mode = 'ДОБАВЛЕНИЕ':U
+                                  then integer('1':U)
+                                  else (if p-mode = 'удаление':U
+                                        then integer('99':U)
+                                        else integer('2':U)
+                                        )
+                                  )
+  buf_c-rule-call-param.chip-num = p-chip-num
+  buf_c-rule-call-param.corr-user-db-num = g#db-num
+  buf_c-rule-call-param.corr-user-name = g#userid
+  buf_c-rule-call-param.corr-date = v-today
+  buf_c-rule-call-param.corr-time = v-time
+  .
+end.
+end procedure.
+define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure layoutus_is-used :
+define input parameter p-layout-type as character no-undo .
+define input parameter p-layout-id as character no-undo .
+define output parameter p-is-used as logical no-undo .
+define output parameter p-mess as character no-undo .
+define variable v-upper-prop-code as character no-undo .
+define variable v-prop-code as character no-undo .
+define buffer buf_thbj-attr for ub.thbj-attr.
+define buffer buf_cash-desk-attr for ub.cash-desk-attr.
+do
+on error undo, return error
+:
+  p-is-used = yes.
+  case p-layout-type:
+    when 'th-pos-keyboard':U then do:
+       assign
+       v-upper-prop-code = 'ibs-th_devices':U
+       v-prop-code = 'keyboard-layout-id':U
+       .
+    end.
+    when 'th-pos-screen':U then do:
+      assign
+      v-upper-prop-code = 'ibs-th_interface':U
+      v-prop-code = 'screen-layout-id':U
+      .
+    end.
+  end.
+  for each buf_thbj-attr no-lock where
+          buf_thbj-attr.upper-prop-code = v-upper-prop-code
+      and buf_thbj-attr.prop-code = v-prop-code:
+    if buf_thbj-attr.property-value-character = p-layout-id then do:
+      p-mess = substitute("Нельзя удалить раскладку &1 - она используется в параметрах для IBS POS TH &2"
+                        , p-layout-id
+                        , get-objregion(  input buf_thbj-attr.obj-type
+                                         ,input buf_thbj-attr.obj-code)
+                        ).
+     return.
+    end.
+  end.
+  case p-layout-type:
+    when 'th-pos-keyboard':U then do:
+       assign
+       v-upper-prop-code = 'IBS-TH_devices':U
+       v-prop-code = 'keyboard-layout-id':U
+       .
+    end.
+    when 'th-pos-screen':U then do:
+      assign
+      v-upper-prop-code = 'IBS-TH_interface':U
+      v-prop-code = 'screen-layout-id':U
+      .
+    end.
+  end.
+  for each buf_cash-desk-attr no-lock where
+          buf_cash-desk-attr.upper-attr-code = v-upper-prop-code
+      and buf_cash-desk-attr.attr-code = v-prop-code:
+    if buf_cash-desk-attr.attr-value-character = p-layout-id then do:
+      p-mess = substitute("Нельзя удалить раскладку &1 - она используется в параметрах для IBS POS TH &2 касса &3"
+                        , p-layout-id
+                        , get-objregion(  input 'маг':U
+                                         ,input buf_cash-desk-attr.obj-code)
+                        , buf_Cash-desk-attr.cash-num
+                        ).
+      return.
+    end.
+  end.
+  p-is-used = no.
+end.
+end procedure.
+define variable v-mess as character no-undo .
+define variable v-chip-num as integer no-undo .
+define variable v-is-used as logical no-undo .
+define buffer buf_layout  for ub.layout.
+define buffer buf_layout-elem-rule  for ub.layout-elem-rule.
+define buffer buf_rule-call-param for ub.rule-call-param.
+define buffer buf_rule-by-call for ub.rule-by-call.
+main-block:
+do
+on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+:
+  find first buf_layout exclusive-lock where
+          recid(buf_layout) = p-rec .
+  if buf_layout.is-default = integer('1':U)
+  or buf_layout.is-default = integer('-1':U)
+  then do:
+    if g#db-num > 0 then do:
+     v-mess = substitute("Нельзя удалять ШАБЛОН раскладки и ОБЯЗАТЕЛЬНУЮ РАСКЛАДКУ в УБД"
+                          , buf_layout.layout-id ).
+      run err-mess in this-procedure ( input-output v-mess) .
+      undo main-block, return error (if p-silent = yes then v-mess else '':U).
+    end.
+  end.
+  v-is-used = yes.
+  run  layoutus_is-used in this-procedure (
+                                            input buf_layout.layout-type
+                                           ,input buf_layout.layout-id
+                                           ,output v-is-used
+                                           ,output v-mess) no-error .
+  if error-status:error
+  or v-is-used then do:
+    run err-mess in this-procedure ( input-output v-mess) .
+    undo main-block, return error (if p-silent = yes then v-mess else '':U).
+  end.
+  run  layouth_create-layout_h  in this-procedure (
+                                                  input 'удаление':U
+                                                 ,input buf_layout.layout-id
+                                                 ,buffer buf_layout
+                                                 ,output v-chip-num).
+  for each buf_layout-elem-rule where
+          buf_layout-elem-rule.layout-id  = buf_layout.layout-id
+  on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+  on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+  on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+  :
+    for each buf_rule-call-param where
+            buf_rule-call-param.call_id  = buf_layout-elem-rule.uniq-key-rec
+    on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+    on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+    on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+    :
+      run  layouth_create-rule-call-param_h  in this-procedure (
+                                                      input 'удаление':U
+                                                    ,input buf_rule-call-param.call#_id
+                                                    ,input buf_rule-call-param.codex_id
+                                                    ,input buf_rule-call-param.ruleset_id
+                                                    ,input buf_rule-call-param.order_id
+                                                    ,input buf_rule-call-param.param-name
+                                                    ,input buf_rule-call-param.p-index
+                                                    ,input buf_rule-call-param.call_id
+                                                    ,buffer buf_rule-call-param
+                                                    ,input v-chip-num).
+      delete buf_rule-call-param.
+    end.
+    for each buf_rule-by-call where
+            buf_rule-by-call.call_id  = buf_layout-elem-rule.uniq-key-rec
+    on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+    on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+    on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+    :
+      delete buf_rule-by-call.
+    end.
+    run  layouth_create-layout-elem-rule_h  in this-procedure (
+                                                    input 'удаление':U
+                                                  ,input buf_layout-elem-rule.layout-id
+                                                  ,input buf_layout-elem-rule.mode-id
+                                                  ,input buf_layout-elem-rule.widget-id
+                                                  ,buffer buf_layout-elem-rule
+                                                  ,input v-chip-num).
+    delete buf_layout-elem-rule.
+  end.
+  delete buf_layout no-error.
+  if error-status:error then do:
+    v-mess = substitute("Ошибка при удалении: &1&2&3"
+                         , error-status:get-message(1)
+                         , chr(10)
+                         , return-value ).
+   run err-mess in this-procedure ( input-output v-mess) .
+   undo main-block, return error (if p-silent = yes then v-mess else '':U).
+  end.
+end.
+PROCEDURE err-mess:
+  DEFINE INPUT-OUTPUT PARAMETER p-mess as character No-UNDO.
+  CASE p-silent:
+    when yes then do:
+      assign
+      p-mess = substitute("Раскладка &1: &2"
+                         , buf_layout.layout-id
+                         , p-mess)
+      .
+    end.
+    when no then do:
+      message
+      p-mess
+      view-as alert-box error .
+    end.
+  end.
+END PROCEDURE.

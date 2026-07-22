@@ -1,0 +1,812 @@
+block-level on error undo, throw.
+define input-output parameter p-doc-rec as recid no-undo.
+define input parameter p-mode         as character no-undo .
+define input parameter p-silent       as logical no-undo .
+define input parameter p-db-num       like ub.scales.db-num       no-undo .
+define input parameter p-scales-num   like ub.scales.scales-num     no-undo .
+define input parameter p-address      like ub.scales.address      no-undo .
+define input parameter p-master       like ub.scales.master       no-undo .
+define input parameter p-max-gds      like ub.scales.max-gds      no-undo .
+define input parameter p-scales-name  like ub.scales.scales-name  no-undo .
+define input parameter p-scales-type  like ub.scales.scales-type  no-undo .
+define input parameter p-remote       like ub.scales.remote       no-undo .
+define input parameter p-sts          like ub.scales.sts          no-undo .
+define input parameter p-unit-base    like ub.scales.unit-base    no-undo .
+define input parameter p-wt-cart      like ub.scales.wt-cart      no-undo .
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+define variable vss-author      as character no-undo init "$Author: expertek $":U .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: scales1.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: ref/scales1.p $":U .
+define variable vss-description as character no-undo init "Сохранение изменений в карточке весов".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define new global shared variable g#attr-lib  as handle no-undo .
+define variable v-attr-lib-variable as handle no-undo .
+procedure clntattr-code :
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-type           as character no-undo .
+  define output parameter p-format         as character no-undo .
+  define output parameter p-label          as character no-undo .
+  define output parameter p-user-can-edit  as logical   no-undo .
+  define output parameter p-output-display as logical   no-undo .
+  define output parameter p-other          as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-code in g#attr-lib
+      (input  p-code
+      ,output p-type
+      ,output p-format
+      ,output p-label
+      ,output p-user-can-edit
+      ,output p-output-display
+      ,output p-other
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-tooltip :
+  define input  parameter p-code    as character no-undo .
+  define output parameter p-tooltip as character no-undo .
+  define output parameter p-label   as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-tooltip in g#attr-lib
+      (input  p-code
+      ,output p-tooltip
+      ,output p-label
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-value :
+  define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+  define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+  define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+  define output parameter p-value    like ub.clients-attr.attr-value no-undo .
+  define output parameter p-type     as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-value in g#attr-lib
+      (input  p-obj-type
+      ,input  p-obj-code
+      ,input  p-code
+      ,output p-value
+      ,output p-type
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-write :
+  define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+  define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+  define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+  define input  parameter p-value    like ub.clients-attr.attr-value no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-write in g#attr-lib
+      (input  p-obj-type
+      ,input  p-obj-code
+      ,input  p-code
+      ,input  p-value
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-exist :
+  define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+  define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+  define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+  define output parameter p-exist    as logical  no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-exist in g#attr-lib
+      (input  p-obj-type
+      ,input  p-obj-code
+      ,input  p-code
+      ,output p-exist
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-delete :
+  define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+  define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+  define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+  define output parameter p-deleted  as logical no-undo.
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-delete in g#attr-lib
+      (input  p-obj-type
+      ,input  p-obj-code
+      ,input  p-code
+      ,output p-deleted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-copy-to :
+  define input  parameter p-obj-type as character no-undo .
+  define input  parameter p-obj-code as integer   no-undo .
+  define input  parameter p-code     as character no-undo .
+  define input  parameter p-bh       as handle no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-copy-to in g#attr-lib
+      (input  p-obj-type
+      ,input  p-obj-code
+      ,input  p-code
+      ,input  p-bh
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-news :
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-news           as logical   no-undo .
+  do
+  on error undo, return error
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-news in g#attr-lib
+      (input  p-code
+      ,output p-news
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-get-archive-attr :
+  define output parameter p-archive-attr-list as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-get-archive-attr in g#attr-lib
+      (output  p-archive-attr-list
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-get-auto-author-attr :
+  define output parameter p-archive-attr-list as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-get-auto-author-attr in g#attr-lib
+      (output  p-archive-attr-list
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-get-archive-by-type :
+  define input  parameter p-archive-type      as character no-undo .
+  define output parameter p-archive-attr-list as character no-undo .
+  define variable vss-description as character no-undo initial "clntattr-get-archive-by-type-01: возвращает список атрибутов для складского архива".
+  do
+  on error undo, return error return-value
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-get-archive-by-type in g#attr-lib
+      (input  p-archive-type
+      ,output p-archive-attr-list
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-vat-register :
+  define input parameter p-obj-type like ub.clients.obj-type no-undo .
+  define input parameter p-obj-code like ub.clients.obj-code no-undo .
+  define input-output parameter p-value as character no-undo .
+  define output parameter p-setted as logical no-undo .
+  do
+  on error undo, return error
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-vat-register in g#attr-lib
+      (input  p-obj-type
+      ,input  p-obj-code
+      ,input-output p-value
+      ,output p-setted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-requisite-alc-decl :
+  define input parameter p-obj-type like ub.clients.obj-type no-undo .
+  define input parameter p-obj-code like ub.clients.obj-code no-undo .
+  define input-output parameter p-value as character no-undo .
+  define output parameter p-setted as logical no-undo .
+  do
+  on error undo, return error
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-requisite-alc-decl in g#attr-lib
+      (input  p-obj-type
+      ,input  p-obj-code
+      ,input-output p-value
+      ,output p-setted
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-manual-edit :
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-section-num    as integer no-undo .
+  do
+  on error undo, return error
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-manual-edit in g#attr-lib
+      (input  p-code
+      ,output p-section-num
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+procedure clntattr-batch-edit :
+  define input  parameter p-code           as character no-undo .
+  define output parameter p-section-num    as integer no-undo .
+  do
+  on error undo, return error
+  :
+        if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-batch-edit in g#attr-lib
+      (input  p-code
+      ,output p-section-num
+      ) no-error .
+    if error-status :error
+    then do:
+      undo, return error return-value .
+    end.
+  end.
+end procedure.
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+FUNCTION check-ip returns logical ( input p-ip-string as character, output p-mess as character):
+define variable v-ii as integer no-undo .
+define variable v-entry as character no-undo .
+define variable v-entry-int as integer no-undo .
+IF num-entries(p-ip-string, ".") <> 4 then do:
+  p-mess = substitute("Неверный IP-адрес &1&2" +
+                      "IP-адрес должен иметь вид NNN.NNN.NNN.NNN"
+                      ,p-ip-string
+                      ,chr(10)
+                      ).
+  return no.
+end.
+do v-ii = 1 to 4:
+  v-entry = entry(v-ii, p-ip-string, '.':U).
+  assign
+  v-entry-int = integer(v-entry)
+  no-error .
+  if error-status:error then do:
+    p-mess = substitute("Неверный IP-адрес &1&2" +
+                        "IP-адрес должен состоять из 4 целых чисел, разделенных точками (NNN.NNN.NNN.NNN)"
+                        ,p-ip-string
+                        ,chr(10)
+                        ).
+    return no.
+  end.
+  if v-entry-int < 0
+  or v-entry-int > 255
+  or trim(string(v-entry-int, ">>9")) <> v-entry
+  then do:
+    p-mess = substitute("Неверный IP-адрес &1&2" +
+                        "IP-адрес должен состоять из 4 положительных целых чисел (0-255), разделенных точками (NNN.NNN.NNN.NNN) БЕЗ ЛИДИРУЮЩИХ НУЛЕЙ"
+                        ,p-ip-string
+                        ,chr(10)
+                        ).
+    return no.
+  end.
+end.
+return yes.
+END FUNCTION.
+define variable v-err-mess as character no-undo .
+define variable v-db-num like ub.db.db-num no-undo .
+define variable choice as logical no-undo .
+define variable v-ok as logical no-undo .
+define variable v-mess as character no-undo .
+define variable v-address as character no-undo .
+define variable v-dopi as integer no-undo .
+define buffer buf_db for ub.db.
+define buffer buf_scales for ub.scales.
+define buffer b-scales for ub.scales.
+define buffer dupl_scales for ub.scales.
+main-block:
+do
+on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status:get-message (1))
+on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+:
+  if p-mode <> 'ДОБАВЛЕНИЕ':U
+  AND p-mode <> 'ИЗМЕНЕНИЕ':U then do:
+    message
+    vss-workfile vss-revision vss-description skip
+    "Неверный параметр p-mode" p-mode
+    view-as alert-box error .
+    undo main-block, return error '':u.
+  end.
+define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curdbnum in g#library
+  (output v-db-num
+  )  .
+  if LOOKUP(p-scales-type, 'CAS_LP-15,CAS_LP-6,HELMAC_net,HELMAC_model-Z,HELMAC_model-T,CAS_LP-485,BOLET_P-280,BZB-SC515,DIGI_SM-80,CAS_LP-15v1.6,TIGER,MIRA,TIGER2,CAS_LP-16x,DIGI-SM,TIGER-SPCT2,SHTRIH-M,CAS_LP-II,CAS_CL5000J,CAS_CL5000,DIGI_AW-4600_FX,TIGER-SPCT1':U) = 0 then do:
+    assign
+    v-err-mess = substitute("Неверный тип весов &1", p-scales-type).
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "s-type":U).
+  end.
+  find first buf_db no-lock where
+            buf_db.db-num = p-db-num no-error .
+  if not avail buf_db then dO:
+    assign
+    v-err-mess = substitute("Не найдена БД &1", p-db-num).
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else '':U).
+  end.
+  if p-db-num <> v-db-num
+  then do:
+    v-err-mess = substitute("Нельзя изменять запись ВЕСОВ в чужой БД&1" +
+                            "Номер текущей БД  - &2, номер БД весов - &3"
+                            ,chr(10)
+                            ,v-db-num
+                            ,p-db-num).
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "":U).
+  end.
+  if p-scales-num = 0 then do:
+    assign
+    v-err-mess = substitute("Не указан номер весов !") .
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "scales-num":U).
+  end.
+  if p-scales-type = "TIGER-SPCT2"
+  and p-scales-num > 99 then do:
+    assign
+    v-err-mess = substitute("Для весов типа &1 номер весов не может быть > 99!", p-scales-num)
+    .
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "scales-num":U).
+  end.
+  if p-scales-name = "" then do:
+    assign
+    v-err-mess = substitute("Не указано название весов !")
+    .
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "scales-name":U).
+  end.
+  if p-address = "" then do:
+    assign
+    v-err-mess = substitute("Не задан адрес для весов!").
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "address":U).
+  end.
+  if p-scales-type = 'DIGI-SM' then do:
+    v-ok = check-ip ( input p-address, output v-mess).
+    if not v-ok then do:
+      assign
+      v-err-mess = v-mess.
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+    end.
+  end.
+  if p-scales-type = 'SHTRIH-M'
+  then do:
+    if num-entries(p-address, ":") <> 2 then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port - для весов, работающих по TCP-IP&1" +                    "COMn:timeout - для весов, работающих по RS232"                    , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+    assign
+    v-ok = (integer( entry(2, p-address, ":")) > 0)
+    no-error.
+    if not v-ok
+    or trim(entry(2, p-address, ":"), "1234567890") <> "" then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port - для весов, работающих по TCP-IP&1" +                    "COMn:timeout - для весов, работающих по RS232"                    , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+    if  entry(1, p-address, ":") begins "COM" then do:
+      assign
+      v-ok = (integer( entry(1, p-address, ":")) > 0)
+      no-error.
+      if not v-ok
+      or trim(entry(2, p-address, ":"), "1234567890") <> "" then do:
+        assign
+        v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port - для весов, работающих по TCP-IP&1" +                    "COMn:timeout - для весов, работающих по RS232"                    , chr(10)                    ).
+        run err-mess(input-output v-err-mess).
+        undo main-block, return error (if p-silent then v-err-mess else "address":U).
+        .
+      end.
+    end.
+    else do:
+      v-ok = check-ip ( input entry(1, p-address, ":"), output v-mess).
+      if not v-ok then do:
+        assign
+        v-err-mess = v-mess + chr(10) + substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port - для весов, работающих по TCP-IP&1" +                    "COMn:timeout - для весов, работающих по RS232"                    , chr(10)                    ).
+        run err-mess(input-output v-err-mess).
+        undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      end.
+    end.
+  end.
+  if p-scales-type = 'CAS_CL5000J'
+  or p-scales-type = 'CAS_CL5000'
+  then do:
+    if num-entries(p-address) <> 2 then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port,№ - для весов, работающих по TCP-IP&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+    if entry(2, p-address) <> string(p-scales-num) then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port,№ - для весов, работающих по TCP-IP&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+    if num-entries(p-address, ":") <> 2 then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port,№ - для весов, работающих по TCP-IP&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+    v-address = entry(1, p-address).
+    assign
+    v-ok = (integer( entry(2, v-address, ":")) > 0)
+    no-error.
+    if not v-ok
+    or trim(entry(2, v-address, ":"), "1234567890") <> "" then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port,№ - для весов, работающих по TCP-IP&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+    v-ok = check-ip ( input entry(1, v-address, ":"), output v-mess).
+    if not v-ok then do:
+      assign
+      v-err-mess = v-mess + chr(10) + substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port,№ - для весов, работающих по TCP-IP&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+    end.
+  end.
+  if p-scales-type = "" then do:
+    v-ok = check-ip ( input entry(1, p-address, ":"), output v-mess).
+    if not v-ok then do:
+      assign
+      v-err-mess = v-mess + chr(10) + substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+    end.
+    if num-entries(p-address, ":") <> 2 then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+    assign
+    v-dopi = integer(entry(2, p-address, ":"))
+    no-error.
+    if entry(2, p-address, ":") <> string(v-dopi, ">>>>9") then do:
+      assign
+      v-err-mess = substitute("Формат адреса весов данного типа:&1" +                    "nnn.nnn.nnn.nnn:port&1"                     , chr(10)                    ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "address":U).
+      .
+    end.
+  end.
+  if p-unit-base = "" then do:
+    assign
+    v-err-mess = substitute("Не задана единица измерения весов !").
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "unit-base":U).
+  end.
+  if NOT can-find( first ub.units where
+                        ub.units.unit-name = p-unit-base ) then do:
+    assign
+    v-err-mess = substitute("Введенная Вами единица измерения &1&2" +
+                            "ОТСУТСТВУЕТ в справочнике единиц измерений !"
+                          , p-unit-base).
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "unit-base":U).
+  end.
+  if p-max-gds = 0 then do:
+    assign
+    v-err-mess = substitute("Не указана номенклатура (максимальное количество товаров на весах)!")
+    .
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "max-gds":U).
+  end.
+  if p-master > 0 then do:
+    FIND FIRST b-scales where
+              b-scales.db-num = p-db-num
+        AND b-scales.scales-num = p-master
+    No-ERROR.
+    if not avail b-scales then do:
+        v-err-mess = substitute("Не найдены главные весы № &1 в БД &2&3," +
+                              "подчиненными которым будут весы &4!"
+                              , p-master
+                              , p-db-num
+                              , chr(10)
+                              , p-scales-num).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "":U).
+    end.
+    if p-master = p-scales-num then do:
+      v-err-mess = substitute("Весы не могут быть главными сами для себя!").
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "":U).
+    end.
+    if b-scales.scales-type <> p-scales-type
+    OR b-scales.max-gds <> p-max-gds
+    OR b-scales.unit-base <> p-unit-base then do:
+      v-err-mess = substitute("Главные весы имеют отличный от данных весов ТИП или&1"  +
+                              "НОМЕНКЛАТУРУ или ЕДИНИЦУ ИЗМЕРЕНИЯ!"
+                              , chr(10)).
+      run err-mess(input-output v-err-mess).
+    end.
+    if b-scales.master > 0 then do:
+      v-err-mess =  substitute("Главные-весы &1 в БД &2 сами по себе являются подчиненными для других весов!"
+                              ,  b-scales.scales-num
+                              , b-scales.db-num).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "":U).
+    end.
+  end.
+  find first  dupl_scales no-lock where
+              dupl_scales.db-num = p-db-num
+          AND dupl_scales.address = p-address
+          and dupl_scales.scales-num <> p-scales-num
+          no-error .
+  if available dupl_scales
+  then do:
+    assign
+    v-err-mess = substitute("Весы с адресом уже &1 есть в БД &2&3- весы № &4 &5!"
+                            ,p-address
+                            ,p-db-num
+                            , chr(10)
+                            ,dupl_scales.scales-num
+                            ,dupl_scales.scales-name).
+    if p-silent then do:
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error v-err-mess.
+    end.
+    else do:
+      message
+      v-err-mess skip
+      "Вас это устраивает ?"
+      view-as alert-box WARNING buttons YES-NO update choice .
+      if NOT choice then undo main-block, return error '':U.
+    end.
+  end.
+  if p-mode = 'ДОБАВЛЕНИЕ':U then do:
+    if can-find (ub.scales where
+                  ub.scales.db-num  = p-db-num
+              AND ub.scales.scales-num = p-scales-num )  then do:
+      assign
+      v-err-mess = substitute("В БД &1 Весы с таким номером уже есть!", p-db-num)
+      .
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "":U).
+    end.
+    create buf_scales.
+    assign
+    buf_scales.scales-num   = p-scales-num
+    buf_scales.scales-name  = p-scales-name
+    buf_scales.max-gds      = p-max-gds
+    buf_scales.address      = p-address
+    buf_scales.unit-base    = p-unit-base
+    buf_scales.master       = p-master
+    buf_scales.db-num = p-db-num
+    buf_scales.scales-type = p-scales-type
+    buf_scales.tot-gds = (if buf_scales.master > 0
+                          then b-scales.tot-gds else buf_scales.tot-gds)
+    buf_scales.to-send = (if buf_scales.master > 0
+                          then b-scales.to-send
+                          else buf_scales.to-send)
+    p-doc-rec = recid(buf_scales)
+    .
+  end.
+  else do:
+    FIND FIRST buf_scales where
+              recid(buf_scales) = p-doc-rec No-ERROR.
+    if not available buf_scales then do:
+      v-err-mess = substitute("&1 &2 &3&4" +
+                              "Не найдена запись ВЕСЫ - p-doc-rec &5"
+                              ,vss-workfile
+                              ,vss-revision
+                              ,vss-description
+                              ,chr(10)
+                              , p-doc-rec ).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "":U).
+    end.
+    if buf_scales.db-num <> p-db-num
+    OR buf_scales.scales-num <> p-scales-num
+    then do:
+      v-err-mess = substitute("&1 &2 &3&4" +
+                             "Для уже имеющейся записи нельзя изменить&4" +
+                             "номер БД и номер весов"
+                              ,vss-workfile
+                              ,vss-revision
+                              ,vss-description
+                              ,chr(10)).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "":U).
+    end.
+    if p-max-gds < buf_scales.max-gds
+    AND ( can-find( FIRST ub.scales-gds WHERE
+                        ub.scales-gds.db-num = p-db-num
+                    AND ub.scales-gds.scales-num = p-scales-num ) ) then do:
+      v-err-mess = substitute("Есть товары на весах &1 БД &2&3" +
+                              "Уменьшение номенклатуры невозможно!"
+                            , p-scales-num
+                            , p-db-num
+                            , chr(10)).
+      run err-mess(input-output v-err-mess).
+      undo main-block, return error (if p-silent then v-err-mess else "":U).
+    end.
+    if p-scales-type <> buf_scales.scales-type
+    and buf_scales.tot-gds <> 0
+    then do:
+      assign
+      v-err-mess = substitute("Для уже имеющихся весов, к которым привязаны товары,&1" +
+                              "изменение типа весов может нарушить работу весов"
+                              , chr(10))
+      .
+      if p-silent then do:
+        run err-mess(input-output v-err-mess).
+        undo main-block, return error v-err-mess.
+      end.
+      else do:
+        message
+        v-err-mess skip
+        "Все равно изменить тип весов?"
+        view-as alert-box WARNING buttons YES-NO update choice .
+        if NOT choice then undo main-block, return error '':U.
+      end.
+    end.
+    assign
+    buf_scales.scales-name = p-scales-name
+    buf_scales.max-gds     = p-max-gds
+    buf_scales.address     = p-address
+    buf_scales.unit-base   = p-unit-base
+    buf_scales.master      = p-master
+    buf_scales.scales-type = p-scales-type
+    .
+  end.
+  release buf_Scales no-error.
+  if error-status:error then do:
+    v-err-mess = substitute("&1 &2 &3&4" +
+                            "Ошибка при сохранении записи ВЕСЫ&4" +
+                            "&5&4&6&4"
+                            ,vss-workfile
+                            ,vss-revision
+                            ,vss-description
+                            ,chr(10)
+                            , error-status:get-message(1)
+                            , return-value ).
+    run err-mess(input-output v-err-mess).
+    undo main-block, return error (if p-silent then v-err-mess else "":U).
+  end.
+end.
+PROCEDURE err-mess:
+DEFINE INPUT-OUTPUT PARAMETER p-mess as character No-UNDO.
+p-mess = substitute("Ошибка при сохранении/изменении ВЕСОВ № &1 БД &2&3&4"
+                  , p-scales-num
+                  , p-db-num
+                  , chr(10)
+                  , p-mess) .
+if not p-silent then
+message
+p-mess
+view-as alert-box error .
+END PROCEDURE.

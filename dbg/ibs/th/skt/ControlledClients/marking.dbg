@@ -1,0 +1,3698 @@
+        1   USING Progress.Lang.*.
+        2   USING ibs.th.skt.Commands.*.
+        3   USING ibs.th.skt.ControlledClients.marking.sts.cash.
+        4   USING ibs.th.skt.Adapters.LogWrite.
+        5   USING ibs.th.gbl.propmap.
+        6   USING ibs.th.gbl.sys.objsrv.
+        7   USING ibs.th.gbl.sys.objth.
+        8   block-level on error undo, throw.
+        9   CLASS ibs.th.skt.ControlledClients.marking INHERITS ICommandProc:
+       10     DEFINE OVERRIDE PUBLIC PROPERTY vss-revision    AS CHARACTER NO-UNDO INIT "$Revision:$":U GET .
+       11     DEFINE OVERRIDE PUBLIC PROPERTY vss-author      AS CHARACTER NO-UNDO INIT "$Author:$":U GET.
+       12     DEFINE OVERRIDE PUBLIC PROPERTY vss-date        AS CHARACTER NO-UNDO INIT "$Date:$":U GET.
+       13     DEFINE OVERRIDE PUBLIC PROPERTY vss-workfile    AS CHARACTER NO-UNDO INIT "$Workfile:$":U GET.
+       14     DEFINE OVERRIDE PUBLIC PROPERTY vss-archive     AS CHARACTER NO-UNDO INIT "$Archive:$":U GET.
+       15     DEFINE OVERRIDE PUBLIC PROPERTY vss-description AS CHARACTER NO-UNDO INIT "Обработчик запросов по маркам с кассы" GET.
+       16         DEFINE PRIVATE VARIABLE cashSts    AS CLASS cash     NO-UNDO.
+       17     DEFINE PRIVATE VARIABLE answerFlag AS LOGICAL        NO-UNDO INIT FALSE.
+       18     DEFINE PRIVATE VARIABLE thMarkSts  AS CLASS ibs.th.str.marking.sts.mark NO-UNDO.
+       19     DEFINE PRIVATE VARIABLE EDOParSec AS CLASS ibs.th.gbl.env.prmtrs.edo .
+       20     DEFINE VARIABLE mAsyncHelper AS CLASS ibs.th.file.AsyncHelperth  NO-UNDO.
+       21     DEFINE PRIVATE VARIABLE cash      AS CHARACTER NO-UNDO.
+       22     DEFINE PRIVATE VARIABLE shift_id  AS CHARACTER NO-UNDO.
+       23     DEFINE PRIVATE VARIABLE chk_id    AS CHARACTER NO-UNDO.
+       24     DEFINE PRIVATE VARIABLE cntx_id   AS CHARACTER NO-UNDO.
+       25     DEFINE PRIVATE VARIABLE mark      AS CHARACTER NO-UNDO.
+       26     DEFINE PRIVATE VARIABLE action    AS CHARACTER NO-UNDO.
+       27     DEFINE PRIVATE VARIABLE shift_tbeg AS DATE NO-UNDO.
+       28     DEFINE PRIVATE VARIABLE shift_num  AS INTEGER NO-UNDO.
+       29     DEFINE PRIVATE VARIABLE statusPOS  AS INTEGER NO-UNDO.
+       30     DEFINE PRIVATE VARIABLE isCheckedOffline  AS LOGICAL NO-UNDO.
+       31     DEFINE PRIVATE VARIABLE mMarkOrig     AS CHARACTER NO-UNDO.
+       32     DEFINE PRIVATE VARIABLE mCheckSts     AS INTEGER   NO-UNDO.
+       33     DEFINE PRIVATE VARIABLE mCheckStsOff  AS INTEGER   NO-UNDO.
+       34     DEFINE PRIVATE VARIABLE mCheckStsSave AS INTEGER   NO-UNDO.
+       35     DEFINE PRIVATE VARIABLE mReqId        AS CHARACTER NO-UNDO.
+       36     DEFINE PRIVATE VARIABLE mReqTimestamp AS CHARACTER NO-UNDO.
+       37     DEFINE PRIVATE VARIABLE mInst         AS CHARACTER NO-UNDO.
+       38     DEFINE PRIVATE VARIABLE mVersion      AS CHARACTER NO-UNDO.
+       39     DEFINE PRIVATE VARIABLE mCheckGisMT   AS INTEGER NO-UNDO.
+       40     DEFINE PRIVATE VARIABLE mSaveOnlineResult AS LOGICAL NO-UNDO.
+       41     DEF STREAM out_s.
+       42     DEF STREAM out_data.
+       43     DEFINE TEMP-TABLE ttmark-body NO-UNDO
+       44        XML-NODE-NAME "body"
+       45        FIELD code            AS INT
+       46        FIELD error-1         AS CHAR XML-NODE-NAME "error"
+       47        FIELD requestid       AS CHAR
+       48        FIELD status-1        AS CHAR XML-NODE-NAME "status"
+       49        FIELD reqid           AS CHAR
+       50        FIELD reqtimestamp    AS INT64
+       51        FIELD timestamp       AS CHAR
+       52        .
+       53     DEFINE TEMP-TABLE ttmark-check NO-UNDO
+       54        XML-NODE-NAME "codes"
+       55        FIELD cis             AS CHAR
+       56        FIELD printView       AS CHAR
+       57        FIELD gtin            AS CHAR
+       58        FIELD verified        AS LOGICAL
+       59        FIELD found           AS LOGICAL
+       60        FIELD realizable      AS LOGICAL
+       61        FIELD utilised        AS LOGICAL
+       62        FIELD isBlocked       AS LOGICAL
+       63        FIELD productionDate  AS CHAR
+       64        FIELD isOwner         AS LOGICAL
+       65        FIELD errorCode       AS INT
+       66        FIELD isTracking      AS LOGICAL
+       67        FIELD sold            AS LOGICAL
+       68        FIELD packageType     AS CHAR
+       69        FIELD producerInn     AS CHAR
+       70        FIELD grayZone        AS LOGICAL
+       71        FIELD mrp             AS INT
+       72        FIELD expireDate      AS DATETIME-TZ
+       73        .
+       74     DEFINE TEMP-TABLE tt-file-name NO-UNDO
+       75        FIELD tmpFileName AS CHAR
+       76        FIELD ofline AS LOG INIT NO
+       77        INDEX tmpFileName tmpFileName
+       78        INDEX ofline ofline.
+       79     DEFINE TEMP-TABLE ttlocal-mark  no-undo serialize-name  "results"
+       80      FIELD reqId        AS CHAR
+       81      FIELD reqTimestamp AS INT64
+       82      FIELD inst         AS CHAR
+       83      FIELD version      AS CHAR
+       84      FIELD description  AS CHAR
+       85      FIELD code         AS INT64
+       86      FIELD errorCode    AS INT64
+       87      FIELD reason       AS CHAR
+       88      .
+       89     DEFINE TEMP-TABLE ttlocal-mark-code  no-undo serialize-name  "codes"
+       90      FIELD code-reqid   AS RECID
+       91      FIELD isBlocked    AS LOG INIT NO
+       92      FIELD sold         AS LOG INIT NO
+       93      FIELD gtin         AS CHAR
+       94      FIELD cis          AS CHAR
+       95      FIELD mrp          AS CHAR
+       96      INDEX reqidpar code-reqid
+       97      .
+       98     DEFINE DATASET gismt-mark-body  XML-NODE-NAME "bodys" FOR ttmark-body.
+       99     DEFINE DATASET gismt-mark-codes XML-NODE-NAME "body"  FOR ttmark-check.
+      100     DEFINE DATASET gismt-local-mark SERIALIZE-HIDDEN  for ttlocal-mark, ttlocal-mark-code
+      101        PARENT-ID-RELATION FOR ttlocal-mark, ttlocal-mark-code PARENT-ID-FIELD code-reqid .
+      102     DEFINE PUBLIC PROPERTY SomeStr AS LONGCHAR NO-UNDO
+      103       GET.
+      104       SET.
+      105   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      106   define variable vss-include-info1 as character format "X(65)" no-undo
+      107   initial "@(#)$Workfile$ $Revision$".
+      108   method private void xmlchar-test (input  p-in-string          as character,
+      109                                     output p-out-string-enc     as character,
+      110                                     output p-out-string-dec    as character):
+      111   do
+      112   on error undo, return error
+      113   :
+      114          xmlchar-encode
+      115       (
+      116             input p-in-string
+      117           , output p-out-string-enc
+      118       ).
+      119          xmlchar-decode
+      120       (
+      121             input p-out-string-enc
+      122           , output p-out-string-dec
+      123       ).
+      124   end.
+      125   end .
+      126   method private void xmlchar-encode (input  p-in-string          as character,
+      127                                     output p-out-string         as character):
+      128       define variable v-position      as integer      no-undo.
+      129       define variable v-current-char  as character    no-undo.
+      130   do
+      131   on error undo, return error
+      132   :
+      133       assign
+      134           p-out-string = "":U
+      135       .
+      136       case p-in-string
+      137       :
+      138           when ?
+      139           then do:
+      140               assign
+      141                   p-out-string = "?":U
+      142               .
+      143           end.
+      144           when "?":U
+      145           then do:
+      146               assign
+      147                   p-out-string = "&#63;":U
+      148               .
+      149           end.
+      150           otherwise do:
+      151               do v-position = 1 to length( p-in-string )
+      152               :
+      153                   assign
+      154                       v-current-char = substring( p-in-string, v-position, 1 )
+      155                   .
+      156                   case v-current-char
+      157                   :
+      158                       when "&":U
+      159                       then do:
+      160                           assign
+      161                               p-out-string = p-out-string + "&amp;":U
+      162                           .
+      163                       end.
+      164                       when ">":U
+      165                       then do:
+      166                           assign
+      167                               p-out-string = p-out-string + "&gt;":U
+      168                           .
+      169                       end.
+      170                       when "<":U
+      171                       then do:
+      172                           assign
+      173                               p-out-string = p-out-string + "&lt;":U
+      174                           .
+      175                       end.
+      176                       when "'":U
+      177                       then do:
+      178                           assign
+      179                               p-out-string = p-out-string + "&apos;":U
+      180                           .
+      181                       end.
+      182                       when '"':U
+      183                       then do:
+      184                           assign
+      185                               p-out-string = p-out-string + "&quot;":U
+      186                           .
+      187                       end.
+      188                       when chr(1)
+      189                       then do:
+      190                           assign
+      191                               p-out-string = p-out-string + "":U
+      192                           .
+      193                       end.
+      194                       when chr(2)
+      195                       then do:
+      196                           assign
+      197                               p-out-string = p-out-string + "":U
+      198                           .
+      199                       end.
+      200                       when chr(3)
+      201                       then do:
+      202                           assign
+      203                               p-out-string = p-out-string + "":U
+      204                           .
+      205                       end.
+      206                       when chr(4)
+      207                       then do:
+      208                           assign
+      209                               p-out-string = p-out-string + "":U
+      210                           .
+      211                       end.
+      212                       when chr(5)
+      213                       then do:
+      214                           assign
+      215                               p-out-string = p-out-string + "":U
+      216                           .
+      217                       end.
+      218                       when chr(6)
+      219                       then do:
+      220                           assign
+      221                               p-out-string = p-out-string + "":U
+      222                           .
+      223                       end.
+      224                       when chr(7)
+      225                       then do:
+      226                           assign
+      227                               p-out-string = p-out-string + "":U
+      228                           .
+      229                       end.
+      230                       when chr(8)
+      231                       then do:
+      232                           assign
+      233                               p-out-string = p-out-string + "":U
+      234                           .
+      235                       end.
+      236                       when chr(9)
+      237                       then do:
+      238                           assign
+      239                               p-out-string = p-out-string + "":U
+      240                           .
+      241                       end.
+      242                       when chr(29)
+      243                       then do:
+      244                           assign
+      245                               p-out-string = p-out-string + "":U
+      246                           .
+      247                       end.
+      248                       when chr(10)
+      249                       then do:
+      250                           assign
+      251                               p-out-string = p-out-string + "&#10;":U
+      252                           .
+      253                       end.
+      254                       when chr(13)
+      255                       then do:
+      256                           assign
+      257                               p-out-string = p-out-string + "&#13;":U
+      258                           .
+      259                       end.
+      260                       otherwise do:
+      261                           assign
+      262                               p-out-string = p-out-string + v-current-char
+      263                           .
+      264                       end.
+      265                   end case.
+      266               end.
+      267           end.
+      268       end case.
+      269   end.
+      270   end .
+      271   method private character  xmlchar-encode-1c (input  p-in-string          as character):
+      272   define variable p-out-string as character no-undo.
+      273       define variable v-position      as integer      no-undo.
+      274       define variable v-current-char  as character    no-undo.
+      275   do
+      276   on error undo, return error
+      277   :
+      278       assign
+      279           p-out-string = "":U
+      280       .
+      281       case p-in-string
+      282       :
+      283           when ?
+      284           then do:
+      285               assign
+      286                   p-out-string = "?":U
+      287               .
+      288           end.
+      289           otherwise do:
+      290               do v-position = 1 to length( p-in-string )
+      291               :
+      292                   assign
+      293                       v-current-char = substring( p-in-string, v-position, 1 )
+      294                   .
+      295                   case v-current-char
+      296                   :
+      297                       when chr(1)
+      298                       then do:
+      299                           assign
+      300                               p-out-string = p-out-string + " ":U
+      301                           .
+      302                       end.
+      303                       when chr(2)
+      304                       then do:
+      305                           assign
+      306                               p-out-string = p-out-string + " ":U
+      307                           .
+      308                       end.
+      309                       when chr(3)
+      310                       then do:
+      311                           assign
+      312                               p-out-string = p-out-string + " ":U
+      313                           .
+      314                       end.
+      315                       when chr(4)
+      316                       then do:
+      317                           assign
+      318                               p-out-string = p-out-string + " ":U
+      319                           .
+      320                       end.
+      321                       when chr(5)
+      322                       then do:
+      323                           assign
+      324                               p-out-string = p-out-string + " ":U
+      325                           .
+      326                       end.
+      327                       when chr(6)
+      328                       then do:
+      329                           assign
+      330                               p-out-string = p-out-string + " ":U
+      331                           .
+      332                       end.
+      333                       when chr(7)
+      334                       then do:
+      335                           assign
+      336                               p-out-string = p-out-string + " ":U
+      337                           .
+      338                       end.
+      339                       when chr(8)
+      340                       then do:
+      341                           assign
+      342                               p-out-string = p-out-string + " ":U
+      343                           .
+      344                       end.
+      345                       when chr(9)
+      346                       then do:
+      347                           assign
+      348                               p-out-string = p-out-string + " ":U
+      349                           .
+      350                       end.
+      351                       when chr(29)
+      352                       then do:
+      353                           assign
+      354                               p-out-string = p-out-string + " ":U
+      355                           .
+      356                       end.
+      357                       when chr(10)
+      358                       then do:
+      359                           assign
+      360                               p-out-string = p-out-string + " ":U
+      361                           .
+      362                       end.
+      363                       when chr(13)
+      364                       then do:
+      365                           assign
+      366                               p-out-string = p-out-string + " ":U
+      367                           .
+      368                       end.
+      369                       otherwise do:
+      370                           assign
+      371                               p-out-string = p-out-string + v-current-char
+      372                           .
+      373                       end.
+      374                   end case.
+      375               end.
+      376           end.
+      377       end case.
+      378   end.
+      379   return p-out-string.
+      380   end .
+      381   method private void xmlchar-decode (input  p-in-string          as character,
+      382                                     output p-out-string         as character):
+      383       define variable v-position      as integer      no-undo.
+      384       define variable v-last-position as integer      no-undo.
+      385       define variable v-temp-integer  as integer      no-undo.
+      386       define variable v-current-char  as character    no-undo.
+      387       define variable v-next-char     as character    no-undo.
+      388       define variable v-success       as logical      no-undo.
+      389   do
+      390   on error undo, return error
+      391   :
+      392       assign
+      393           p-out-string = "":U
+      394           v-position   = 0
+      395       .
+      396       replace-cycle:
+      397       do while yes
+      398       on error undo, return error
+      399       :
+      400           assign
+      401               v-last-position = index( p-in-string, "&":U, v-position + 1 )
+      402           .
+      403           if v-last-position <= v-position
+      404           then do:
+      405               if v-position = 0
+      406               then do:
+      407                   assign
+      408                       p-out-string = p-in-string
+      409                   .
+      410               end.
+      411               else do:
+      412                   assign
+      413                       p-out-string = p-out-string + substring( p-in-string, v-position + 1 )
+      414                   .
+      415               end.
+      416               leave replace-cycle.
+      417           end.
+      418           else do:
+      419               assign
+      420                   p-out-string    = p-out-string + substring( p-in-string, v-position + 1, v-last-position - v-position - 1 )
+      421                   v-position      = v-last-position
+      422                   v-current-char  = substring( p-in-string, v-position + 1, 1 )
+      423               .
+      424               if v-current-char = "#":U
+      425               then do:
+      426                   assign
+      427                       v-last-position = index( p-in-string, ";":U, v-position + 2 )
+      428                   .
+      429                   if v-last-position > 0
+      430                   then do:
+      431                       xmlchar-read-integer
+      432                        (
+      433                             input substring( p-in-string, v-position + 2, v-last-position - v-position - 2 )
+      434                           , output v-temp-integer
+      435                           , output v-success
+      436                       ).
+      437                       if v-success = yes
+      438                       and v-temp-integer >= 1
+      439                       and v-temp-integer <= 255
+      440                       then do:
+      441                           assign
+      442                               p-out-string = p-out-string + chr( v-temp-integer )
+      443                               v-position   = v-last-position + 1
+      444                           .
+      445                       end.
+      446                       else do:
+      447                           assign
+      448                               p-out-string = p-out-string + "&":U
+      449                               v-position   = v-position   + 1
+      450                           .
+      451                       end.
+      452                   end.
+      453                   else do:
+      454                       assign
+      455                           p-out-string = p-out-string + "&":U
+      456                           v-position   = v-position   + 1
+      457                       .
+      458                   end.
+      459               end.
+      460               else do:
+      461                   case substring( p-in-string, v-position + 1, 3 )
+      462                   :
+      463                       when "lt;":U
+      464                       then do:
+      465                           assign
+      466                               p-out-string = p-out-string + "<":U
+      467                               v-position   = v-position   + 3
+      468                           .
+      469                       end.
+      470                       when "gt;":U
+      471                       then do:
+      472                           assign
+      473                               p-out-string = p-out-string + ">":U
+      474                               v-position   = v-position   + 3
+      475                           .
+      476                       end.
+      477                       otherwise do:
+      478                           if substring( p-in-string, v-position + 1, 4 ) = "amp;":U
+      479                           then do:
+      480                               assign
+      481                                   p-out-string = p-out-string + "&":U
+      482                                   v-position   = v-position   + 4
+      483                               .
+      484                           end.
+      485                           else do:
+      486                               case substring( p-in-string, v-position + 1, 5 )
+      487                               :
+      488                                   when "quot;":U
+      489                                   then do:
+      490                                       assign
+      491                                           p-out-string = p-out-string + '"':U
+      492                                           v-position   = v-position   + 5
+      493                                       .
+      494                                   end.
+      495                                   when "apos;":U
+      496                                   then do:
+      497                                       assign
+      498                                           p-out-string = p-out-string + "'":U
+      499                                           v-position   = v-position   + 5
+      500                                       .
+      501                                   end.
+      502                                   otherwise do:
+      503                                       assign
+      504                                           p-out-string = p-out-string + "&":U
+      505                                       .
+      506                                   end.
+      507                               end case.
+      508                           end.
+      509                       end.
+      510                   end case.
+      511               end.
+      512           end.
+      513       end.
+      514   end.
+      515   end .
+      516   method private void xmlchar-read-integer (input  p-input-string       as character,
+      517                                             output p-output-integer     as integer,
+      518                                             output p-success            as logical):
+      519   do
+      520   on error undo, return error
+      521   :
+      522       assign
+      523           p-output-integer = integer( p-input-string )
+      524       no-error.
+      525       if error-status :error
+      526       then do:
+      527           assign
+      528               p-success           = no
+      529               p-output-integer    = 0
+      530           .
+      531       end.
+      532       else do:
+      533           assign
+      534               p-success           = yes
+      535           .
+      536       end.
+      537   end.
+      538   end.
+      539   method private void getAttrLib ():
+      540      define variable g#attr-lib  as handle no-undo .
+      541      run gbl/getgattrlib.p (output g#attr-lib).
+      542   end.
+      543   define variable mMRCCode  as logical    no-undo.
+      544   define variable mTypeMark as character  no-undo.
+      545   method private logical IS-NeedMark
+      546   ( input ib-code as integer  ,
+      547     input ib-str as character ):
+      548      define buffer buf_prod-bc-attr for ub.prod-bc-attr.
+      549      find first buf_prod-bc-attr where buf_prod-bc-attr.b-code eq ib-code
+      550                                    and buf_prod-bc-attr.b-str  eq ib-str
+      551                                    and buf_prod-bc-attr.attr-code eq 'mark':U
+      552        no-lock no-error.
+      553      return if available buf_prod-bc-attr then logical(buf_prod-bc-attr.attr-value) else no .
+      554   end.
+      555   method private character repTegforDm
+      556   (iDM as char ):
+      557       define variable vTeglist as character no-undo init "01,02,11,13,17,21,8005,37".
+      558       define variable vteg as character no-undo.
+      559       define variable oDM as character no-undo.
+      560       define variable vi as integer no-undo.
+      561       oDM = iDm.
+      562       do vi = 1 to num-entries(vTeglist):
+      563          vTeg = entry(vi,vTeglist).
+      564          oDM = replace(oDM,"(" + vTeg + ")",vTeg).
+      565       end.
+      566       return oDM.
+      567   end.
+      568   method private character repSpecSimbforDm
+      569   (iDM as char ):
+      570       define variable oDM as character no-undo.
+      571       xmlchar-decode(iDM, output oDM).
+      572     return repTegforDm (oDM).
+      573   end.
+      574   method private logical CheckGtin
+      575   (iGtin as char):
+      576      define variable bar_code as character no-undo.
+      577      define variable vGtin as logical no-undo init "yes".
+      578      if length(iGtin) eq 14
+      579      then do:
+      580         bar_code = substr (iGtin, 1, length (iGtin) - 1).
+      581         run str/chk-sum.p
+      582          (input-output bar_code ) no-error .
+      583         if iGtin ne  bar_code
+      584         then
+      585            vGtin = no.
+      586      end.
+      587      else
+      588         vGtin = no.
+      589      return vgtin.
+      590   end.
+      591   method private character repSpecSimbforXlm
+      592   (iDM as char ):
+      593       iDM = replace(iDM,chr(29),"").
+      594       return iDM.
+      595   end.
+      596   method private character getGtinByDM
+      597   (IDM as char):
+      598      define variable VTXT as char no-undo.
+      599      define variable vGtin as char no-undo.
+      600      vTXt = IdM.
+      601      vGtin = IDM.
+      602      if    length(vtxt) > 14
+      603      then do:
+      604         if   vtxt begins "(01)"
+      605                or vtxt begins "(02)"
+      606         then
+      607            vGtin = substring(vtxt,5,14).
+      608         else if   (vtxt begins "01"
+      609                or vtxt begins "02" )
+      610                and (   (    substring(iDm,17,2) eq "21"
+      611                         and length(vtxt) >= 21)
+      612                     or substring(iDm,17,2) eq "37"
+      613                     or substring(iDm,17,4) eq "(37)" )
+      614         then do:
+      615            vGtin = substring(vtxt,3,14).
+      616            if not checkGtin(vGtin)
+      617            then
+      618               vGtin = substring(vtxt,1,14).
+      619         end.
+      620         else if     length(vtxt) eq 14 + 7 + 4 + 4
+      621             or length(vtxt) eq 14 + 7 + 4
+      622             or length(vtxt) eq 14 + 7
+      623         then
+      624            vGtin = substring(vtxt,1,14).
+      625      end.
+      626      if not checkGtin(vGtin)
+      627      then
+      628         vGtin = "".
+      629      return vgtin.
+      630   end.
+      631   method private integer getGdsCodeByGtin
+      632   (iGtin as char):
+      633      define buffer prod-bc  for ub.prod-bc.
+      634      define buffer bar-code for ub.bar-code.
+      635      find first prod-bc where prod-bc.b-str eq iGtin  and prod-bc.bc-on no-lock no-error.
+      636      find first bar-code where bar-code.b-code eq prod-bc.b-code no-lock no-error.
+      637      return if avail bar-code then bar-code.gds-code else ?.
+      638   end.
+      639   method private decimal getQntyCodeByGtin
+      640   (iGtin as char):
+      641      define buffer prod-bc  for ub.prod-bc.
+      642      define buffer bar-code for ub.bar-code.
+      643      find first prod-bc where prod-bc.b-str eq iGtin no-lock no-error.
+      644      find first bar-code where bar-code.b-code eq prod-bc.b-code no-lock no-error.
+      645      return if avail bar-code then bar-code.cli-base-rate else ?.
+      646   end.
+      647   method private integer getGdsCodeByDM
+      648   (iDm as char):
+      649      define variable vGtin as char no-undo.
+      650      define buffer prod-bc for ub.prod-bc.
+      651      vGtin  = getGtinByDM (IDM ).
+      652      return getGdsCodeByGtin (vGtin).
+      653   end.
+      654   method private logical ChekTypeMarkByGds
+      655   (iGds-code as integer ):
+      656      define buffer goods-attr for ub.goods-attr.
+      657      find first goods-attr where goods-attr.gds-code   = iGds-code
+      658                              and goods-attr.attr-code  = 'mark-type':U
+      659      no-lock no-error.
+      660      if available goods-attr
+      661      then do:
+      662         mTypeMark = goods-attr.attr-value.
+      663         return goods-attr.attr-value = objsrv:Env:Marking:Types:tabak:NameProp
+      664           .
+      665      end.
+      666      else
+      667         return no.
+      668   end.
+      669   method private logical ChekTypeMarkByDm
+      670   (iDM as char ):
+      671      return ChekTypeMarkByGds(getGdsCodeByDM(idm)).
+      672   end.
+      673   method private logical ChekTypeMarkByGtin
+      674   (iGtin as char ):
+      675      return ChekTypeMarkByGds(getGdsCodeByGtin(iGtin)).
+      676   end.
+      677   method private character  GetNextElement
+      678     (input iAllTeg        as logical
+      679     ,output oteg          as character
+      680     ,output otegval       as character
+      681     ,input-output pstr    as character
+      682      ):
+      683        define variable vlistElem   as character no-undo init "00,01,02,21,17,11,13,(01),(02),(21),(17),(11),(13)".
+      684        define variable vlistleng   as character no-undo init "27,14,14,13,06,06,06,0014,0014,0013,0006,0006,0006".
+      685        define variable vlistElemDop   as character no-undo init ",37,(37),(8005),8005,93,(93)".
+      686        define variable vlistlengDop   as character no-undo init ",08,0008,000006,0006,04,0004".
+      687        define variable vTeg as character no-undo.
+      688        define variable vLength as integer no-undo.
+      689        define variable vi as integer no-undo.
+      690        define variable vj as integer no-undo.
+      691        define buffer code for ub.code.
+      692        find first code where Code.parent eq "MarkType"
+      693                          and Code.CodeValue   eq mTypeMark
+      694                          no-lock no-error.
+      695        if     available code
+      696           and Code.misc1 ne ""
+      697           and Code.misc1 ne ?
+      698        then do:
+      699           integer (Code.misc1) no-error.
+      700           if not error-status:error
+      701           then
+      702             entry (4,vlistleng) = Code.misc1.
+      703        end.
+      704        if iAllTeg
+      705        then
+      706           assign
+      707              vlistElem     = vlistElem    + vlistElemDop
+      708              vlistleng     = vlistleng    + vlistlengDop
+      709           .
+      710        else if mMRCCode
+      711        then
+      712           assign
+      713              vlistElem     = vlistElem    + ",(8005),8005"
+      714              vlistleng     = vlistleng    + ",000006,0006"
+      715           .
+      716       block-elem:
+      717       do vi = 1 to num-entries(vlistElem):
+      718          vTeg = entry(vi,vlistElem).
+      719          if pstr begins vTeg
+      720          then do:
+      721             if    vTeg eq "21"
+      722             then
+      723                vLength = index(pstr,chr(29)) - 2 no-error.
+      724             if vLength  <= 0
+      725             then
+      726                vLength = int(entry(vi,vlistleng)).
+      727             otegval = substring (pstr,length(vteg) + 1, vLength).
+      728             oteg = replace(replace(vteg,")",""),"(","").
+      729             vTeg = vteg + otegval.
+      730             otegval = replace(otegval,chr(29),"").
+      731             oteg = replace(replace(oteg,")",""),"(","").
+      732             pstr = substring (pstr,length(vTeg)+ 1).
+      733             vTeg = replace(vTeg,chr(29),"").
+      734             leave block-elem.
+      735          end.
+      736          else
+      737             vTeg = "".
+      738       end.
+      739       return vteg.
+      740   end.
+      741   method private character  GetCodeIdent
+      742   (iDm as char):
+      743      define variable Velement   as character no-undo init "first".
+      744      define variable oCodeIdent as character no-undo.
+      745      define variable vteg as character no-undo.
+      746      define variable vtegval as character no-undo.
+      747      define variable vGtin as character no-undo.
+      748      define buffer marking for ub.marking.
+      749      for first marking no-lock where
+      750                marking.mark eq iDm
+      751            and marking.unit-ext = "LEVEL2"
+      752      :
+      753        return iDm.
+      754      end.
+      755      vGtin  = getGtinByDM (iDm ).
+      756      ChekTypeMarkByDm(idm).
+      757      if iDm begins 'tech_':U
+      758      then
+      759         oCodeIdent = iDm.
+      760      else if length(iDm) < 21
+      761      then do:
+      762         find first marking where marking.mark eq idm
+      763         no-lock no-error.
+      764         oCodeIdent = if available marking then marking.mark else  ?.
+      765      end.
+      766      else if     length(iDm) eq 29
+      767         and not iDm begins "01"
+      768         and not iDm begins "02"
+      769      then
+      770         oCodeIdent = substring(iDm,1,if mMRCCode then 25 else 21 ).
+      771      else  if     length(iDm) >= 24
+      772               and (  iDm begins "01"
+      773                   or iDm begins "02")
+      774               and  substring(iDm,17,2) ne "21"
+      775      then do:
+      776         if checkGtin(substring(iDm,1,14)) and ( (length(idm) eq 25 and substring(iDm,22,1) eq "A")
+      777                                                   or (length(idm) eq 29 and substring(iDm,22,1) eq "A"))
+      778         then
+      779            oCodeIdent = substring(iDm,1,if mMRCCode then 25 else 21).
+      780         else
+      781            oCodeIdent = iDM.
+      782      end.
+      783      else  if     (   length(iDm) eq 25
+      784                    or length(iDm) eq 21)
+      785               and (not iDm begins "01"
+      786               and  not iDm begins "02")
+      787      then
+      788         oCodeIdent = substring(iDm,1,21).
+      789      else if vGtin = substring(iDm,1,14) and checkGtin(substring(iDm,1,14)) and ( length(idm) eq 21 or (length(idm) eq 25 and substring(iDm,22,1) eq "A"))
+      790      then
+      791         oCodeIdent = substring(iDm,1,21).
+      792      else do while Velement ne "" and idm ne "":
+      793         Velement = GetNextElement(no,output vteg, output vtegval, input-output idm).
+      794         oCodeIdent = oCodeIdent + Velement.
+      795      end.
+      796      return oCodeIdent.
+      797   end.
+      798   method private character  GetTegCod
+      799   (icodeIdent as char, iTeg as char):
+      800      define variable Velement   as character no-undo init "first".
+      801      define variable oTeg as character no-undo init ?.
+      802      define variable vteg as character no-undo.
+      803      define variable vtegval as character no-undo.
+      804      if     ((length(icodeIdent) eq 21
+      805         and not icodeIdent begins "01"
+      806         and not icodeIdent begins "02")
+      807         or
+      808             ( length(icodeIdent) eq 25
+      809               and not icodeIdent begins "01"
+      810               and not icodeIdent begins "02"))
+      811      then do:
+      812         if iTeg eq "01" or iTeg eq "02"
+      813         then
+      814            oTeg = substring(icodeIdent,1,21).
+      815         else  if  iTeg eq "21"
+      816         then
+      817            oTeg = substring(icodeIdent,15,7).
+      818      end.
+      819      else do:
+      820         ChekTypeMarkByDm(icodeIdent).
+      821         block-teg:
+      822            do while Velement ne "" and icodeIdent ne "":
+      823            Velement = GetNextElement(yes,output vteg, output vtegval, input-output icodeIdent).
+      824            if    Velement begins iTeg
+      825               or Velement begins "(" + iTeg + ")"
+      826            then do:
+      827               oTeg = vtegval.
+      828               leave block-teg.
+      829            end.
+      830         end.
+      831      end.
+      832      return oTeg.
+      833   end.
+      834   method private logical isOAD
+      835   (icodeIdent as character):
+      836      return length(icodeIdent) > 18 and GetTegCod(icodeIdent,"37") ne ? and GetTegCod(icodeIdent,"02") ne ?.
+      837   end.
+      838   method private logical isMark
+      839   (icodeIdent as character):
+      840      define buffer buf_marking for ub.marking.
+      841      return can-find(first buf_marking where buf_marking.mark begins icodeIdent) or
+      842             (length(icodeIdent) > 20 and not isOAD(icodeIdent)).
+      843   end.
+      844   method private character  addBracketForCode
+      845   (icodeIdent as char):
+      846      define variable Velement   as character no-undo init "first".
+      847      define variable oTeg as character no-undo.
+      848      define variable vteg as character no-undo.
+      849      define variable vtegval as character no-undo.
+      850      define buffer marking for ub.marking.
+      851      find first marking no-lock where
+      852                 marking.mark begins icodeIdent no-error.
+      853      if    not ChekTypeMarkByDm(icodeIdent)
+      854         or length(icodeIdent) le 24
+      855         or (avail marking and marking.unit-ext = "LEVEL2")
+      856      then
+      857         oTeg = icodeIdent.
+      858      else do:
+      859         if (  icodeIdent begins "01"
+      860            or icodeIdent begins "02"
+      861            ) and CheckGtin(substring (icodeIdent,3,14))
+      862            and substring (icodeIdent,17,2) eq "21"
+      863         then do:
+      864            mMRCCode = yes.
+      865            ChekTypeMarkByDm(icodeIdent).
+      866            block-teg:
+      867            do while Velement ne "" and icodeIdent ne "":
+      868               Velement = GetNextElement(no,output vteg, output vtegval, input-output icodeIdent).
+      869               if vteg ne ""
+      870               then
+      871                  oTeg = oTeg + "(" + vteg + ")" + vtegval .
+      872            end.
+      873            mMRCCode = no.
+      874         end.
+      875         else do:
+      876            oTeg = icodeIdent.
+      877         end.
+      878      end.
+      879      return oTeg.
+      880   end.
+      881   method private integer getlevelByCodId
+      882   (iCode as char):
+      883      define variable vLength as int no-undo.
+      884      define variable vLevel  as int no-undo.
+      885      if not ChekTypeMarkByDM (icode) then return ?.
+      886      vLength = length(iCode).
+      887      if    vLength eq 18
+      888         or vLength eq 20
+      889      then
+      890         Vlevel = 4.
+      891      else if vLength eq 21
+      892      then
+      893         Vlevel = 1.
+      894      else if vLength eq 25
+      895      then do:
+      896         if  iCode begins "01"
+      897         then
+      898            Vlevel = 3.
+      899         else
+      900            Vlevel = 1.
+      901      end.
+      902      else if     vLength >= 26
+      903              and vLength <= 46
+      904      then do:
+      905         if    substring(iCode,17,2) eq "11"
+      906            or substring(iCode,17,2) eq "13"
+      907            or (    substring(iCode,17,2) eq "21"
+      908                and vLength >= 33
+      909                and substring(iCode,26,4) ne "8005")
+      910         then
+      911            Vlevel = 4.
+      912         else if    vLength eq 31
+      913                 or vLength eq 38
+      914                 or vLength eq 39
+      915                 or vLength eq 45
+      916         then
+      917            Vlevel = 1.
+      918         else if    vLength eq 35
+      919                 or vLength eq 43
+      920         then
+      921            Vlevel = 3.
+      922         else
+      923            Vlevel = ?.
+      924      end.
+      925      else
+      926         Vlevel = ?.
+      927      return Vlevel.
+      928   end.
+      929   method private character  getLevelMotpBycodid
+      930   (iDm as char):
+      931      define variable vLevel as integer no-undo.
+      932      define variable vList as character no-undo init "Unit,kin,Level1,Level2,Level3,Level4,Level5".
+      933      vLevel = getlevelByCodId(iDm).
+      934      if    vLevel eq ?
+      935         or vLevel < 1
+      936         or vLevel > 6
+      937      then
+      938         return ?.
+      939      else
+      940         return entry(vlevel,vList).
+      941   end.
+      942   method private character    getLevelUTDByLevelMotp
+      943   (iUnit as char):
+      944      define variable vLevel as integer no-undo.
+      945      define variable vListMOTP    as character no-undo init "Unit,kin,Level1,Level2,Level3,Level4,Level5".
+      946      define variable vListutd as character no-undo init "КИ,КИН,КИГУ,КИТУ".
+      947      vLevel = lookup(iUnit,vListMOTP).
+      948      if    vLevel eq ?
+      949         or vLevel < 1
+      950         or vLevel > 4
+      951      then
+      952         return ?.
+      953      else
+      954         return entry(vlevel,vListutd).
+      955   end.
+      956   method private character  getLevelMotpByDM
+      957   (iDm as char):
+      958      return getLevelMotpByCodId(GetCodeIdent(iDm)).
+      959   end.
+      960   method private character  getLevelUTDByCodId
+      961   (iDm as char):
+      962      define variable vLevel as integer no-undo.
+      963      define variable vList as character no-undo init "КИ,КИН,КИГУ,КИТУ".
+      964      vLevel = getlevelByCodId(iDm).
+      965      if    vLevel eq ?
+      966         or vLevel < 1
+      967         or vLevel > 4
+      968      then
+      969         return ?.
+      970      else
+      971         return entry(vlevel,vList).
+      972   end.
+      973   method private character  getLevelUTDByDM
+      974   (iDm as char):
+      975      return getLevelUTDByCodId(GetCodeIdent(iDm)).
+      976   end.
+      977   define variable mNotMarkQnty as logical no-undo.
+      978   method private decimal getQntyUTDByCodId
+      979   (iDM as char):
+      980      define variable vLevel as integer no-undo.
+      981      define variable vList as character no-undo init "1,5,10,500".
+      982      define variable vGtin as character no-undo.
+      983      define variable vqnty as decimal no-undo init ?.
+      984      vqnty = dec(GetTegCod(iDM,"37")) no-error.
+      985      if vqnty eq ?
+      986      then do:
+      987         if not mNotMarkQnty
+      988         then do:
+      989            define buffer marking for ub.marking.
+      990            define variable vCodident as character no-undo.
+      991            vCodident = GetCodeIdent(idm).
+      992            find first marking where marking.mark begins vCodident no-lock no-error.
+      993            if     available marking
+      994               and marking.box-qnty ne ?
+      995            then
+      996               return marking.box-qnty.
+      997         end.
+      998         vGtin = getGtinByDm(iDM).
+      999         if ChekTypeMarkByGtin (vGtin)
+     1000         then do:
+     1001            vLevel = getlevelByCodId(iDM).
+     1002            if     vLevel >= 1
+     1003               and vLevel <= 4
+     1004            then
+     1005               vqnty = int(entry(vlevel,vList)).
+     1006         end.
+     1007         else
+     1008            vqnty = getQntyCodeByGtin(vgtin).
+     1009      end.
+     1010      return vqnty.
+     1011   end.
+     1012   method private decimal getQntyUTDByDM
+     1013   (iDm as char):
+     1014      define variable vDM as character no-undo.
+     1015      if     length (iDm) ne 25
+     1016         and length (iDm) ne 29
+     1017         and substring (iDm,length (iDm) - 6 + 1, 2 ) eq "93"
+     1018      then
+     1019         vDM = substring (iDm,1,length (iDm) - 6 ).
+     1020      else
+     1021         vDM = substring (iDm,1,length (iDm) - 4 ).
+     1022      return getQntyUTDByCodId(vDM).
+     1023   end.
+     1024   method private decimal    getMRC4
+     1025   (iMRC as char):
+     1026      define variable oMrc     as decimal no-undo init ?.
+     1027      define variable vAlphabet as character no-undo init "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!~"%&'*+-./_,:;=<>?".
+     1028      define variable vi       as integer no-undo.
+     1029      define variable vfound   as integer no-undo.
+     1030      define variable vposStart   as integer no-undo.
+     1031      do:
+     1032      OMRc = 0.
+     1033      do vi = 1 to 4:
+     1034         define variable vsimb as character no-undo.
+     1035         vsimb = substring(iMRC,vi,1).
+     1036         vposStart = if keycode("Z") < keycode(vsimb) then 27 else 1.
+     1037         vfound = index(vAlphabet,vsimb,vposStart) - 1.
+     1038         if vfound > 0
+     1039         then
+     1040            OMRc = OMRc + exp (80,(4 - vi) ) * vfound  .
+     1041         end.
+     1042         OMRc = OMRc / 100.
+     1043      end.
+     1044      return OMRc.
+     1045   end.
+     1046   method private decimal    getMRCByDM
+     1047   (iDm as char):
+     1048      define variable vMRC     as character no-undo.
+     1049      define variable oMrc     as decimal no-undo init ?.
+     1050      define variable Velement as character no-undo init "empty".
+     1051      define variable vteg as character no-undo.
+     1052      define variable vtegval as character no-undo.
+     1053      if    length(idm) eq 14 + 7 + 4 + 4
+     1054         or length(idm) eq 14 + 7 + 4
+     1055      then do:
+     1056         vMRC = substring(idm,22,4).
+     1057         omrc = getMRC4(vMRC).
+     1058      end.
+     1059      else do:
+     1060          ChekTypeMarkByDm(iDm).
+     1061          block-mrc:
+     1062          do while Velement ne "" and idm ne "":
+     1063             Velement = GetNextElement(yes,output vteg, output vtegval, input-output idm).
+     1064             if Velement begins "8005"
+     1065             then do:
+     1066                vMRC = substring(Velement,5,6).
+     1067                leave block-mrc.
+     1068             end.
+     1069             else if Velement begins "(8005)"
+     1070             then do:
+     1071                vMRC = substring(Velement,7,6).
+     1072                leave block-mrc.
+     1073             end.
+     1074          end.
+     1075          if vMRC ne ""
+     1076          then
+     1077             OMRc = dec(vmrc) / 100 no-error.
+     1078      end.
+     1079      return OMRc.
+     1080   end.
+     1081   method private date    MoveDate
+     1082   (idate as date,
+     1083    iMonth as int64):
+     1084      define variable vMonth   as int64 no-undo.
+     1085      define variable vYear    as int64 no-undo.
+     1086      define variable vDateNew as date  no-undo.
+     1087       define variable vDay     as int64 no-undo.
+     1088       vMonth = month(iDate) + iMonth.
+     1089       vYear =  year(iDate).
+     1090       if vMonth <= 0
+     1091       then assign
+     1092          vMonth = vMonth + 12
+     1093           vYear  = vYear - 1
+     1094       .
+     1095       else if vMonth > 12
+     1096       then assign
+     1097          vMonth = vMonth - 12
+     1098           vYear  = vYear + 1
+     1099       .
+     1100       vDateNew = date(vMonth,day(iDate),vYear) no-error.
+     1101       do while error-status:error eq yes:
+     1102          VDay = vDay + 1.
+     1103          vDateNew = date(vMonth,day(iDate) - vDay,vYear) no-error.
+     1104       end.
+     1105       if VDay > 0
+     1106       then
+     1107          vDateNew + 1.
+     1108       return vDateNew.
+     1109   end.
+     1110   method private logical    checkEMRC
+     1111   (input  iDm as char,
+     1112    output vOk as logical):
+     1113      define variable v-value-emrc as character no-undo.
+     1114      define variable v-type-emrc  as character no-undo.
+     1115      define variable vDateIso     as character no-undo.
+     1116      define variable vMRC         as decimal no-undo.
+     1117      define variable vqnty        as decimal no-undo.
+     1118      define variable vPrice       as decimal no-undo.
+     1119      define variable vparent      as character no-undo.
+     1120      define variable vgds-code    as integer no-undo.
+     1121      define buffer code for ub.code.
+     1122      vMRC = getMRCByDM(iDm).
+     1123      if vMRC > 0
+     1124      then do:
+     1125         vgds-code = getGdsCodeByDM(iDm).
+     1126         vqnty     = getQntyUTDByDM(iDm).
+     1127               if (valid-handle(ibs.th.gbl.gbl-hndllib:g#attr-lib) <> true) then do:     message       "Не загружена библиотека attr-lib"       view-as alert-box error .     stop . end. run gds-attr-value in ibs.th.gbl.gbl-hndllib:g#attr-lib
+     1128            (
+     1129             input   vgds-code
+     1130            ,input   'emrc-type':U
+     1131            ,output   v-value-emrc
+     1132            ,output   v-type-emrc
+     1133          ) no-error.
+     1134          if     v-value-emrc ne ""
+     1135             and v-value-emrc ne ?
+     1136          then do:
+     1137             vDateIso = iso-date(today).
+     1138             vPrice = vMRC / vqnty.
+     1139             vparent ="emc" + chr(4) + v-value-emrc.
+     1140             find last code where Code.parent      eq vparent
+     1141                              and Code.code        le vDateIso
+     1142                              and code.status_  eq 0
+     1143             no-lock no-error.
+     1144             if not available code or ( vPrice  >= dec(Code.CodeValue))
+     1145             then
+     1146                vOk = true .
+     1147             else do:
+     1148                 define variable vText      as character no-undo.
+     1149                 define variable vDate      as date no-undo.
+     1150                 define variable vDateLast  as character no-undo.
+     1151                 define variable vDateFirst as character no-undo.
+     1152                 define variable vDate3     as date no-undo.
+     1153                 vdate = date(code.misc1).
+     1154                 vDateLast = code.misc1.
+     1155                 vDate3 = MoveDate(today, - 3 ).
+     1156                 vText =  substitute ("ТОВАР ИМЕЕТ ОГРАНИЧЕННЫЙ СРОК РЕАЛИЗАЦИИ. Если товар произведен после &2, то его приемка и продажа запрещена.",
+     1157                                      string(vDate3  , "99/99/9999"),
+     1158                                      string(vDate   , "99/99/9999")
+     1159                                      ).
+     1160                 vdateIso = iso-date(vdate3).
+     1161                 find last code  where Code.parent      eq vparent
+     1162                                   and Code.code        le vDateIso
+     1163                                   and code.status_  eq 0 no-lock no-error.
+     1164                 if available code
+     1165                 then
+     1166                    vDateIso = code.code.
+     1167                 vDateFirst = vDateIso.
+     1168                 vDateLast = iso-date(vdate).
+     1169                 define variable vGood as logical no-undo.
+     1170                 define variable vDateSale as date no-undo.
+     1171                 define buffer bcode for code.
+     1172                 for last code where Code.parent   eq vparent
+     1173                                 and code.status_  eq 0
+     1174                                 and code.code     < vDateLast
+     1175                                 and code.code     >= vDateFirst
+     1176                 no-lock:
+     1177                    find first bcode where bCode.parent   eq vparent
+     1178                                       and bcode.status_  eq 0
+     1179                                       and bcode.code     > code.code no-lock no-error.
+     1180                    if available bcode
+     1181                    then do:
+     1182                       if vPrice < dec(Code.CodeValue)
+     1183                       then
+     1184                          vText = vtext + substitute ("&1Если товар произведен с &2 до &3, ТО ЕГО ПРИЕМКА И ПРОДАЖА ЗАПРЕЩЕНА",
+     1185                                                     chr(10),
+     1186                                                     string(    date( code.misc1)       ,"99/99/9999"),
+     1187                                                     string(    date(bcode.misc1)       ,"99/99/9999")
+     1188                                                     ).
+     1189                       else do:
+     1190                          vGood = yes.
+     1191                          vDateSale = MoveDate(date(bcode.misc1), 3) - 1.
+     1192                          vText = vtext + substitute ("&1Если товар произведен до &3, то продажа разрешена до &4.~Осталось &5 дней.",
+     1193                                                     chr(10),
+     1194                                                     string(    date( code.misc1)         ,"99/99/9999"),
+     1195                                                     string(    date(bcode.misc1)         ,"99/99/9999"),
+     1196                                                     string(         vDateSale            ,"99/99/9999"),
+     1197                                                     string(vDateSale - today)
+     1198                                                     ).
+     1199                       end.
+     1200                    end.
+     1201                 end.
+     1202                 if vgood
+     1203                 then do:
+     1204                    define variable choice as integer no-undo .
+     1205                    run gbl/d-askw.w (input "Уточнение"
+     1206                           ,input  vText
+     1207                           ,input "|"
+     1208                           ,input "Принять|Вернуть"
+     1209                           ,input "Принять данный товар|Вернуть товар постащику"
+     1210                           ,input 1
+     1211                           ,input 2
+     1212                           ,output choice) no-error.
+     1213                    vok = choice eq 1.
+     1214                 end.
+     1215                 else
+     1216                    vok =false.
+     1217             end.
+     1218          end.
+     1219      end.
+     1220   end.
+     1221   method private character addGs2Mark
+     1222   (iMark as char):
+     1223      define variable vDM   as character no-undo.
+     1224      define variable vIdx  as integer   no-undo.
+     1225      if index(iMark,chr(29),1) > 0
+     1226      then return iMark.
+     1227      if substring(iMark,26,4) = "8005" then
+     1228      do:
+     1229        vIdx = index(iMark,"93",26 + 4 + 5).
+     1230        if vIdx > 1 then do:
+     1231          vDM = substitute("&1&4&2&4&3",
+     1232                           substring(iMark,1,25),
+     1233                           substring(iMark,26,vIdx - 25 - 1),
+     1234                           substring(iMark,vIdx),
+     1235                           chr(29)) no-error.
+     1236          vIdx = index(vDm,"240",vIdx + 4).
+     1237          if vIdx > 0 then
+     1238          do:
+     1239            vDM = substitute("&1&3&2",
+     1240                             substring(vDm,1,vIdx - 1),
+     1241                             substring(vDm,vIdx),
+     1242                             chr(29)) no-error.
+     1243          end.
+     1244        end.
+     1245        else
+     1246          vDM = substitute("&1&3&2",
+     1247                           substring(iMark,1,25),
+     1248                           substring(iMark,26),
+     1249                           chr(29)) no-error.
+     1250      end.
+     1251      else if substring(iMark,32,2) = "91" then
+     1252      do:
+     1253        vIdx = index(iMark,"92",32).
+     1254        if vIdx > 1 then
+     1255          vDM = substitute("&1&4&2&4&3",
+     1256                           substring(iMark,1,31),
+     1257                           substring(iMark,32,vIdx - 31 - 1),
+     1258                           substring(iMark,vIdx),
+     1259                           chr(29)) no-error.
+     1260        else
+     1261          vDM = substitute("&1&3&2",
+     1262                           substring(iMark,1,31),
+     1263                           substring(iMark,32),
+     1264                           chr(29)) no-error.
+     1265      end.
+     1266      else if substring(iMark,39,2) = "91" then
+     1267      do:
+     1268        vIdx = index(iMark,"92",38).
+     1269        if vIdx > 1 then
+     1270          vDM = substitute("&1&4&2&4&3",
+     1271                           substring(iMark,1,38),
+     1272                           substring(iMark,39,vIdx - 38 - 1),
+     1273                           substring(iMark,vIdx),
+     1274                           chr(29)) no-error.
+     1275        else
+     1276          vDM = substitute("&1&3&2",
+     1277                           substring(iMark,1,38),
+     1278                           substring(iMark,39),
+     1279                           chr(29)) no-error.
+     1280      end.
+     1281      else if substring(iMark,25,2) = "93" then
+     1282      do:
+     1283        vIdx = index(iMark,"92",25).
+     1284        if vIdx > 1 then
+     1285          vDM = substitute("&1&4&2&4&3",
+     1286                           substring(iMark,1,24),
+     1287                           substring(iMark,25,vIdx - 24 - 1),
+     1288                           substring(iMark,vIdx),
+     1289                           chr(29)) no-error.
+     1290        else
+     1291          vIdx = index(iMark,"3103",25).
+     1292          if vIdx > 0 then
+     1293          vDM = substitute("&1&4&2&4&3",
+     1294                           substring(iMark,1,24),
+     1295                           substring(iMark,25,vIdx - 24 - 1),
+     1296                           substring(iMark,vIdx),
+     1297                           chr(29)) no-error.
+     1298          else
+     1299            vDM = substitute("&1&3&2",
+     1300                             substring(iMark,1,24),
+     1301                             substring(iMark,25),
+     1302                             chr(29)) no-error.
+     1303      end.
+     1304      else if substring(iMark,32,2) = "93" then
+     1305      do:
+     1306        vDM = substitute("&1&3&2",
+     1307              substring(iMark,1,31),
+     1308              substring(iMark,32),
+     1309              chr(29)) no-error.
+     1310      end.
+     1311      return if vDM <> "" then vDm else iMark.
+     1312   end.
+     1313   method public character objExists
+     1314   (input  ifolder as character,
+     1315    input  iType   as character  ):
+     1316       define variable vFileType as character no-undo init "D,F".
+     1317       define variable vi        as integer no-undo.
+     1318       define variable vtype as character no-undo.
+     1319       if iType ne ?
+     1320       then
+     1321          vFileType = iType.
+     1322       do vi = 1 to num-entries(vFileType):
+     1323          file-information:file-name = ".\" + right-trim(replace(ifolder,"/","\"),"\").
+     1324          vtype = file-information:file-type.
+     1325          if entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+     1326             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+     1327             index(vtype , entry(vi,vFileType )) > 0
+     1328          then return file-information:full-pathname .
+     1329          file-information:file-name = right-trim(replace(ifolder,"/","\"),"\").
+     1330          vtype = file-information:file-type.
+     1331          if file-information:file-name <> "" and
+     1332             entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+     1333             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+     1334             index( vtype, entry(vi,vFileType )) > 0
+     1335          then return file-information:full-pathname .
+     1336       end.
+     1337       return ? .
+     1338   end.
+     1339   method public character SearchFile
+     1340   (input  ifile as character):
+     1341      return objExists(ifile,?).
+     1342   end.
+     1343   method public character SearchPFile
+     1344   (input inFile as char):
+     1345        define variable oFile       as character no-undo.
+     1346        define variable vFileSearch as character no-undo.
+     1347        define variable vNumEntry   as integer no-undo.
+     1348        if inFile = "" then return ?.
+     1349        vNumEntry = num-entries(inFile,".").
+     1350        vFileSearch = inFile.
+     1351        if    vNumEntry > 0
+     1352           and (   entry(vNumEntry,inFile,".") eq "p"
+     1353                or entry(vNumEntry,inFile,".") eq "w")
+     1354        then do:
+     1355           entry(vNumEntry,vFileSearch, ".") = "r".
+     1356           oFile = search(vFileSearch ).
+     1357           if oFile eq ?
+     1358           then
+     1359              oFile = search(inFile).
+     1360        end.
+     1361        else
+     1362           oFile = search(vFileSearch).
+     1363        return oFile.
+     1364     end.
+     1365    define variable gismt-AdressPort   as character no-undo.
+     1366    define variable gismt-DopParam     as character no-undo.
+     1367    define variable gismt-GisAdress    as character no-undo.
+     1368    define variable gismt-ProxyLogin   as character no-undo.
+     1369    define variable gismt-ProxyPswd    as character no-undo.
+     1370    define variable gismt-MaxTime      as integer   no-undo.
+     1371    define variable gismt-RegKey       as character no-undo.
+     1372    define variable gismt-TimeFalStart as integer   no-undo.
+     1373    define variable gismt-WaitTime     as decimal   no-undo.
+     1374    define variable gismt-WaitTimePlus as decimal   no-undo.
+     1375    define variable gismt-CrashSituat  as logical   no-undo.
+     1376    define variable gismt-BanDate      as integer   no-undo.
+     1377    define variable gismt-cdnTurnOn    as logical   no-undo.
+     1378    define variable gismt-cdnAdress    as character no-undo.
+     1379    define variable gismt-cdnRepeat    as logical   no-undo.
+     1380    define variable gismt-cdnChange    as logical   no-undo.
+     1381    define variable gismt-cdnTimeUpd   as integer   no-undo.
+     1382    define variable gismt-UpdateRequest as logical   no-undo.
+     1383    define variable gismt-OflineAdress  as character no-undo.
+     1384    define variable gismt-OflineAutoriz as character no-undo.
+     1385    define variable gismt-OflineLogin   as character no-undo.
+     1386    define variable gismt-OflinePswd    as character no-undo.
+     1387    define variable gismt-OflineDate    as date      no-undo.
+     1388   method public character ConvBase64
+     1389   (input iString as char):
+     1390     define variable vSize       as integer   no-undo.
+     1391     define variable vDataDc1    as memptr    no-undo.
+     1392     define variable vDataDc2    as memptr    no-undo.
+     1393     define variable vEnCode     as character no-undo.
+     1394     define variable vBase64Str  as character no-undo.
+     1395     do
+     1396     on error undo, return error return-value
+     1397     :
+     1398       if iString = ?
+     1399       then return "".
+     1400       vSize  = length(iString).
+     1401       SET-SIZE(vDataDc1 ) = vSize + 1.
+     1402       SET-SIZE(vDataDc2 ) = vSize.
+     1403       put-string(vDataDc1, 1, vSize) = iString.
+     1404       copy-lob from vDataDc1 starting at 1 for vSize to vDataDc2 no-convert.
+     1405       vEnCode =  base64-encode (vDataDc2).
+     1406       vBase64Str = substring(vEnCode,1).
+     1407       SET-SIZE(vDataDc1)  = 0 no-error.
+     1408       SET-SIZE(vDataDc2)  = 0 no-error.
+     1409     end.
+     1410     return vBase64Str.
+     1411   end.
+     1412   method public character get-thbj-attr-prop
+     1413   (input p-obj-type as char,
+     1414    input p-obj-code as int,
+     1415    input p-upper-prop-code as char,
+     1416    input p-prop-code as char
+     1417    ):
+     1418       define buffer buf_thbj-attr for ub.thbj-attr.
+     1419       define variable v-reg-code as integer no-undo.
+     1420       find first buf_thbj-attr no-lock where
+     1421                  buf_thbj-attr.obj-type = p-obj-type
+     1422              and buf_thbj-attr.obj-code = p-obj-code
+     1423              and buf_thbj-attr.upper-prop-code = p-upper-prop-code
+     1424              and buf_thbj-attr.prop-code = p-prop-code
+     1425       no-error.
+     1426       if not available buf_thbj-attr and p-obj-type = 'БД':U then
+     1427       do:
+     1428   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1429   run regcode in ibs.th.gbl.gbl-hndllib:g#library
+     1430     (input  p-obj-type
+     1431     ,input  p-obj-code
+     1432     ,output v-reg-code
+     1433     )  .
+     1434          if v-reg-code <> ? and v-reg-code <> 0 then do:
+     1435              find first buf_thbj-attr no-lock where
+     1436                         buf_thbj-attr.obj-type = 'регион':U
+     1437                     and buf_thbj-attr.obj-code = v-reg-code
+     1438                     and buf_thbj-attr.upper-prop-code = p-upper-prop-code
+     1439                     and buf_thbj-attr.prop-code = p-prop-code
+     1440              no-error.
+     1441          end.
+     1442       end.
+     1443       if not available buf_thbj-attr and p-obj-type <> ""
+     1444       then do:
+     1445          find first buf_thbj-attr no-lock where
+     1446                     buf_thbj-attr.obj-type = ""
+     1447                 and buf_thbj-attr.obj-code = 0
+     1448                 and buf_thbj-attr.upper-prop-code = p-upper-prop-code
+     1449                 and buf_thbj-attr.prop-code = p-prop-code
+     1450          no-error.
+     1451       end.
+     1452       if avail buf_thbj-attr then do:
+     1453           case buf_thbj-attr.prop-value-type:
+     1454               when "character"
+     1455                  then return buf_thbj-attr.property-value-character.
+     1456               when "integer"
+     1457                  then return string(buf_thbj-attr.property-value-integer).
+     1458               when "decimal"
+     1459                  then return string(buf_thbj-attr.property-value-decimal).
+     1460               when "logical"
+     1461                  then return string(buf_thbj-attr.property-value-logical).
+     1462           end case.
+     1463       end.
+     1464       return "".
+     1465   end.
+     1466   method public character get-gismt-prop
+     1467   (input p-obj-type as char,
+     1468    input p-obj-code as int):
+     1469       define buffer buf_code for ub.code.
+     1470       define buffer buf_thbj-attr for ub.thbj-attr.
+     1471       assign
+     1472          gismt-AdressPort = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'adressPort':U)
+     1473          gismt-DopParam   = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'dopParam':U)
+     1474          gismt-GisAdress  = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'gisAdress':U)
+     1475          gismt-ProxyLogin = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'proxyLogin':U)
+     1476          gismt-ProxyPswd  = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'proxyPswd':U)
+     1477          gismt-MaxTime    = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'maxTime':U))
+     1478          gismt-RegKey     = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'regKey':U)
+     1479          gismt-TimeFalStart = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'timeFalStart':U))
+     1480          gismt-WaitTime    = decimal(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'waitTime':U))
+     1481          gismt-CrashSituat = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'crashSituat':U))
+     1482          gismt-BanDate     = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'banDate':U))
+     1483          gismt-cdnTurnOn   = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnTurnOn':U))
+     1484          gismt-cdnAdress   = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnAdress':U)
+     1485          gismt-cdnRepeat   = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnRepeat':U))
+     1486          gismt-cdnChange   = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnChange':U))
+     1487          gismt-cdnTimeUpd  = integer(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'cdnTimeUpdate':U))
+     1488          gismt-UpdateRequest = logical(get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'UpdateRequest':U))
+     1489          gismt-OflineAdress  = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'OflineAdress':U)
+     1490          gismt-OflineLogin   = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'OflineLogin':U)
+     1491          gismt-OflinePswd    = get-thbj-attr-prop(p-obj-type,p-obj-code,'gisMT':U,'OflinePswd':U)
+     1492          .
+     1493       if gismt-OflineLogin <> "" and gismt-OflinePswd <> ""
+     1494       then gismt-OflineAutoriz = ConvBase64(gismt-OflineLogin + ":" + gismt-OflinePswd).
+     1495       find first buf_code no-lock where
+     1496                  buf_code.parent eq "GisMtOffline"
+     1497              and buf_code.code   eq string(p-obj-code)
+     1498          no-error.
+     1499       if not avail buf_code then
+     1500       find first buf_code no-lock where
+     1501                  buf_code.parent eq "GisMtOffline"
+     1502              and buf_code.code   eq "0"
+     1503          no-error.
+     1504       if avail buf_code then  gismt-OflineDate = date(buf_code.CodeValue) no-error.
+     1505       else gismt-OflineDate = today.
+     1506     return "".
+     1507   end.
+     1508     CONSTRUCTOR PUBLIC marking (  ):
+     1509       SUPER ().
+     1510       DEFINE BUFFER buf_sys-ctrl FOR ub.sys-ctrl .
+     1511       DEFINE VARIABLE vRetProp AS CHARACTER NO-UNDO.
+     1512       DEFINE VARIABLE vCdnAdr AS CHARACTER NO-UNDO.
+     1513       FIND FIRST buf_sys-ctrl NO-LOCK NO-ERROR.
+     1514       IF AVAILABLE buf_sys-ctrl AND buf_sys-ctrl.db-num <> 0
+     1515       THEN DO:
+     1516          dbgPrint("marking.log", SUBSTITUTE("База &1 номер: &2", "'БД':U", buf_sys-ctrl.db-num)).
+     1517          vRetProp = get-gismt-prop ('БД':U,
+     1518                                     buf_sys-ctrl.db-num) NO-ERROR.
+     1519       END.
+     1520       ELSE DO:
+     1521          dbgPrint("marking.log", "Не определена БД").
+     1522       END.
+     1523       cashSts =  NEW cash().
+     1524     END.
+     1525     METHOD PUBLIC VOID hndler (req AS CLASS ibs.th.skt.Commands.iRequest):
+     1526       DEFINE VARIABLE vLC       AS LONGCHAR  NO-UNDO.
+     1527       DEFINE VARIABLE ii        AS INTEGER   NO-UNDO.
+     1528       DEFINE VARIABLE n         AS INTEGER   NO-UNDO.
+     1529       DEFINE VARIABLE mark-short AS CHARACTER NO-UNDO.
+     1530       DEFINE VARIABLE par       AS CHARACTER NO-UNDO.
+     1531       DEFINE VARIABLE val       AS CHARACTER NO-UNDO.
+     1532       DEFINE VARIABLE km        AS CHARACTER NO-UNDO.
+     1533       DEFINE BUFFER buf_marking FOR ub.marking.
+     1534       DEFINE BUFFER buf_marking-l FOR ub.marking-lines.
+     1535       DEFINE VARIABLE newSts    AS INTEGER   NO-UNDO.
+     1536       DEFINE VARIABLE obj-code  AS INTEGER NO-UNDO.
+     1537       DEFINE VARIABLE gdsCode   AS INTEGER NO-UNDO.
+     1538       DEFINE VARIABLE canSaleReturnedGoods AS LOGICAL NO-UNDO INIT FALSE.
+     1539       DEFINE VARIABLE listActions           AS CHARACTER NO-UNDO.
+     1540       DEFINE VARIABLE listActionsByMark     AS CHARACTER NO-UNDO.
+     1541       DEFINE VARIABLE listActionsUnlock     AS CHARACTER NO-UNDO.
+     1542       DEFINE VARIABLE listStatusesForSale   AS CHARACTER NO-UNDO.
+     1543       DEFINE VARIABLE listStatusesForSaleWithReturn AS CHARACTER NO-UNDO.
+     1544       DEFINE VARIABLE listStatusesForReturn AS CHARACTER NO-UNDO.
+     1545       DEFINE VARIABLE vAccMarkCheck AS CHARACTER NO-UNDO.
+     1546       DEFINE VARIABLE vAccMarkCheckOff AS CHARACTER NO-UNDO.
+     1547       DEFINE VARIABLE vCheckLocalMark  AS LOGICAl NO-UNDO INIT FALSE.
+     1548       ASSIGN
+     1549         mCheckSts = 1
+     1550         mReqId        = ""
+     1551         mReqTimeStamp = ""
+     1552         mInst         = ""
+     1553         mVersion      = ""
+     1554         answerFlag = FALSE
+     1555         cash       = ""
+     1556         shift_id   = ""
+     1557         chk_id     = ""
+     1558         cntx_id    = ""
+     1559         mark       = ""
+     1560         action     = ""
+     1561         shift_tbeg = ?
+     1562         shift_num  = 0
+     1563         gismt-WaitTimePlus = 0
+     1564         statusPOS = ?
+     1565         mSaveOnlineResult = no
+     1566       .
+     1567       thMarkSts = ObjSrv:Env:Marking:Sts:Mark.
+     1568       fix-codepage(vLC) = "UTF-8".
+     1569       LogWrite:LogStr = SUBSTITUTE("Авторизация маркированной продукции &1",
+     1570         req:QueryPar).
+     1571       ASSIGN
+     1572         listActionsByMark = SUBSTITUTE("&1,&2",
+     1573           cashSts:SaleLock:NameProp,
+     1574           cashSts:ReturnLock:NameProp
+     1575         )
+     1576         listActionsUnlock = cashSts:Unlock:NameProp
+     1577         listActions = SUBSTITUTE("&1,&2,&3,&4",
+     1578           listActionsByMark,
+     1579           listActionsUnlock,
+     1580           cashSts:UnlockAll:NameProp,
+     1581           cashSts:Commit:NameProp
+     1582         )
+     1583       .
+     1584       n = NUM-ENTRIES (req:QueryPar, "&").
+     1585       DO ii = 1 TO n:
+     1586         ASSIGN
+     1587           par = ENTRY (1, ENTRY (ii, req:QueryPar, "&"), "=")
+     1588           val = ENTRY (2, ENTRY (ii, req:QueryPar, "&"), "=")
+     1589       no-error.
+     1590         IF ERROR-STATUS:ERROR
+     1591           THEN
+     1592         DO:
+     1593           vLC = CHR(123) + '"server_error":"Неверные параметры запроса."' + chr(125).
+     1594           sendContent(vLC).
+     1595           RETURN.
+     1596         END.
+     1597         CASE par:
+     1598           WHEN "cash" THEN
+     1599             DO:
+     1600               cash = val.
+     1601             END.
+     1602           WHEN "shift_id" THEN
+     1603             DO:
+     1604               shift_id = val.
+     1605             END.
+     1606           WHEN "check" THEN
+     1607             DO:
+     1608               chk_id = val.
+     1609             END.
+     1610           WHEN "mark" THEN
+     1611             DO:
+     1612               mMarkOrig = val.
+     1613               mark = percentDecoding (val).
+     1614             END.
+     1615           WHEN "context" THEN
+     1616             DO:
+     1617               cntx_id = val.
+     1618             END.
+     1619           WHEN "set" THEN
+     1620             DO:
+     1621               IF LOOKUP (val,listActions) = 0
+     1622                 THEN
+     1623               DO:
+     1624                 vLC = CHR(123) + substitute('"server_error":"Неверный тип &1 параметра set."', val) + chr(125).
+     1625                 sendContent(vLC).
+     1626                 RETURN.
+     1627               END.
+     1628               action = val.
+     1629             END.
+     1630           WHEN "shift_tbeg" THEN
+     1631             DO:
+     1632               shift_tbeg = DATE (INTEGER (SUBSTRING (val, 03, 2)), INTEGER (SUBSTRING (val, 01, 2)), INTEGER (SUBSTRING (val, 05, 4))) NO-ERROR.
+     1633             END.
+     1634           WHEN "shift_num" THEN
+     1635             DO:
+     1636               shift_num = int (val) NO-ERROR.
+     1637             END.
+     1638           WHEN "StatusPos" THEN
+     1639             DO:
+     1640               statusPOS = int (val) NO-ERROR.
+     1641             END.
+     1642           WHEN "isCheckedOffline" THEN
+     1643             DO:
+     1644               isCheckedOffline = logical (val) NO-ERROR.
+     1645             END.
+     1646         END CASE.
+     1647       END.
+     1648       IF cash = "" OR action = ""
+     1649         THEN
+     1650       DO:
+     1651         vLC = CHR(123) + substitute('"server_error":"Неверные параметры запроса."') + chr(125).
+     1652         sendContent(vLC).
+     1653         RETURN.
+     1654       END.
+     1655       obj-code = getObject(INTEGER(cash)).
+     1656       IF obj-code = ? THEN
+     1657       DO:
+     1658         vLC = CHR(123) + substitute('"server_error":"Не удалось определить магазин по кассе &1."', cash) + chr(125).
+     1659         sendContent(vLC).
+     1660         RETURN.
+     1661       END.
+     1662       EDOParSec = ObjSrv:Env:ParametrsOfSection:GetSectionEDO('маг':U, obj-code).
+     1663       CASE TRUE:
+     1664         WHEN CAN-DO(listActionsByMark,action) OR (CAN-DO(listActionsUnlock,action) AND mark <> "") THEN
+     1665         DO:
+     1666           IF mark = "" THEN DO:
+     1667             vLC = CHR(123) + substitute('"server_error":"Неверные параметры запроса. Не заполнен mark."') + chr(125).
+     1668             sendContent(vLC).
+     1669             RETURN.
+     1670           END.
+     1671           mark-short = GetCodeIdent(mark).
+     1672           IF mark-short = "" OR mark-short = ? THEN DO:
+     1673             vLC = CHR(123) + substitute('"server_error":"Неверные параметры запроса. Некорректный код марки."') + chr(125).
+     1674             sendContent(vLC).
+     1675             RETURN.
+     1676           END.
+     1677           FIND FIRST buf_marking EXCLUSIVE-LOCK WHERE buf_marking.mark BEGINS mark-short NO-WAIT NO-ERROR.
+     1678           IF action = cashSts:SaleLock:NameProp THEN
+     1679           DO:
+     1680              assign
+     1681                 mCheckGisMT = 0
+     1682                 mTypeMark = ""
+     1683                 .
+     1684              ChekTypeMarkByDm(mark).
+     1685              if statusPOS <> ? then do:
+     1686                  dbgPrint("marking.log", SUBSTITUTE("Проверка ГИС МТ была на кассе. Статус: &1 Проверка в ЛМЧЗ &2",
+     1687                                                     statusPOS,
+     1688                                                     isCheckedOffline
+     1689                                                     )).
+     1690                  assign
+     1691                     vCheckLocalMark = isCheckedOffline
+     1692                     mCheckSts = statusPOS
+     1693                     .
+     1694                  if not isCheckedOffline
+     1695                  then do:
+     1696                      mCheckGisMT = 1.
+     1697                      if mCheckSts = 0 then
+     1698                         vAccMarkCheck = "Запрет онлайн".
+     1699                      mCheckStsSave = mCheckSts .
+     1700                  end.
+     1701                  else do:
+     1702                      if mCheckSts = 0 then do:
+     1703                         vLC = getJson(0, vAccMarkCheck, mark).
+     1704                         sendContent(vLC).
+     1705                         RETURN.
+     1706                      end.
+     1707                      IF AVAIL buf_marking AND buf_marking.online-result = 0
+     1708                      THEN DO:
+     1709                          vAccMarkCheck = "Выполнить текущую онлайн-проверку не удалось. Продажа заблокирована по результату ранее выполненной проверки.".
+     1710                          vLC = getJson(0, vAccMarkCheck, mark).
+     1711                          sendContent(vLC).
+     1712                          RETURN.
+     1713                      END.
+     1714                  end.
+     1715                  if mCheckSts = 1 or mCheckSts = 2
+     1716                  then do:
+     1717                      vAccMarkCheckOff = ChekExpirationDate('маг':U,obj-code,buffer buf_marking).
+     1718                      vAccMarkCheck = vAccMarkCheckOff.
+     1719                  end.
+     1720                  dbgPrint("marking.log", SUBSTITUTE("Результат после обработки статуса с кассы: Комментарий: &1 Статус: &2 Проверка в ЛМЧЗ &3 mCheckGisMT &4 ",
+     1721                                                     vAccMarkCheck,
+     1722                                                     mCheckSts,
+     1723                                                     vCheckLocalMark,
+     1724                                                     mCheckGisMT
+     1725                                                     )).
+     1726              end.
+     1727              else do:
+     1728                  vAccMarkCheck = ChekAccessMark('маг':U,obj-code,mark,mark-short).
+     1729                  dbgPrint("marking.log", SUBSTITUTE("Проверка ГИС МТ: &1 Статус: &2 mReqId &3 mReqTimeStamp &4 mCheckGisMT &5",
+     1730                                                     vAccMarkCheck,
+     1731                                                     mCheckSts,
+     1732                                                     mReqId,
+     1733                                                     mReqTimeStamp,
+     1734                                                     mCheckGisMT)).
+     1735                  IF mCheckSts = 0 OR
+     1736                     mCheckSts = 3
+     1737                  THEN DO:
+     1738                     vAccMarkCheck = vAccMarkCheck + "Снимите с продажи и передайте товар управляющему/старшему смены".
+     1739                  END.
+     1740                  IF mCheckSts = 4 THEN DO:
+     1741                     vLC = getJson(0, vAccMarkCheck, mark).
+     1742                     sendContent(vLC).
+     1743                     RETURN.
+     1744                  END.
+     1745                  IF (mCheckSts = 2 AND mCheckGisMT <> 1) OR mCheckGisMT = 2 THEN DO:
+     1746                     dbgPrint("marking.log", SUBSTITUTE("Считываем online-result: &1.",
+     1747                                                       IF NOT AVAIL buf_marking THEN "marking не найдена"
+     1748                                                       ELSE STRING(buf_marking.online-result))).
+     1749                     IF AVAIL buf_marking AND buf_marking.online-result = 0
+     1750                     THEN DO:
+     1751                         vAccMarkCheck = "Выполнить текущую онлайн-проверку не удалось. Продажа заблокирована по результату ранее выполненной проверки. Снимите с продажи и передайте товар управляющему/старшему смены".
+     1752                         vLC = getJson(0, vAccMarkCheck, mark).
+     1753                         sendContent(vLC).
+     1754                         RETURN.
+     1755                     END.
+     1756                     ELSE DO:
+     1757                         vAccMarkCheckOff = ChekLocalMark(mark-short).
+     1758                         vCheckLocalMark = TRUE.
+     1759                         if vAccMarkCheckOff = "" and
+     1760                            mCheckSts = 2 and
+     1761                            available buf_marking
+     1762                         then
+     1763                            vAccMarkCheckOff = ChekExpirationDate('маг':U,obj-code,buffer buf_marking).
+     1764                         if vAccMarkCheckOff <> "" and vAccMarkCheck begins "Сообщите"
+     1765                         then vAccMarkCheck = vAccMarkCheckOff + " Также с" + substring(vAccMarkCheck,2).
+     1766                         else vAccMarkCheck = vAccMarkCheckOff + vAccMarkCheck.
+     1767                     END.
+     1768                 END.
+     1769              END.
+     1770           END.
+     1771           IF NOT AVAILABLE (buf_marking) THEN
+     1772           DO:
+     1773             IF LOCKED buf_marking THEN DO:
+     1774                vLC = getJson(0, "С маркой " + mark-short + " уже работают. ", mark).
+     1775                sendContent(vLC).
+     1776                RETURN.
+     1777             END.
+     1778             CASE action:
+     1779               WHEN cashSts:SaleLock:NameProp THEN
+     1780               DO:
+     1781                 createMark(mark-short, buffer buf_marking).
+     1782                 IF NOT vCheckLocalMark
+     1783                    AND AVAILABLE buf_marking
+     1784                 THEN DO:
+     1785                   setOnlineResult(BUFFER buf_marking).
+     1786                 END.
+     1787                 IF mCheckSts = 0 OR
+     1788                    mCheckSts = 3
+     1789                 THEN DO:
+     1790                    vLC = getJson(0, vAccMarkCheck, mark).
+     1791                    sendContent(vLC).
+     1792                    RETURN.
+     1793                 END.
+     1794                 IF AVAILABLE buf_marking THEN
+     1795                   answerFlag = TRUE.
+     1796                 vLC = setMarkStatus (
+     1797                   thMarkSts:SaleWaitLock:KeyIntDB,
+     1798                   "cash:" +  cash + ":" + "context:" + cntx_id,
+     1799                   IF mCheckSts = 2 THEN vAccMarkCheck ELSE cashSts:SaleLock:Label_,
+     1800                   cashSts:NotAccessible:Label_,
+     1801                   buffer buf_marking).
+     1802               END.
+     1803               WHEN cashSts:ReturnLock:NameProp THEN
+     1804               DO:
+     1805                 createMark(mark-short, buffer buf_marking).
+     1806                 IF AVAILABLE buf_marking THEN
+     1807                   answerFlag = TRUE.
+     1808                 vLC = setMarkStatus (
+     1809                   thMarkSts:ReturnWaitLock:KeyIntDB,
+     1810                   "cash:" +  cash + ":" + "context:" + cntx_id,
+     1811                   cashSts:ReturnLock:Label_,
+     1812                   cashSts:NotAccessibleRet:Label_,
+     1813                   buffer buf_marking).
+     1814               END.
+     1815               OTHERWISE
+     1816               DO:
+     1817                 vLC = getJson(0, "Операция невозможна. Марка не найдена.", mark).
+     1818               END.
+     1819             END CASE.
+     1820           END.
+     1821           ELSE
+     1822           DO:
+     1823             IF  action = cashSts:SaleLock:NameProp
+     1824             AND NOT vCheckLocalMark THEN
+     1825               setOnlineResult(BUFFER buf_marking).
+     1826             IF action = cashSts:SaleLock:NameProp AND
+     1827                (mCheckSts = 0 OR mCheckSts = 3)
+     1828             THEN DO:
+     1829                    vLC = getJson(0, vAccMarkCheck, mark).
+     1830                    sendContent(vLC).
+     1831                    RETURN.
+     1832             END.
+     1833             IF (action = cashSts:SaleLock:NameProp OR action = cashSts:ReturnLock:NameProp)
+     1834                AND (buf_marking.sts = thMarkSts:SaleWaitLock:KeyIntDB OR buf_marking.sts = thMarkSts:ReturnWaitLock:KeyIntDB)
+     1835                AND buf_marking.loc-key BEGINS "cash"
+     1836             THEN DO:
+     1837               vLC = getJson(0, SUBSTITUTE (
+     1838                 "Операция невозможна. Статус марки - &1 на кассе &2",
+     1839                 thMarkSts:GetLabel(buf_marking.sts),
+     1840                 TRIM(ENTRY(2, buf_marking.loc-key, ":"))),
+     1841                 mark
+     1842               ).
+     1843               sendContent(vLC).
+     1844               RETURN.
+     1845             END.
+     1846             ChekTypeMarkByDm(mark).
+     1847             IF mTypeMark <> "" THEN
+     1848               canSaleReturnedGoods = EDOParSec:GetIsSaleReturnForType(mTypeMark).
+     1849             ASSIGN
+     1850               listStatusesForSale = SUBSTITUTE("&1,&2",thMarkSts:Checked_:KeyIntDB,thMarkSts:FreeZone:KeyIntDB)
+     1851               listStatusesForSaleWithReturn = SUBSTITUTE("&1,&2",listStatusesForSale,thMarkSts:ReturnLock:KeyIntDB)
+     1852               listStatusesForReturn = SUBSTITUTE("&1,&2",listStatusesForSale,thMarkSts:SaleLock:KeyIntDB)
+     1853             .
+     1854             CASE action:
+     1855               WHEN cashSts:SaleLock:NameProp THEN
+     1856               DO:
+     1857                 IF CAN-DO(
+     1858                   IF canSaleReturnedGoods THEN listStatusesForSaleWithReturn ELSE listStatusesForSale,
+     1859                   STRING(buf_marking.sts)
+     1860                 ) THEN
+     1861                 DO:
+     1862                   answerFlag = TRUE.
+     1863                 END.
+     1864                 vLC = setMarkStatus (
+     1865                   thMarkSts:SaleWaitLock:KeyIntDB,
+     1866                   "cash:" +  cash + ":" + "context:" + cntx_id,
+     1867                   IF mCheckSts = 2 THEN vAccMarkCheck ELSE cashSts:SaleLock:Label_,
+     1868                   SUBSTITUTE ("Операция невозможна. Статус марки - &1.", thMarkSts:GetProp(buf_marking.sts):Label_),
+     1869                   buffer buf_marking).
+     1870               END.
+     1871               WHEN cashSts:ReturnLock:NameProp THEN
+     1872               DO:
+     1873                 IF CAN-DO(listStatusesForReturn, STRING(buf_marking.sts)) THEN
+     1874                 DO:
+     1875                   answerFlag = TRUE.
+     1876                 END.
+     1877                 vLC = setMarkStatus (
+     1878                   thMarkSts:ReturnWaitLock:KeyIntDB,
+     1879                   "cash:" +  cash + ":" + "context:" + cntx_id,
+     1880                   cashSts:ReturnLock:Label_,
+     1881                   SUBSTITUTE ("Операция невозможна. Статус марки - &1.", thMarkSts:GetProp(buf_marking.sts):Label_),
+     1882                   buffer buf_marking).
+     1883               END.
+     1884               WHEN cashSts:Unlock:NameProp THEN
+     1885               DO:
+     1886                 IF buf_marking.loc-key = "" OR buf_marking.loc-key BEGINS "cash:" + cash
+     1887                 THEN DO:
+     1888                   answerFlag = TRUE.
+     1889                   vLC = setMarkStatus (
+     1890                     IF buf_marking.sts = thMarkSts:SaleWaitLock:KeyIntDB THEN thMarkSts:FreeZone:KeyIntDB ELSE thMarkSts:SaleLock:KeyIntDB,
+     1891                     "",
+     1892                     cashSts:Unlock:Label_,
+     1893                     SUBSTITUTE ("Операция невозможна. Статус марки - &1.", thMarkSts:GetProp(buf_marking.sts):Label_),
+     1894                     buffer buf_marking).
+     1895                 END.
+     1896                 ELSE DO:
+     1897                   vLC = getJson(0, SUBSTITUTE ("Операция невозможна. Статус марки - &1.", thMarkSts:GetProp(buf_marking.sts):Label_), mark).
+     1898                 END.
+     1899               END.
+     1900             END CASE.
+     1901           END.
+     1902         END.
+     1903         WHEN CAN-DO(listActionsUnlock,action) AND mark = "" THEN
+     1904         DO:
+     1905           answerFlag = TRUE.
+     1906           IF cntx_id = "" THEN
+     1907             vLC = unlockMarks("cash:" +  cash).
+     1908           ELSE
+     1909             vLC = unlockMarks("cash:" +  cash + ":" + "context:" + cntx_id).
+     1910         END.
+     1911         WHEN action = cashSts:Commit:NameProp THEN
+     1912         DO:
+     1913           answerFlag = TRUE.
+     1914           vLC = commitCheck().
+     1915         END.
+     1916         WHEN action = cashSts:UnlockAll:NameProp THEN
+     1917         DO:
+     1918           answerFlag = TRUE.
+     1919           vLC = unlockMarks("cash:" +  cash).
+     1920         END.
+     1921       END CASE.
+     1922       sendContent(vLC).
+     1923       RETURN.
+     1924     END METHOD.
+     1925     METHOD PUBLIC CHARACTER percentDecoding(encode-str AS CHAR):
+     1926       DEF VAR ii         AS INT.
+     1927       DEF VAR decode-str AS CHAR.
+     1928       DEF VAR entry-str  AS CHAR.
+     1929       decode-str = ENTRY (1, encode-str, "%").
+     1930       DO ii = 2 TO NUM-ENTRIES (encode-str,"%"):
+     1931         entry-str = ENTRY (ii, encode-str, "%").
+     1932         decode-str = decode-str + (IF entry-str <> "" THEN STRING (HEX-DECODE (SUBSTRING (entry-str, 1, 2))) + substring (entry-str, 3, LENGTH (entry-str)) ELSE "%").
+     1933       END.
+     1934       RETURN decode-str.
+     1935     END METHOD.
+     1936     METHOD PRIVATE VOID sendContent(inLC AS LONGCHAR):
+     1937       DEFINE VARIABLE v-cont-length AS INTEGER NO-UNDO.
+     1938       inLC = inLC + chr(13) + chr(10).
+     1939       v-cont-length = LENGTH(inLC,"RAW":U).
+     1940       SomeStr = SUBSTITUTE("HTTP/1.1 200 OK&1Server: 4GL&1Content-Type: text/html; charset=UTF-8&1Content-Length: &3&2&4",chr(13) + chr(10),chr(13) + chr(10)  + chr(13) + chr(10),STRING(v-cont-length),inLC).
+     1941       RETURN.
+     1942     END METHOD.
+     1943     METHOD PRIVATE CHARACTER getJson(stsInt AS INT, msg AS CHAR, mark AS CHAR):
+     1944       DEF VAR json-str AS CHAR NO-UNDO.
+     1945       mark = REPLACE (mark, '\', '\\').
+     1946       mark = REPLACE (mark, '"', '\"').
+     1947       IF stsInt = 1 AND mCheckSts = 2
+     1948       THEN stsInt = 2.
+     1949       json-str = CHR(123) + substitute ('"status":&1,"comment":"&2","reqid":"&3","reqtimestamp":"&4","inst":"&5","ver":"&6"',
+     1950                                          stsInt, msg, mReqId, mReqTimestamp, mInst, mVersion)
+     1951                  + CHR(125).
+     1952       RETURN json-str.
+     1953     END.
+     1954     METHOD PRIVATE CHARACTER setMarkStatus (
+     1955       state AS INTEGER,
+     1956       loc-key AS CHARACTER,
+     1957       msgOk   AS CHARACTER,
+     1958       msgError AS CHARACTER,
+     1959       buffer buf_marking FOR ub.marking
+     1960     ):
+     1961       IF answerFlag THEN
+     1962       DO:
+     1963         ASSIGN
+     1964           buf_marking.loc-key = loc-key
+     1965           buf_marking.sts = state
+     1966           buf_marking.last-change = NOW
+     1967         .
+     1968         ObjSrv:Lib:MarkingTree:UnGroupMark(buf_marking.mark).
+     1969         ObjSrv:Lib:MarkingTree:LockChkChildeMark(buf_marking.mark).
+     1970         RETURN getJson(1, msgOk , buf_marking.mark).
+     1971       END.
+     1972       RETURN getJson(0, msgError, buf_marking.mark).
+     1973     END METHOD.
+     1974     METHOD PRIVATE VOID createMark (
+     1975       mark AS CHARACTER,
+     1976       buffer buf_marking FOR ub.marking
+     1977     ):
+     1978       CREATE buf_marking.
+     1979       ASSIGN
+     1980         buf_marking.mark    = mark
+     1981         buf_marking.sts     = thMarkSts:FreeZone:KeyIntDB
+     1982       .
+     1983     END METHOD.
+     1984     METHOD PRIVATE VOID setShift (
+     1985       mark AS CHARACTER,
+     1986       shiftBeg AS DATE,
+     1987       shiftNum AS INTEGER
+     1988     ):
+     1989       DEFINE BUFFER buf_marking-attr FOR ub.marking-attr.
+     1990       IF shiftBeg NE ?
+     1991       THEN DO:
+     1992         FIND FIRST buf_marking-attr WHERE buf_marking-attr.mark = mark AND buf_marking-attr.attr-code = "shift-date" NO-ERROR.
+     1993         IF NOT AVAILABLE buf_marking-attr
+     1994         THEN DO:
+     1995           CREATE buf_marking-attr.
+     1996           buf_marking-attr.mark = mark.
+     1997           buf_marking-attr.attr-code = "shift-date".
+     1998         END.
+     1999         buf_marking-attr.attr-value = STRING (shiftBeg).
+     2000       END.
+     2001       IF shiftNum NE ?
+     2002       THEN DO:
+     2003         FIND FIRST buf_marking-attr WHERE buf_marking-attr.mark = mark AND buf_marking-attr.attr-code = "shift-num" NO-ERROR.
+     2004         IF NOT AVAILABLE buf_marking-attr
+     2005         THEN DO:
+     2006           CREATE buf_marking-attr.
+     2007           buf_marking-attr.mark = mark.
+     2008           buf_marking-attr.attr-code = "shift-num".
+     2009         END.
+     2010         buf_marking-attr.attr-value = STRING (shiftNum).
+     2011       END.
+     2012     END METHOD.
+     2013     METHOD PRIVATE INTEGER getObject (
+     2014       cash AS INTEGER
+     2015     ):
+     2016       DEFINE BUFFER buf_cash-desk FOR ub.cash-desk.
+     2017       FIND buf_cash-desk WHERE buf_cash-desk.cash-num = cash NO-LOCK NO-ERROR.
+     2018       RETURN IF AVAILABLE buf_cash-desk THEN buf_cash-desk.obj-code ELSE ?.
+     2019     END METHOD.
+     2020     METHOD OVERRIDE PUBLIC VOID Execute_(req AS CLASS IRequest, resp AS CLASS IResponse):
+     2021     END METHOD.
+     2022     METHOD PRIVATE CHARACTER unlockMarks (
+     2023       loc-key AS CHARACTER
+     2024     ):
+     2025       DEFINE VARIABLE newSts    AS INTEGER   NO-UNDO.
+     2026       DEFINE BUFFER buf_marking FOR ub.marking.
+     2027       DEFINE BUFFER buf_marking-l FOR ub.marking-lines.
+     2028       REPEAT PRESELECT EACH buf_marking EXCLUSIVE-LOCK WHERE
+     2029                buf_marking.loc-key BEGINS loc-key
+     2030                AND lookup("chk_num",buf_marking.loc-key,":") = 0
+     2031                :
+     2032         FIND NEXT buf_marking.
+     2033         IF ObjSrv:Lib:MarkingTree:LevelDown(buf_marking.mark)
+     2034         THEN DO:
+     2035             setMarkStatus (
+     2036               IF buf_marking.sts = thMarkSts:SaleWaitLock:KeyIntDB THEN thMarkSts:FreeZone:KeyIntDB ELSE thMarkSts:SaleLock:KeyIntDB,
+     2037               "",
+     2038               "",
+     2039               "",
+     2040               buffer buf_marking)
+     2041             .
+     2042             setShift(buf_marking.mark, shift_tbeg, shift_num).
+     2043         END.
+     2044       END.
+     2045       REPEAT PRESELECT EACH buf_marking EXCLUSIVE-LOCK WHERE
+     2046                buf_marking.loc-key BEGINS loc-key
+     2047                AND lookup("chk_num",buf_marking.loc-key,":") = 0
+     2048                :
+     2049         FIND NEXT buf_marking.
+     2050         setMarkStatus (
+     2051           IF buf_marking.sts = thMarkSts:SaleWaitLock:KeyIntDB THEN thMarkSts:FreeZone:KeyIntDB ELSE thMarkSts:SaleLock:KeyIntDB,
+     2052           "",
+     2053           "",
+     2054           "",
+     2055           buffer buf_marking)
+     2056         .
+     2057         setShift(buf_marking.mark, shift_tbeg, shift_num).
+     2058       END.
+     2059       RETURN getJson(1, cashSts:UnlockAll:Label_, mark).
+     2060     END METHOD.
+     2061     METHOD PRIVATE CHARACTER commitCheck ():
+     2062       DEFINE BUFFER buf_marking FOR ub.marking.
+     2063       DEFINE VARIABLE vCnt AS INT NO-UNDO.
+     2064       vCnt = 0.
+     2065       REPEAT PRESELECT EACH buf_marking EXCLUSIVE-LOCK WHERE buf_marking.loc-key = "cash:" +  cash + ":" + "context:" + cntx_id:
+     2066         FIND NEXT buf_marking.
+     2067         IF ObjSrv:Lib:MarkingTree:LevelDown(buf_marking.mark)
+     2068         THEN DO:
+     2069            setMarkStatus (
+     2070               IF buf_marking.sts = thMarkSts:SaleWaitLock:KeyIntDB THEN thMarkSts:SaleLock:KeyIntDB ELSE thMarkSts:ReturnLock:KeyIntDB,
+     2071               "cash:" +  cash + ":" + "context:" + cntx_id + ":" + "chk_num:" + chk_id,
+     2072               "",
+     2073               "",
+     2074               buffer buf_marking)
+     2075            .
+     2076            setShift(buf_marking.mark, shift_tbeg, shift_num).
+     2077            vCnt = vCnt + 1.
+     2078         END.
+     2079       END.
+     2080       REPEAT PRESELECT EACH buf_marking EXCLUSIVE-LOCK WHERE buf_marking.loc-key = "cash:" +  cash + ":" + "context:" + cntx_id:
+     2081         FIND NEXT buf_marking.
+     2082         setMarkStatus (
+     2083           IF buf_marking.sts = thMarkSts:SaleWaitLock:KeyIntDB THEN thMarkSts:SaleLock:KeyIntDB ELSE thMarkSts:ReturnLock:KeyIntDB,
+     2084           "cash:" +  cash + ":" + "context:" + cntx_id + ":" + "chk_num:" + chk_id,
+     2085           "",
+     2086           "",
+     2087           buffer buf_marking)
+     2088         .
+     2089         setShift(buf_marking.mark, shift_tbeg, shift_num).
+     2090         vCnt = vCnt + 1.
+     2091       END.
+     2092       RETURN IF vCnt = 0
+     2093         THEN getJson(0, "По данной кассе не было маркированого товара", mark)
+     2094         ELSE getJson(1, cashSts:Commit:Label_ + " Зарезервировано кол-во " + string (vCnt), mark).
+     2095     END METHOD.
+     2096     METHOD PRIVATE CHARACTER FixErrGisMT ():
+     2097       DEFINE VARIABLE vErrSts AS CHARACTER NO-UNDO.
+     2098       DEFINE VARIABLE vTimeBegErr AS DATETIME-TZ NO-UNDO.
+     2099       DEFINE VARIABLE vTimeAvail  AS INTEGER     NO-UNDO.
+     2100       DEFINE BUFFER buf_code FOR ub.code.
+     2101       ASSIGN
+     2102          mCheckSts = 2
+     2103          vErrSts = ""
+     2104          .
+     2105       fixerr:
+     2106       DO TRANSACTION ON ERROR UNDO, RETRY fixerr:
+     2107          FIND FIRST buf_code WHERE buf_code.parent EQ "GisMt"
+     2108                                AND buf_code.code   EQ "GisMtErr"
+     2109             NO-LOCK NO-ERROR.
+     2110          IF NOT AVAILABLE buf_code
+     2111          THEN DO:
+     2112              dbgPrint("marking.log", "Создаем новый справочник для фиксации времени сбоя онлайн-проверки КМ").
+     2113             FIND FIRST buf_code WHERE buf_code.parent EQ ""
+     2114                              AND buf_code.code   EQ "GisMt"
+     2115             NO-LOCK NO-ERROR.
+     2116             IF NOT AVAILABLE buf_code THEN DO:
+     2117               CREATE buf_code.
+     2118               ASSIGN
+     2119                  buf_code.parent = ""
+     2120                  buf_code.code = "GisMt"
+     2121                  buf_code.codename = "Cбой онлайн-проверки КМ"
+     2122                  .
+     2123               RELEASE buf_code NO-ERROR.
+     2124             END.
+     2125             CREATE buf_code.
+     2126             ASSIGN
+     2127               buf_code.parent = "GisMt"
+     2128               buf_code.code = "GisMtErr"
+     2129               buf_code.codename = "Время сбоя онлайн-проверки КМ"
+     2130               buf_code.codevalue = STRING(NOW)
+     2131               .
+     2132             RELEASE buf_code NO-ERROR.
+     2133          END.
+     2134          ELSE DO:
+     2135             dbgPrint("marking.log", "Текущее временя сбоя ГИС МТ: " + buf_code.codevalue).
+     2136             IF buf_code.codevalue > "" THEN DO:
+     2137                vTimeBegErr = DATETIME-TZ(buf_code.codevalue) NO-ERROR.
+     2138                IF gismt-MaxTime <> ? AND
+     2139                   gismt-TimeFalStart <> ? AND
+     2140                   vTimeBegErr <> ?
+     2141                THEN DO:
+     2142                   IF vTimeBegErr + gismt-MaxTime * 3600000 < NOW
+     2143                   THEN DO:
+     2144                      ASSIGN
+     2145                         mCheckSts = 4
+     2146                         vErrSts = "С момента начала сбоя онлайн-проверки прошло более "
+     2147                                   + string(gismt-MaxTime)
+     2148                                   + " часов, реализация маркированных товаров невозможна. "
+     2149                         .
+     2150                   END.
+     2151                   ELSE IF vTimeBegErr + gismt-TimeFalStart * 3600000 <= NOW
+     2152                   THEN DO:
+     2153                      ASSIGN
+     2154                         vTimeAvail = ROUND((vTimeBegErr + gismt-MaxTime * 3600000 - NOW) / 3600000,0)
+     2155                         vErrSts = "Сообщите управляющему, что до блокировки продаж маркированных товаров из-за недоступности Честного знака осталось: "
+     2156                                   + string(vTimeAvail) + " ч. "
+     2157                         .
+     2158                   END.
+     2159                END.
+     2160             END.
+     2161             IF (buf_code.codevalue > "" AND vTimeBegErr = ?)
+     2162              OR buf_code.codevalue = "" THEN
+     2163             DO:
+     2164                 FIND FIRST buf_code WHERE buf_code.parent EQ "GisMt"
+     2165                              AND buf_code.code   EQ "GisMtErr"
+     2166                 EXCLUSIVE-LOCK NO-WAIT NO-ERROR.
+     2167                 IF AVAIL buf_code THEN
+     2168                 DO:
+     2169                   buf_code.codevalue = STRING(NOW).
+     2170                   dbgPrint("marking.log", "Фиксация времени сбоя ГИС МТ: " + buf_code.codevalue).
+     2171                   RELEASE buf_code NO-ERROR.
+     2172                   IF ERROR-STATUS:ERROR THEN
+     2173                      dbgPrint("marking.log", "Ошибка фиксации времени сбоя ГИС МТ: " + ERROR-STATUS:GET-MESSAGE(1)).
+     2174                 END.
+     2175                 ELSE IF LOCKED buf_code THEN
+     2176                 DO:
+     2177                    dbgPrint("marking.log", "Ошибка фиксации времени сбоя ГИС МТ - запись заблокирована").
+     2178                 END.
+     2179             END.
+     2180          END.
+     2181       END.
+     2182       IF RETRY THEN DO:
+     2183           dbgPrint("marking.log", "Ошибка фиксации времени сбоя ГИС МТ").
+     2184       END.
+     2185       RETURN vErrSts.
+     2186     END METHOD.
+     2187     METHOD PRIVATE VOID SetNoErrGisMT ():
+     2188        DEF BUFFER buf_code FOR ub.code.
+     2189         FIND FIRST buf_code WHERE
+     2190                    buf_code.parent EQ "GisMt"
+     2191                AND buf_code.code   EQ "GisMtErr"
+     2192            NO-LOCK NO-ERROR.
+     2193         if avail buf_code and buf_code.codevalue <> "" then
+     2194         do:
+     2195             setnoerr:
+     2196             DO TRANSACTION ON ERROR UNDO, RETRY setnoerr:
+     2197                FIND FIRST buf_code WHERE buf_code.parent EQ "GisMt"
+     2198                                      AND buf_code.code   EQ "GisMtErr"
+     2199                   EXCLUSIVE-LOCK NO-WAIT NO-ERROR.
+     2200                IF AVAILABLE buf_code
+     2201                THEN DO:
+     2202                   buf_code.codevalue = "".
+     2203                   release buf_code no-error.
+     2204                END.
+     2205                ELSE IF LOCKED buf_code THEN
+     2206                   dbgPrint("marking.log", "Запись в справочнике для сброса времени сбоя ГИС МТ заблокирована").
+     2207             END.
+     2208             IF RETRY THEN DO:
+     2209                dbgPrint("marking.log", "Ошибка сброса времени сбоя ГИС МТ").
+     2210             END.
+     2211         end.
+     2212     END METHOD.
+     2213     METHOD PRIVATE LOGICAL GetMarkProp (
+     2214        p-obj-type  AS CHARACTER,
+     2215        p-obj-code  AS INTEGER,
+     2216        p-param-code AS CHARACTER,
+     2217        p-type-mark AS CHARACTER
+     2218        ):
+     2219         DEFINE VARIABLE v-value-character AS CHARACTER NO-UNDO.
+     2220         v-value-character = get-thbj-attr-prop(p-obj-type,p-obj-code,'marking':U,p-param-code).
+     2221         dbgPrint("marking.log", SUBSTITUTE("Тип маркировки: p-param-code &1 v-value-character &2 тип маркировки &3",
+     2222                                            p-param-code,
+     2223                                            v-value-character,
+     2224                                            p-type-mark)).
+     2225         IF LOOKUP (p-type-mark,v-value-character) > 0
+     2226         THEN RETURN YES.
+     2227         ELSE RETURN NO.
+     2228     END METHOD.
+     2229     METHOD PRIVATE INTEGER GetGisMTCheck (
+     2230        p-obj-type  AS CHARACTER,
+     2231        p-obj-code  AS INTEGER,
+     2232        mark AS CHARACTER,
+     2233        mark-short AS CHARACTER
+     2234     ):
+     2235       DEFINE VARIABLE vInn           AS CHARACTER   NO-UNDO.
+     2236       DEFINE VARIABLE vErrSts        AS CHARACTER   NO-UNDO.
+     2237       DEFINE VARIABLE cmd            AS CHARACTER   NO-UNDO.
+     2238       DEFINE VARIABLE cmdlog         AS CHARACTER   NO-UNDO.
+     2239       DEFINE VARIABLE CmdParamProxy  AS CHARACTER   NO-UNDO.
+     2240       DEFINE VARIABLE vFileToken     AS CHARACTER   NO-UNDO.
+     2241       DEFINE VARIABLE vFileBat       AS CHARACTER   NO-UNDO.
+     2242       DEFINE VARIABLE vFileResult    AS CHARACTER   NO-UNDO.
+     2243       DEFINE VARIABLE vFileResultCnv AS CHARACTER   NO-UNDO.
+     2244       DEFINE VARIABLE vFileResultErr AS CHARACTER   NO-UNDO.
+     2245       DEFINE VARIABLE vFileresultXml AS CHARACTER   NO-UNDO.
+     2246       DEFINE VARIABLE vFileLog       AS CHARACTER   NO-UNDO.
+     2247       DEFINE VARIABLE vlongJson      AS LONGCHAR    NO-UNDO CASE-SENSITIVE.
+     2248       DEFINE VARIABLE vlongJsonError AS LONGCHAR    NO-UNDO CASE-SENSITIVE.
+     2249       DEFINE VARIABLE vMark          AS CHARACTER   NO-UNDO CASE-SENSITIVE.
+     2250       DEFINE VARIABLE vDataMark      AS CHARACTER   NO-UNDO.
+     2251       DEFINE VARIABLE vDataMarkLM    AS CHARACTER   NO-UNDO.
+     2252       DEFINE VARIABLE vRetProp       AS CHARACTER   NO-UNDO.
+     2253       DEFINE VARIABLE v-value-character AS CHARACTER NO-UNDO .
+     2254       DEFINE VARIABLE v-value-date      AS DATE      NO-UNDO .
+     2255       DEFINE VARIABLE v-value-decimal   AS DECIMAL   NO-UNDO .
+     2256       DEFINE VARIABLE v-value-integer   AS INTEGER   NO-UNDO .
+     2257       DEFINE VARIABLE v-value-logical   AS LOGICAL   NO-UNDO .
+     2258       DEFINE VARIABLE v-param-type      AS CHARACTER NO-UNDO .
+     2259       DEFINE VARIABLE v-param-value     AS CHARACTER NO-UNDO .
+     2260       DEFINE VARIABLE vRetOk   AS LOGICAL     NO-UNDO.
+     2261       DEFINE VARIABLE vRetVal  AS INTEGER     NO-UNDO.
+     2262       DEFINE VARIABLE vCh      AS CHARACTER   NO-UNDO.
+     2263       DEFINE VARIABLE vBefCurl AS DATETIME-TZ NO-UNDO.
+     2264       DEFINE VARIABLE vAftCurl AS DATETIME-TZ NO-UNDO.
+     2265       DEFINE VARIABLE vpid     AS INTEGER     NO-UNDO.
+     2266       DEFINE VARIABLE vTimePause AS INTEGER   NO-UNDO.
+     2267       DEFINE VARIABLE vGisAdress AS CHARACTER   NO-UNDO.
+     2268       DEFINE VARIABLE vGisAdrCDN AS CHARACTER   NO-UNDO.
+     2269       DEFINE VARIABLE vTimeStart AS DATETIME-TZ NO-UNDO.
+     2270       DEFINE VARIABLE vTimeNow   AS DATETIME-TZ NO-UNDO.
+     2271       DEFINE VARIABLE vRetCdn    AS LOGICAL     NO-UNDO.
+     2272       DEFINE VARIABLE vNumRep AS INT64 NO-UNDO.
+     2273       DEFINE VARIABLE vNumMax AS INT64 NO-UNDO.
+     2274       DEFINE VARIABLE vVerLM  AS INT64 NO-UNDO.
+     2275       DEFINE VARIABLE vMarkShort    AS CHARACTER   NO-UNDO CASE-SENSITIVE.
+     2276       DEFINE VARIABLE vFileBatOf    AS CHARACTER   NO-UNDO.
+     2277       DEFINE VARIABLE vFileResOf    AS CHARACTER   NO-UNDO.
+     2278       DEFINE VARIABLE vFileResOfErr AS CHARACTER   NO-UNDO.
+     2279       DEFINE BUFFER buf_firm FOR ub.firm .
+     2280       DEFINE BUFFER buf_shop FOR ub.shop.
+     2281       DEFINE BUFFER buf_sys-ctrl FOR ub.sys-ctrl .
+     2282       ASSIGN
+     2283          vMark = mark
+     2284          vMark = REPLACE(vMark, '\', '\\')
+     2285          vMark = REPLACE(vMark, '/', '\/')
+     2286          vMark = REPLACE(vMark, '"', '\"')
+     2287          vMark = REPLACE(vMark,CHR(29),"\u001d")
+     2288          .
+     2289       EMPTY TEMP-TABLE ttmark-body.
+     2290       EMPTY TEMP-TABLE ttmark-check.
+     2291       EMPTY TEMP-TABLE ttlocal-mark.
+     2292       EMPTY TEMP-TABLE ttlocal-mark-code.
+     2293       dbgPrint("marking.log", SUBSTITUTE("Отправка запроса p-obj-type &1 p-obj-code &2 mark &3",
+     2294                                          p-obj-type,
+     2295                                          p-obj-code,
+     2296                                          vMark)).
+     2297       dbgPrint("marking.log", SUBSTITUTE("Заново считывать настройки подключения к ГИС МТ &1 ", gismt-UpdateRequest)).
+     2298       IF gismt-UpdateRequest THEN DO:
+     2299           FIND FIRST buf_sys-ctrl NO-LOCK NO-ERROR.
+     2300           IF AVAILABLE buf_sys-ctrl AND buf_sys-ctrl.db-num <> 0
+     2301           THEN DO:
+     2302               dbgPrint("marking.log", SUBSTITUTE("Cчитываем настройки подключения к ГИС МТ для &1 &2", "'БД':U",buf_sys-ctrl.db-num)).
+     2303               vRetProp = get-gismt-prop ('БД':U,
+     2304                                          buf_sys-ctrl.db-num) NO-ERROR.
+     2305           END.
+     2306       END.
+     2307       dbgPrint("marking.log", "gismt-info").
+     2308       vFileLog = "GisMtReq-" + replace(STRING(TODAY),"/","-") +  ".log".
+     2309       vCh = "".
+     2310       IF searchfile(vFileLog) <> ?
+     2311       THEN DO:
+     2312          FILE-INFO:FILE-NAME = searchfile(vFileLog).
+     2313          IF FILE-INFO:FILE-SIZE <> 0 THEN vCh = " ".
+     2314       END.
+     2315       OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2316       PUT STREAM out_data UNFORMATTED
+     2317         vCh SKIP NOW CHR(9) mMarkOrig CHR(9).
+     2318       OUTPUT STREAM out_data CLOSE.
+     2319       RUN gbl/_tmpfile.p ( "LMChz_data", ".txt", OUTPUT vDataMarkLM ) .
+     2320       CREATE tt-file-name.
+     2321       ASSIGN tt-file-name.tmpFileName = vDataMarkLM.
+     2322       dbgPrint("marking.log", SUBSTITUTE("vDataMarkLM &1 ", vDataMarkLM)).
+     2323       ASSIGN
+     2324          vMarkShort = mark-short
+     2325          vMarkShort = REPLACE(vMarkShort, '\', '\\')
+     2326          vMarkShort = REPLACE(vMarkShort, '/', '\/')
+     2327          vMarkShort = REPLACE(vMarkShort, '"', '\"') .
+     2328       dbgPrint("marking.log", SUBSTITUTE("Сконвертированная КИ: &1 ", vMarkShort)).
+     2329       IF R-INDEX(gismt-OflineAdress,"/v2") > 0
+     2330       THEN vVerLM = 2.
+     2331       ELSE vVerLM = 1.
+     2332       OUTPUT STREAM out_data TO value(vDataMarkLM).
+     2333       IF vVerLM = 2 THEN
+     2334          PUT STREAM out_data UNFORMATTED
+     2335             '~{"cis_list":[~{"cis":"' vMarkShort '"~}]~}' .
+     2336       ELSE
+     2337          PUT STREAM out_data UNFORMATTED
+     2338             '~{"cis_list":["' vMarkShort '"]~}' .
+     2339       OUTPUT STREAM out_data CLOSE.
+     2340       IF gismt-CrashSituat THEN DO:
+     2341          dbgPrint("marking.log", "Установлена аварийная ситуация.").
+     2342          OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2343          PUT STREAM out_data UNFORMATTED
+     2344             "Установлена аварийная ситуация в ГИС МТ" CHR(9).
+     2345          OUTPUT STREAM out_data CLOSE.
+     2346          vRetVal = GetResLocalMark(vDataMarkLM).
+     2347          RETURN 1.
+     2348       END.
+     2349       RUN gbl/_tmpfile.p ( "GisMT_data", ".txt", OUTPUT vDataMark ) .
+     2350       CREATE tt-file-name.
+     2351       ASSIGN tt-file-name.tmpFileName = vDataMark.
+     2352       dbgPrint("marking.log", SUBSTITUTE("vDataMark &1 ", vDataMark)).
+     2353       OUTPUT STREAM out_data TO value(vDataMark).
+     2354       PUT STREAM out_data UNFORMATTED
+     2355         '~{"codes":["' vMark '"]~}' .
+     2356       OUTPUT STREAM out_data CLOSE.
+     2357       IF gismt-AdressPort <> "" AND gismt-ProxyLogin <> "" AND gismt-ProxyPswd <> ""
+     2358       THEN CmdParamProxy = SUBSTITUTE ('-x &1 -U &2:&3',gismt-AdressPort,gismt-ProxyLogin,gismt-ProxyPswd).
+     2359       ELSE IF gismt-AdressPort <> "" THEN CmdParamProxy = SUBSTITUTE ('-x &1',gismt-AdressPort).
+     2360       ELSE CmdParamProxy = "".
+     2361       IF gismt-cdnTurnOn AND gismt-cdnRepeat
+     2362       THEN vNumMax = 2.
+     2363       ELSE vNumMax = 1.
+     2364       dbgPrint("marking.log", SUBSTITUTE(" Кол-во запросов по одной площадке &1 ", vNumMax)).
+     2365       vTimeStart = NOW.
+     2366       block_chgcdn:
+     2367       DO  WHILE TRUE:
+     2368          IF gismt-cdnTurnOn THEN DO:
+     2369              vGisAdrCDN = GetCDNAdress().
+     2370              IF vGisAdrCDN = "" THEN DO:
+     2371                 dbgPrint("marking.log", "Нет доступных площадок").
+     2372                 OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2373                 PUT STREAM out_data UNFORMATTED
+     2374                    CHR(9) "Нет доступных площадок для обращения в ГИС МТ" CHR(9).
+     2375                 OUTPUT STREAM out_data CLOSE.
+     2376                 IF vFileResult = "" THEN DO:
+     2377                    vRetVal = GetResLocalMark(vDataMarkLM).
+     2378                 END.
+     2379                 RETURN 2.
+     2380              END.
+     2381              vGisAdress = vGisAdrCDN + "/api/v4/true-api/codes/check".
+     2382          END.
+     2383          ELSE vGisAdress = gismt-GisAdress.
+     2384          block_repeat:
+     2385          DO vNumRep = 1 TO vNumMax:
+     2386              IF vNumRep > 1 THEN DO:
+     2387                  dbgPrint("marking.log", SUBSTITUTE("Повторный запрос на площадку &1 ", vGisAdress)).
+     2388              END.
+     2389              RUN gbl/_tmpfile.p ( "ChkGisMTRes", ".txt", OUTPUT vFileResult ) .
+     2390              CREATE tt-file-name.
+     2391              ASSIGN tt-file-name.tmpFileName = vFileResult.
+     2392              RUN gbl/_tmpfile.p ( "ChkGisMTResErr", ".txt", OUTPUT vFileResultErr ) .
+     2393              CREATE tt-file-name.
+     2394              ASSIGN tt-file-name.tmpFileName = vFileResultErr.
+     2395              RUN gbl/_tmpfile.p ( "ChkGisMT", ".bat", OUTPUT vFileBat ) .
+     2396              CREATE tt-file-name.
+     2397              ASSIGN tt-file-name.tmpFileName = vFileBat.
+     2398              dbgPrint("marking.log", SUBSTITUTE("vFileResult &1 ", vFileResult)).
+     2399              dbgPrint("marking.log", SUBSTITUTE("vFileResultErr &1 ", vFileResultErr)).
+     2400              dbgPrint("marking.log", SUBSTITUTE("vFileBat &1 ", vFileBat)).
+     2401              IF vNumRep = 1 THEN DO:
+     2402                  RUN gbl/_tmpfile.p ( "ChkLMRes", ".txt", OUTPUT vFileResOf ) .
+     2403                  CREATE tt-file-name.
+     2404                  ASSIGN tt-file-name.tmpFileName = vFileResOf
+     2405                         tt-file-name.ofline = YES.
+     2406                  RUN gbl/_tmpfile.p ( "ChkLMResErr", ".txt", OUTPUT vFileResOfErr ) .
+     2407                  CREATE tt-file-name.
+     2408                  ASSIGN tt-file-name.tmpFileName = vFileResOfErr.
+     2409                  RUN gbl/_tmpfile.p ( "ChkLM", ".bat", OUTPUT vFileBatOf ) .
+     2410                  CREATE tt-file-name.
+     2411                  ASSIGN tt-file-name.tmpFileName = vFileBatOf.
+     2412                  dbgPrint("marking.log", SUBSTITUTE("vFileResOf &1 ", vFileResOf)).
+     2413                  dbgPrint("marking.log", SUBSTITUTE("vFileResOfErr &1 ", vFileResOfErr)).
+     2414                  dbgPrint("marking.log", SUBSTITUTE("vFileBatOf &1 ", vFileBatOf)).
+     2415              END.
+     2416              ELSE ASSIGN
+     2417                     vFileResOf = ""
+     2418                     vFileResOfErr = ""
+     2419                     vFileBatOf = ""
+     2420                     .
+     2421              vRetVal = RunCurlGisMT(vGisAdress,
+     2422                                     vDataMark,
+     2423                                     vDataMarkLM,
+     2424                                     CmdParamProxy,
+     2425                                     vFileResult,
+     2426                                     vFileResultErr,
+     2427                                     vFileBat,
+     2428                                     vFileResOf,
+     2429                                     vFileResOfErr,
+     2430                                     vFileBatOf).
+     2431              dbgPrint("marking.log", SUBSTITUTE("Файл ответа &1 результат &1 ", searchFile(vFileResult), vRetVal)).
+     2432              vTimeNow = NOW.
+     2433              OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2434              PUT STREAM out_data UNFORMATTED
+     2435                 vGisAdress CHR(9) vTimeNow CHR(9).
+     2436              OUTPUT STREAM out_data CLOSE.
+     2437              IF searchFile(vfileresult) = ?
+     2438              THEN DO :
+     2439                  OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2440                  PUT STREAM out_data UNFORMATTED
+     2441                     "Отсутствует ответ ГИС МТ " CHR(9).
+     2442                  OUTPUT STREAM out_data CLOSE.
+     2443              END .
+     2444              ELSE DO:
+     2445                  FILE-INFO:FILE-NAME = searchFile(vfileresult) .
+     2446                  IF FILE-INFO:FILE-SIZE = 0
+     2447                  THEN DO :
+     2448                      OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2449                      PUT STREAM out_data UNFORMATTED
+     2450                         "Отсутствует ответ ГИС МТ " CHR(9).
+     2451                      OUTPUT STREAM out_data CLOSE.
+     2452                  END .
+     2453                  ELSE DO:
+     2454                     dbgPrint("marking.log", SUBSTITUTE("Добавляем в лог ответ из файла &1 ", vFileResult)).
+     2455                     vlongJson = "".
+     2456                     COPY-LOB FROM FILE vFileResult TO vlongJson NO-ERROR.
+     2457                     IF vlongJson = "" OR
+     2458                        ERROR-STATUS:ERROR OR
+     2459                        ERROR-STATUS:GET-MESSAGE(1) <> "" THEN DO:
+     2460                        dbgPrint("marking.log", SUBSTITUTE("Возникла ошибка при чтении ответа для записи в лог: &1 ", ERROR-STATUS:GET-MESSAGE(1))).
+     2461                     END.
+     2462                     ELSE DO:
+     2463                         IF vRetVal = -1 THEN DO:
+     2464                            vRetVal = ChkCurlGisMT (vlongJson).
+     2465                            dbgPrint("marking.log", SUBSTITUTE("Думали, что ответа нет, а файл есть, новый результат проверки: &1 ", vRetVal)).
+     2466                         END.
+     2467                         COPY-LOB FROM vlongJson TO FILE vFileLog APPEND NO-ERROR.
+     2468                         IF ERROR-STATUS:ERROR OR
+     2469                            ERROR-STATUS:GET-MESSAGE(1) <> ""
+     2470                         THEN DO:
+     2471                             dbgPrint("marking.log", SUBSTITUTE("Возникла ошибка при добавлении ответа в лог: &1 ", ERROR-STATUS:GET-MESSAGE(1))).
+     2472                         END.
+     2473                         ELSE dbgPrint("marking.log", SUBSTITUTE("Ответ ГИС МТ успешно добавлен в файл &1 ", vFileLog)).
+     2474                     END.
+     2475                  END.
+     2476              END.
+     2477              dbgPrint("marking.log", SUBSTITUTE("Ответ по запросу vRetVal &1", vRetVal)).
+     2478              IF vRetVal = 0 OR
+     2479                 vRetVal = 203 OR
+     2480                 vRetVal = 418
+     2481              THEN LEAVE block_chgcdn.
+     2482              IF vRetVal = 401 THEN DO:
+     2483                  OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2484                  PUT STREAM out_data UNFORMATTED
+     2485                     CHR(9) "Ошибка идентификации по API Key ".
+     2486                  OUTPUT STREAM out_data CLOSE.
+     2487                  LEAVE block_chgcdn.
+     2488              END.
+     2489              ELSE IF vRetVal > 400 AND
+     2490                 vRetVal < 500 AND
+     2491                 vRetVal <> 429
+     2492              THEN DO:
+     2493                 OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2494                 PUT STREAM out_data UNFORMATTED
+     2495                     CHR(9) "Ошибка: некорректный запрос ".
+     2496                 OUTPUT STREAM out_data CLOSE.
+     2497                 LEAVE block_chgcdn.
+     2498              END.
+     2499              IF vRetVal = 5000 AND vNumRep = vNumMax
+     2500              THEN DO:
+     2501                 OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2502                 PUT STREAM out_data UNFORMATTED
+     2503                     CHR(9) "Ошибка недоступности трансграна ".
+     2504                 OUTPUT STREAM out_data CLOSE.
+     2505                 LEAVE block_chgcdn.
+     2506              END.
+     2507              IF vNumRep = vNumMax
+     2508                  AND gismt-cdnTurnOn
+     2509              THEN DO:
+     2510                 vRetCdn = SetCDNAdressErr(vGisAdrCDN).
+     2511              END.
+     2512              IF vNumRep <> vNumMax AND
+     2513                 gismt-cdnTurnOn AND
+     2514                 gismt-cdnRepeat
+     2515              THEN DO:
+     2516                  IF vTimeStart + Int(gismt-WaitTime * 1000) < vTimeNow
+     2517                  THEN DO:
+     2518                     dbgPrint("marking.log", SUBSTITUTE("Время для повторного запроса не осталось: Начало &1 Время ожидания (с) &2 Сейчас &3  ", vTimeStart, gismt-WaitTime, vTimeNow)).
+     2519                     vRetCdn = SetCDNAdressErr(vGisAdrCDN).
+     2520                     LEAVE block_chgcdn.
+     2521                  END.
+     2522              END.
+     2523          END.
+     2524          IF gismt-cdnTurnOn AND gismt-cdnChange
+     2525          THEN DO:
+     2526              vTimeNow = NOW.
+     2527              IF vTimeStart + Int(gismt-WaitTime * 1000) < vTimeNow
+     2528              THEN DO:
+     2529                 dbgPrint("marking.log", SUBSTITUTE("Время подбора площадки закончилось: Начало &1 Время ожидания (с) &2 Сейчас &3  ", vTimeStart, gismt-WaitTime, vTimeNow)).
+     2530                 LEAVE block_chgcdn.
+     2531              END.
+     2532          END.
+     2533          ELSE LEAVE block_chgcdn.
+     2534       END.
+     2535       IF vRetVal <> 0 AND
+     2536          vRetVal <> 203 AND
+     2537          vRetVal <> 418 AND
+     2538          vRetVal <> 5000
+     2539       THEN DO:
+     2540          dbgPrint("marking.log", SUBSTITUTE("Получена ошибка с кодом &1 ", vRetVal)).
+     2541          RETURN 2.
+     2542       END.
+     2543       IF vRetVal = 203 OR
+     2544          vRetVal = 418 OR
+     2545          vRetVal = 5000
+     2546       THEN DO:
+     2547           dbgPrint("marking.log", SUBSTITUTE("Получена ошибка с кодом &1 ", vRetVal)).
+     2548          RETURN vRetVal.
+     2549       END.
+     2550       IF searchFile(vfileresult) = ?
+     2551       THEN DO :
+     2552          dbgPrint("marking.log", "Запрос не выполнен! Не могу найти файл ").
+     2553          RETURN 2.
+     2554       END .
+     2555       FILE-INFO:FILE-NAME = searchFile(vfileresult) .
+     2556       IF FILE-INFO:FILE-SIZE = 0
+     2557       THEN DO :
+     2558          dbgPrint("marking.log", "Запрос не выполнен! Файл-ответ пустой (размер 0 байт). ").
+     2559          RETURN 2.
+     2560       END.
+     2561       COPY-LOB FROM FILE vFileResult TO vlongJson NO-ERROR.
+     2562       COPY-LOB FROM FILE vFileresultErr TO vlongJsonError NO-ERROR.
+     2563       IF INDEX(vlongJsonError,"curl:") > 0 OR
+     2564          vlongJson BEGINS "<html>"
+     2565       THEN DO:
+     2566          dbgPrint("marking.log", "Ошибка ответа от сервиса ").
+     2567          OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2568          PUT STREAM out_data UNFORMATTED
+     2569            CHR(9) "Отсутствует ответ ГИС МТ ".
+     2570          OUTPUT STREAM out_data CLOSE.
+     2571          RETURN 2.
+     2572       END.
+     2573       ASSIGN
+     2574          vlongJson = REPLACE(vlongJson, "&lt;", "###lo-then###")
+     2575          vlongJson = REPLACE(vlongJson, "&Lt;", "###LO-then###")
+     2576          vlongJson = REPLACE(vlongJson, "&lT;", "###lo-THEN###")
+     2577          vlongJson = REPLACE(vlongJson, "&LT;", "###LO-THEN###")
+     2578          vlongJson = REPLACE(vlongJson, "&gt;", "###gr-then###")
+     2579          vlongJson = REPLACE(vlongJson, "&Gt;", "###GR-then###")
+     2580          vlongJson = REPLACE(vlongJson, "&gT;", "###gr-THEN###")
+     2581          vlongJson = REPLACE(vlongJson, "&GT;", "###GR-THEN###")
+     2582          vlongJson = REPLACE(vlongJson, "&", "&amp;")
+     2583          vlongJson = REPLACE(vlongJson, "<", "&lt;")
+     2584          vlongJson = REPLACE(vlongJson, ">", "&gt;")
+     2585          vlongJson = REPLACE(vlongJson, ':null', ':""')
+     2586          vlongJson = REPLACE(vlongJson, (':' + CHR(91) + CHR(123) + CHR(125) + CHR(93)), ':""')
+     2587          vlongJson = REPLACE(vlongJson, ':~{~}', ':""')
+     2588          vlongJson = REPLACE(vlongJson, '"1":', '"n1":')
+     2589          vlongJson = REPLACE(vlongJson, '"2":', '"n2":')
+     2590          vlongJson = REPLACE(vlongJson, '"3":', '"n3":')
+     2591          vlongJson = REPLACE(vlongJson, '"4":', '"n4":')
+     2592          vlongJson = REPLACE(vlongJson, '"5":', '"n5":')
+     2593          vlongJson = REPLACE(vlongJson, '"6":', '"n6":')
+     2594          vlongJson = REPLACE(vlongJson, '"7":', '"n7":')
+     2595          vlongJson = REPLACE(vlongJson, '"8":', '"n8":')
+     2596          vlongJson = REPLACE(vlongJson, '"9":', '"n9":')
+     2597          vlongJson = REPLACE(vlongJson, '"10":', '"n10":')
+     2598          vlongJson = REPLACE(vlongJson, '"11":', '"n11":')
+     2599          vlongJson = REPLACE(vlongJson, '"12":', '"n12":')
+     2600          vlongJson = REPLACE(vlongJson, '"13":', '"n13":')
+     2601          vlongJson = REPLACE(vlongJson, '"14":', '"n14":')
+     2602          vlongJson = REPLACE(vlongJson, '"15":', '"n15":')
+     2603          vlongJson = REPLACE(vlongJson, '"16":', '"n16":')
+     2604          vlongJson = REPLACE(vlongJson, '"17":', '"n17":')
+     2605          vlongJson = REPLACE(vlongJson, '"18":', '"n18":')
+     2606          vlongJson = REPLACE(vlongJson, '"19":', '"n19":')
+     2607          vlongJson = REPLACE(vlongJson, '"20":', '"n20":')
+     2608          vlongJson = REPLACE(vlongJson, '"21":', '"n21":')
+     2609          .
+     2610       RUN gbl/_tmpfile.p ( "ChkGisMTResCnv", ".txt", OUTPUT vFileResultCnv ) .
+     2611       CREATE tt-file-name.
+     2612       ASSIGN tt-file-name.tmpFileName = vFileResultCnv.
+     2613       dbgPrint("marking.log", SUBSTITUTE("vFileResultCnv &1 ", vFileResultCnv)).
+     2614       COPY-LOB FROM vlongJson TO FILE vFileResultCnv NO-ERROR.
+     2615       IF vlongJson = "" THEN DO:
+     2616          dbgPrint("marking.log", "Не получен ответ от сервиса ").
+     2617          OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2618          PUT STREAM out_data UNFORMATTED
+     2619            CHR(9) "Отсутствует ответ ГИС МТ ".
+     2620          OUTPUT STREAM out_data CLOSE.
+     2621          RETURN 2.
+     2622       END.
+     2623       RUN gbl/_tmpfile.p ( "ChkGisMTResXml", ".xml", OUTPUT vFileResultXml ) .
+     2624       CREATE tt-file-name.
+     2625       ASSIGN tt-file-name.tmpFileName = vFileResultXml.
+     2626       dbgPrint("marking.log", SUBSTITUTE("vFileResultXml &1 ", vFileResultXml)).
+     2627       cmd = SUBSTITUTE ('&1 -file=&2 >&3',
+     2628                         SEARCH("exe/json2xml.exe"),
+     2629                         vFileResultCnv,
+     2630                         vfileresultxml).
+     2631       OS-COMMAND SILENT VALUE (cmd).
+     2632       FILE-INFO:FILE-NAME = SEARCH(vfileresultxml) .
+     2633       IF FILE-INFO:FILE-SIZE = 0
+     2634       THEN DO :
+     2635          dbgPrint("marking.log", "Запрос не выполнен! Ошибка при чтении XML <body>. " + ERROR-STATUS:GET-MESSAGE(1)).
+     2636          OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2637          PUT STREAM out_data UNFORMATTED
+     2638            CHR(9) "Отсутствует ответ ГИС МТ ".
+     2639          OUTPUT STREAM out_data CLOSE.
+     2640          RETURN 2.
+     2641       END .
+     2642       COPY-LOB FROM FILE vfileresultxml TO vlongJson NO-ERROR.
+     2643       vlongJson = "<bodys>" +  vlongJson + "</bodys>".
+     2644       COPY-LOB FROM vlongJson TO FILE vfileresultxml NO-ERROR.
+     2645       vRetOk = DATASET gismt-mark-body:READ-XML("FILE":U, vfileresultxml, "EMPTY":U, ?, ?) NO-ERROR.
+     2646       IF NOT vRetOk OR ERROR-STATUS:ERROR THEN DO:
+     2647          dbgPrint("marking.log", "Запрос не выполнен! Ошибка при чтении XML <body>. " + ERROR-STATUS:GET-MESSAGE(1)).
+     2648          OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2649          PUT STREAM out_data UNFORMATTED
+     2650            CHR(9) "Отсутствует ответ ГИС МТ ".
+     2651          OUTPUT STREAM out_data CLOSE.
+     2652          RETURN 2.
+     2653       END.
+     2654       vRetOk = DATASET gismt-mark-codes:READ-XML("FILE":U, vfileresultxml, "EMPTY":U, ?, ?) NO-ERROR.
+     2655       IF NOT vRetOk OR ERROR-STATUS:ERROR THEN DO:
+     2656          dbgPrint("marking.log", "Запрос не выполнен! Ошибка при чтении XML <codes>.").
+     2657          OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     2658          PUT STREAM out_data UNFORMATTED
+     2659            CHR(9) "Отсутствует ответ ГИС МТ ".
+     2660          OUTPUT STREAM out_data CLOSE.
+     2661          RETURN 2.
+     2662       END.
+     2663       RETURN 0.
+     2664     END METHOD.
+     2665     METHOD PRIVATE CHARACTER ChekAccessMark (
+     2666       p-obj-type  AS CHARACTER,
+     2667       p-obj-code  AS INTEGER,
+     2668       mark AS CHARACTER,
+     2669       mark-short AS CHARACTER
+     2670     ):
+     2671       DEFINE VARIABLE vErrSts AS CHARACTER NO-UNDO.
+     2672       DEFINE VARIABLE vMark AS CHARACTER NO-UNDO.
+     2673       DEFINE VARIABLE vGetGisMt AS INT NO-UNDO.
+     2674       DEFINE VARIABLE vMarkNotNeedCheck AS LOGICAL   NO-UNDO.
+     2675       DEFINE VARIABLE vCheckBlock    AS LOGICAL   NO-UNDO.
+     2676       DEFINE VARIABLE vCheckDate     AS LOGICAL   NO-UNDO.
+     2677       DEFINE VARIABLE vCheckMRC      AS LOGICAL   NO-UNDO.
+     2678       DEFINE VARIABLE vCheckOwner    AS LOGICAL   NO-UNDO.
+     2679       DEFINE VARIABLE vCheckStatusKM AS LOGICAL   NO-UNDO.
+     2680       DEFINE VARIABLE vCheckTracking AS LOGICAL   NO-UNDO.
+     2681       DEFINE VARIABLE vCheck         AS LOGICAL   NO-UNDO.
+     2682       DEFINE VARIABLE vMRC AS DECIMAL NO-UNDO.
+     2683       DEFINE VARIABLE vMrp AS DECIMAL NO-UNDO.
+     2684       DEFINE VARIABLE vMRC_r AS DECIMAL NO-UNDO.
+     2685       DEFINE VARIABLE vMrp_r AS DECIMAL NO-UNDO.
+     2686       DEFINE VARIABLE vExpireDMY  AS CHARACTER  NO-UNDO.
+     2687       DEFINE VARIABLE vExpireTime AS CHARACTER  NO-UNDO.
+     2688       DEFINE VARIABLE vExpireDate AS DATETIME-TZ NO-UNDO.
+     2689       DEFINE VARIABLE vExpireTimeMes AS CHARACTER NO-UNDO.
+     2690       DEFINE BUFFER buf_marking-attr FOR ub.marking-attr.
+     2691       DEFINE BUFFER buf_code FOR ub.code.
+     2692       DelTmpFile(YES).
+     2693       DelTmpFile(NO).
+     2694       IF mark = "" OR mark = "?"
+     2695          THEN RETURN "".
+     2696       ASSIGN
+     2697          vErrSts = ""
+     2698          mCheckSts = 1
+     2699          mTypeMark = ""
+     2700          mCheckGisMT = 0
+     2701          .
+     2702       ChekTypeMarkByDm(mark).
+     2703       IF mTypeMark = "" THEN DO:
+     2704           mCheckSts = 0.
+     2705           RETURN "Не опредлен тип маркировки товара. ".
+     2706       END.
+     2707       dbgPrint("marking.log", SUBSTITUTE("Проверка марки p-obj-type &1 p-obj-code &2 mark &3 mTypeMark &4 mark-short &5",
+     2708                                           p-obj-type,
+     2709                                           p-obj-code,
+     2710                                           mark,
+     2711                                           mTypeMark,
+     2712                                           TRIM(mark-short,CHR(29))
+     2713                                           )).
+     2714       vCheckBlock = GetMarkProp (p-obj-type,
+     2715                                  p-obj-code,
+     2716                                  'checkBlock':U,
+     2717                                  mTypeMark).
+     2718       vCheckDate   = GetMarkProp (p-obj-type,
+     2719                                  p-obj-code,
+     2720                                  'checkDate':U,
+     2721                                  mTypeMark).
+     2722       vCheckMRC    = GetMarkProp (p-obj-type,
+     2723                                  p-obj-code,
+     2724                                  'checkMRC':U,
+     2725                                  mTypeMark).
+     2726       vCheckOwner  = GetMarkProp (p-obj-type,
+     2727                                  p-obj-code,
+     2728                                  'checkOwner':U,
+     2729                                  mTypeMark).
+     2730       vCheckStatusKM = GetMarkProp (p-obj-type,
+     2731                                  p-obj-code,
+     2732                                  'checkStatusKM':U,
+     2733                                  mTypeMark).
+     2734       vCheckTracking  = GetMarkProp (p-obj-type,
+     2735                                  p-obj-code,
+     2736                                  'checkTracking':U,
+     2737                                  mTypeMark).
+     2738       IF  vCheckBlock OR vCheckDate OR vCheckMRC OR vCheckOwner OR vCheckStatusKM
+     2739          THEN vCheck = YES.
+     2740       ELSE vCheck = NO.
+     2741       dbgPrint("marking.log", SUBSTITUTE("vCheckBlock &1 vCheckDate &2 vCheckMRC &3 vCheckOwner &4 vCheckStatusKM &5 vCheckTracking &6",
+     2742                                          vCheckBlock,
+     2743                                          vCheckDate,
+     2744                                          vCheckMRC,
+     2745                                          vCheckOwner,
+     2746                                          vCheckStatusKM,
+     2747                                          vCheckTracking)).
+     2748       IF NOT vCheck THEN RETURN "".
+     2749       FIND FIRST buf_marking-attr NO-LOCK WHERE
+     2750                   buf_marking-attr.attr-code = "notOnlineCheck"
+     2751               AND buf_marking-attr.mark BEGINS trim(mark-short,CHR(29))
+     2752           NO-ERROR.
+     2753       IF AVAILABLE buf_marking-attr
+     2754       THEN vMarkNotNeedCheck = LOGICAL(buf_marking-attr.attr-value) NO-ERROR.
+     2755       ELSE vMarkNotNeedCheck = NO.
+     2756       dbgPrint("marking.log", SUBSTITUTE("Игнорировать он-лайн проверку: &1",vMarkNotNeedCheck)).
+     2757       IF vMarkNotNeedCheck THEN DO:
+     2758          mCheckGisMT = 2.
+     2759          RETURN "".
+     2760       END.
+     2761       vGetGisMt = GetGisMTCheck(p-obj-type,p-obj-code,mark,mark-short).
+     2762       DelTmpFile(NO).
+     2763       IF vGetGisMt = 1 THEN DO:
+     2764          ASSIGN
+     2765             mCheckSts = 2
+     2766             mCheckGisMT = 2
+     2767             .
+     2768          RETURN "".
+     2769       END.
+     2770       IF vGetGisMt <> 0 THEN DO:
+     2771           IF vGetGisMt = 2 THEN
+     2772           DO:
+     2773              vErrSts = FixErrGisMT().
+     2774           END.
+     2775           ELSE IF vGetGisMt = 5000
+     2776           THEN DO:
+     2777               ASSIGN
+     2778                  mCheckSts = 2
+     2779                  vErrSts = ""
+     2780                  .
+     2781           END.
+     2782           ELSE IF vGetGisMt = 203 OR
+     2783                   vGetGisMt = 418
+     2784           THEN DO:
+     2785               SetNoErrGisMT().
+     2786               ASSIGN
+     2787                   mCheckSts = 2
+     2788                   vErrSts = ""
+     2789                   mCheckGisMT = 2
+     2790                   .
+     2791           END.
+     2792           RETURN vErrSts.
+     2793       END.
+     2794       ELSE SetNoErrGisMT().
+     2795       mCheckGisMT = 1.
+     2796       dbgPrint("marking.log", "ttmark-body").
+     2797       FIND FIRST ttmark-body NO-LOCK NO-ERROR.
+     2798       IF AVAIL ttmark-body
+     2799       THEN DO:
+     2800           ASSIGN
+     2801              mReqId        = ttmark-body.reqid
+     2802              mReqTimeStamp = STRING(ttmark-body.reqtimestamp)
+     2803              .
+     2804           IF ttmark-body.code <> 0
+     2805           THEN DO:
+     2806              ASSIGN
+     2807                 mCheckSts = 0
+     2808                 vErrSts = "Онлайн-проверка завершилась с ошибкой. "
+     2809                 .
+     2810               RETURN vErrSts.
+     2811           END.
+     2812       END.
+     2813       ELSE DO:
+     2814           dbgPrint("marking.log", "Произошло аварийное завершение метода проверки марки в ГИС МТ - нет шапки ответа.").
+     2815           ASSIGN
+     2816              mCheckSts = 0
+     2817              vErrSts = "Онлайн-проверка завершилась с ошибкой. "
+     2818              .
+     2819           RETURN vErrSts.
+     2820       END.
+     2821       vMRC = getMRCByDM(mark) * 100 NO-ERROR.
+     2822       IF vMRC = ? THEN vMRC = 0.
+     2823       dbgPrint("marking.log", SUBSTITUTE("МРЦ по марке: &1",vMRC)).
+     2824       dbgPrint("marking.log", "ttmark-check").
+     2825       FIND FIRST ttmark-check NO-LOCK NO-ERROR.
+     2826       IF AVAIL ttmark-check
+     2827       THEN DO:
+     2828         IF ttmark-check.errorCode = 0 OR
+     2829            ttmark-check.errorCode = 10
+     2830            THEN .
+     2831         ELSE DO:
+     2832             ASSIGN
+     2833               vErrSts = "Онлайн-проверка завершилась с ошибкой. "
+     2834               mCheckSts = 0.
+     2835             RETURN vErrSts.
+     2836         END.
+     2837         vMrp = int(ttmark-check.mrp) NO-ERROR.
+     2838         IF vCheck THEN DO:
+     2839            IF ttmark-check.found = FALSE
+     2840            THEN DO:
+     2841               ASSIGN
+     2842                   vErrSts = "Данная марка не зарегистрирована в Честном Знаке. "
+     2843                   mCheckSts = 3.
+     2844               RETURN vErrSts.
+     2845            END.
+     2846            IF  vCheckDate = YES THEN DO:
+     2847               IF ttmark-check.expireDate <> ?
+     2848               THEN DO:
+     2849                   vExpireTimeMes = ENTRY(1,STRING(ttmark-check.expireDate),"+").
+     2850                   vExpireDate = DATETIME-TZ(vExpireTimeMes).
+     2851                   IF vExpireDate < NOW + gismt-BanDate * 60 * 1000
+     2852                   THEN DO:
+     2853                     ASSIGN
+     2854                        vErrSts = "Срок годности товара истек " + string(vExpireDate,"99/99/9999 HH:MM") + ". "
+     2855                        mCheckSts = 0.
+     2856                   END.
+     2857               END.
+     2858               ELSE ASSIGN
+     2859                      vErrSts = ""
+     2860                      mCheckSts = 2.
+     2861            END.
+     2862            IF  vCheckBlock AND ttmark-check.isBlocked = TRUE
+     2863            THEN ASSIGN
+     2864                    vErrSts = vErrSts + "Реализация товара запрещена контролирующими органами. "
+     2865                    mCheckSts = 0.
+     2866            IF  vCheckStatusKM AND
+     2867                    (ttmark-check.utilised = FALSE OR
+     2868                    (ttmark-check.realizable = FALSE AND ttmark-check.grayZone = FALSE) OR
+     2869                    ttmark-check.sold = TRUE OR
+     2870                    ttmark-check.verified = FALSE)
+     2871            THEN ASSIGN
+     2872                    vErrSts = vErrSts + "Марка товара в статусе, запрещающем розничную реализацию. "
+     2873                    mCheckSts = 0.
+     2874            IF vCheckMRC AND
+     2875               vMrp <> 0 AND
+     2876               vMRC <> vMrp
+     2877            THEN
+     2878                 ASSIGN
+     2879                    vMRC_r = IF vMRC <> ? THEN ROUND((vMrc / 100), 2) ELSE 0
+     2880                    vMrp_r = ROUND((vMrp / 100), 2)
+     2881                    vErrSts = vErrSts + "МРЦ на упаковке "
+     2882                              + (IF vMRC = ? THEN "не определена" ELSE TRIM(STRING(vMrc_r,">>>>>>>>>>9.99"), " ") + "р.")
+     2883                              + " не совпадает с МРЦ в Честном Знаке - "
+     2884                              + trim(STRING(vMrp_r,">>>>>>>>>>9.99"), " ") + "р. "
+     2885                    mCheckSts = 0
+     2886                    .
+     2887            IF  vCheckOwner AND
+     2888                ttmark-check.isOwner = FALSE AND
+     2889                ((vCheckTracking AND ttmark-check.isTracking = TRUE) OR
+     2890                 NOT vCheckTracking) AND
+     2891                ttmark-check.grayZone = FALSE
+     2892            THEN ASSIGN
+     2893                    vErrSts = vErrSts + "Общество не является владельцем товара. "
+     2894                    mCheckSts = 0.
+     2895         END.
+     2896       END.
+     2897       ELSE DO:
+     2898           dbgPrint("marking.log", "Произошло аварийное завершение метода проверки марки в ГИС МТ - нет тела ответа.").
+     2899           ASSIGN
+     2900              mCheckSts = 0
+     2901              vErrSts = "Онлайн-проверка завершилась с ошибкой. "
+     2902              .
+     2903           RETURN vErrSts.
+     2904       END.
+     2905       dbgPrint("marking.log", SUBSTITUTE("vErrSts &1 mCheckSts &2", vErrSts, mCheckSts)).
+     2906       RETURN vErrSts.
+     2907     END METHOD.
+     2908     METHOD PRIVATE VOID dbgPrint(
+     2909        iLogName AS CHARACTER,
+     2910        iTxt AS CHARACTER
+     2911       ):
+     2912           DEF VAR vLogName AS CHAR NO-UNDO.
+     2913       IF SESSION:DEBUG-ALERT
+     2914       THEN DO:
+     2915          vLogName = ENTRY(1,iLogName,".") + "-" + replace(STRING(TODAY),"/","-") + "." + entry(2,iLogName,".").
+     2916          OUTPUT stream out_s to value(vLogName) append.
+     2917          CASE iTxt:
+     2918             WHEN "gismt-info" THEN DO:
+     2919                PUT STREAM out_s UNFORMATTED
+     2920                      " AdressPort " gismt-AdressPort SKIP
+     2921                      " DopParam " gismt-DopParam SKIP
+     2922                      " GisAdress " gismt-GisAdress SKIP
+     2923                      " ProxyLogin " gismt-ProxyLogin SKIP
+     2924                      " ProxyPswd " gismt-ProxyPswd SKIP
+     2925                      " MaxTime " gismt-MaxTime SKIP
+     2926                      " RegKey " gismt-RegKey SKIP
+     2927                      " TimeFalStart " gismt-TimeFalStart SKIP
+     2928                      " WaitTime " gismt-WaitTime SKIP
+     2929                      " CrashSituat " gismt-CrashSituat SKIP
+     2930                      " BanDate " gismt-BanDate SKIP
+     2931                      " cdnTurnOn " gismt-cdnTurnOn SKIP
+     2932                      " cdnAdress " gismt-cdnAdress SKIP
+     2933                      " cdnRepeat " gismt-cdnRepeat SKIP
+     2934                      " cdnChange " gismt-cdnChange SKIP
+     2935                      " cdnTimeUpd " gismt-cdnTimeUpd SKIP
+     2936                      " UpdateRequest " gismt-UpdateRequest
+     2937                      " OflineAdress " gismt-OflineAdress SKIP
+     2938                      " OflineAutoriz " gismt-OflineAutoriz SKIP
+     2939                      " OflineDate " gismt-OflineDate
+     2940                      SKIP.
+     2941             END.
+     2942             WHEN "ttmark-body" THEN DO:
+     2943                FOR EACH ttmark-body:
+     2944                   PUT STREAM out_s UNFORMATTED
+     2945                       NOW " ttmark-body: " SKIP
+     2946                       "ttmark-body.code " ttmark-body.code SKIP
+     2947                       "ttmark-body.error " ttmark-body.error-1 SKIP
+     2948                       "ttmark-body.requestid " ttmark-body.requestid SKIP
+     2949                       "ttmark-body.status " ttmark-body.status-1 SKIP
+     2950                       "ttmark-body.timestamp " ttmark-body.timestamp SKIP
+     2951                       "ttmark-body.reqid " ttmark-body.reqid SKIP
+     2952                       "ttmark-body.reqtimestamp " ttmark-body.reqtimestamp
+     2953                       SKIP .
+     2954                END.
+     2955             END.
+     2956             WHEN "ttmark-check" THEN DO:
+     2957                FOR EACH ttmark-check:
+     2958                   PUT STREAM out_s UNFORMATTED
+     2959                        NOW " ttmark-check: " SKIP
+     2960                        "ttmark-check.cis: " ttmark-check.cis SKIP
+     2961                        "tttmark-check.printView: " ttmark-check.printView SKIP
+     2962                        "ttmark-check.gtin: " ttmark-check.gtin           SKIP
+     2963                        "ttmark-check.verified: " ttmark-check.verified   SKIP
+     2964                        "ttmark-check.found: " ttmark-check.found         SKIP
+     2965                        "ttmark-check.realizable: " ttmark-check.realizable  SKIP
+     2966                        "ttmark-check.utilised: " ttmark-check.utilised   SKIP
+     2967                        "ttmark-check.isBlocked: " ttmark-check.isBlocked SKIP
+     2968                        "ttmark-check.productionDate: " ttmark-check.productionDate SKIP
+     2969                        "ttmark-check.isOwner: " ttmark-check.isOwner     SKIP
+     2970                        "ttmark-check.errorCode: " ttmark-check.errorCode SKIP
+     2971                        "ttmark-check.isTracking: " ttmark-check.isTracking   SKIP
+     2972                        "ttmark-check.sold: " ttmark-check.sold           SKIP
+     2973                        "ttmark-check.packageType: " ttmark-check.packageType SKIP
+     2974                        "ttmark-check.producerInn: " ttmark-check.producerInn SKIP
+     2975                        "ttmark-check.grayZone: " ttmark-check.grayZone       SKIP
+     2976                        "ttmark-check.mrp: " ttmark-check.mrp SKIP
+     2977                        "ttmark-check.expireDate: " ttmark-check.expireDate
+     2978                        SKIP.
+     2979                END.
+     2980             END.
+     2981             WHEN "ttlocal-mark" THEN DO:
+     2982                 FOR EACH ttlocal-mark:
+     2983                     PUT STREAM out_s UNFORMATTED
+     2984                        NOW " ttlocal-mark: " SKIP
+     2985                        "ttlocal-mark.reqId: " ttlocal-mark.reqId     SKIP
+     2986                        "ttlocal-mark.reqTimestamp: " ttlocal-mark.reqTimestamp     SKIP
+     2987                        "ttlocal-mark.inst: " ttlocal-mark.inst SKIP
+     2988                        "ttlocal-mark.version: " ttlocal-mark.version SKIP
+     2989                        "ttlocal-mark.description: " ttlocal-mark.description       SKIP
+     2990                        "ttlocal-mark.code: " ttlocal-mark.code       SKIP
+     2991                        "ttlocal-mark.errorCode " ttlocal-mark.errorCode SKIP
+     2992                        .
+     2993                 END.
+     2994                 FOR EACH ttlocal-mark-code:
+     2995                     PUT STREAM out_s UNFORMATTED
+     2996                        NOW " ttlocal-mark-code " SKIP
+     2997                        "ttlocal-mark-code.sold: " ttlocal-mark-code.sold     SKIP
+     2998                        "ttlocal-mark-code.isBlocked: " ttlocal-mark-code.isBlocked     SKIP
+     2999                        "ttlocal-mark-code.gtin: " ttlocal-mark-code.gtin     SKIP
+     3000                        "ttlocal-mark-code.cis: " ttlocal-mark-code.cis       SKIP
+     3001                        "ttlocal-mark-code.mrp: " ttlocal-mark-code.mrp       SKIP
+     3002                        .
+     3003                 END.
+     3004             END.
+     3005             OTHERWISE
+     3006                PUT STREAM out_s UNFORMATTED NOW " " iTxt SKIP.
+     3007          END CASE.
+     3008          OUTPUT stream out_s close.
+     3009       END.
+     3010       RETURN.
+     3011     END METHOD.
+     3012     METHOD PRIVATE CHARACTER GetCDNAdress ():
+     3013         DEF BUFFER buf_code FOR ub.code.
+     3014         DEF VAR vAddr AS CHAR NO-UNDO.
+     3015         DEF VAR vTimeResp AS INT NO-UNDO.
+     3016         DEF VAR vTimeNow AS DATETIME-TZ NO-UNDO.
+     3017         ASSIGN
+     3018            vTimeNow = NOW
+     3019            vTimeResp = 0
+     3020            .
+     3021         FOR EACH buf_code NO-LOCK WHERE buf_code.parent = "CDN_GisMt":
+     3022             IF buf_code.code <> "CDN_Upd" THEN DO:
+     3023                 dbgPrint("marking.log", SUBSTITUTE("Площадка &1 Время отклика &2 Время блокировки &3 Текущее время &4 ",
+     3024                                                    buf_code.code,
+     3025                                                    buf_code.codeval,
+     3026                                                    buf_code.misc2,
+     3027                                                    vTimeNow)).
+     3028                 IF buf_code.misc2 = ""
+     3029                 THEN DO:
+     3030                     IF vTimeResp = 0 OR
+     3031                        vTimeResp = ? OR
+     3032                        vTimeResp > int(buf_code.codeval)
+     3033                     THEN
+     3034                        ASSIGN
+     3035                           vAddr = buf_code.code
+     3036                           vTimeResp = int(buf_code.codeval) no-error.
+     3037                 END.
+     3038             END.
+     3039             ELSE dbgPrint("marking.log", SUBSTITUTE("Идет процесс обновления CDN площадок, время начала &1 ",buf_code.codeval)).
+     3040         END.
+     3041         IF vAddr <> "" THEN
+     3042            dbgPrint("marking.log", SUBSTITUTE("Выбрали площадку &1 время отклика &2 ",vAddr,vTimeResp)).
+     3043         ELSE dbgPrint("marking.log", "Не удалось подобрать площадку.").
+     3044         RETURN vAddr.
+     3045     END METHOD.
+     3046     METHOD PRIVATE LOGICAL SetCDNAdressErr (
+     3047         iCdnAdr AS CHARACTER):
+     3048         DEF BUFFER buf_code FOR ub.code.
+     3049         DEF VAR vTimeNow AS DATETIME NO-UNDO.
+     3050         DEF VAR vOk AS LOG NO-UNDO.
+     3051         setsdn:
+     3052         DO TRANSACTION ON ERROR UNDO, RETRY setsdn:
+     3053             vTimeNow = NOW.
+     3054             FIND FIRST buf_code WHERE
+     3055                        buf_code.parent = "CDN_GisMt"
+     3056                    AND buf_code.code = iCdnAdr
+     3057                    EXCLUSIVE-LOCK NO-WAIT NO-ERROR.
+     3058             IF AVAIL buf_code THEN  DO:
+     3059                buf_code.misc2 = STRING(vTimeNow + 15000 * 60).
+     3060                RELEASE buf_code NO-ERROR.
+     3061                IF ERROR-STATUS:ERROR THEN vOk = NO.
+     3062                ELSE vOk = YES.
+     3063             END.
+     3064             ELSE IF LOCKED buf_code THEN
+     3065             DO:
+     3066                vOk = NO.
+     3067                dbgPrint("marking.log", SUBSTITUTE("Заблокирована запись установки блокировки площадки &1", iCdnAdr)).
+     3068             END.
+     3069             ELSE vOk = NO.
+     3070             dbgPrint("marking.log", SUBSTITUTE("Установка площадке &1 время разблокировки &2 успешно &3 &4",
+     3071                                                iCdnAdr, (vTimeNow + 15000 * 60), vOk, ERROR-STATUS:GET-MESSAGE(1))).
+     3072         END.
+     3073         IF RETRY THEN DO:
+     3074             dbgPrint("marking.log", SUBSTITUTE("Ошибка блокировки площадки &1", iCdnAdr)).
+     3075         END.
+     3076         RETURN vOk.
+     3077     END METHOD.
+     3078     METHOD PUBLIC INTEGER CheckCdnNeedUpd ():
+     3079         DEF BUFFER buf_code FOR ub.code.
+     3080         DEF VAR vAddr AS CHAR NO-UNDO.
+     3081         DEF VAR vNeedUpd AS LOG NO-UNDO.
+     3082         DEF VAR vNeedTimeUpd AS LOG NO-UNDO.
+     3083         DEF VAR vReturnValue AS INTEGER NO-UNDO.
+     3084         DEF VAR vAllBlock AS LOG NO-UNDO.
+     3085         DEF VAR vTimeNow AS DATETIME-TZ NO-UNDO.
+     3086         DEF VAR vTimeUpd AS DATETIME-TZ NO-UNDO.
+     3087         DEF VAR vTimeUnbl AS DATETIME-TZ NO-UNDO.
+     3088         ASSIGN
+     3089            vTimeNow = NOW
+     3090            vTimeUpd = ?
+     3091            .
+     3092         vAllBlock = YES.
+     3093         block_code:
+     3094         FOR EACH buf_code NO-LOCK WHERE buf_code.parent = "CDN_GisMt":
+     3095             vTimeUpd = DATETIME-TZ(buf_code.misc1) NO-ERROR.
+     3096             IF buf_code.misc2 <> "" THEN DO:
+     3097                vTimeUnbl = DATETIME-TZ(buf_code.misc2) NO-ERROR.
+     3098                IF vTimeUnbl < vTimeNow THEN vNeedTimeUpd = YES.
+     3099                dbgPrint("marking.log", SUBSTITUTE("Площадка &1 заблокирована &2, требует обновления &3",
+     3100                                                     buf_code.code,
+     3101                                                     vTimeUnbl,
+     3102                                                     vTimeUnbl < vTimeNow)
+     3103                        ).
+     3104             END.
+     3105             IF buf_code.misc2 = ""
+     3106             THEN DO:
+     3107                vAllBlock = NO.
+     3108             END.
+     3109         END.
+     3110         IF vAllBlock OR
+     3111            (vTimeUpd = ? OR
+     3112            (vTimeUpd <> ? AND
+     3113             datetime-tz(vTimeUpd) < vTimeNow AND
+     3114             (vTimeNow - datetime-tz(vTimeUpd)) >= gismt-cdnTimeUpd * 3600 * 1000))
+     3115         THEN DO:
+     3116            FIND FIRST buf_code WHERE
+     3117                     buf_code.parent = "CDN_GisMt"
+     3118                 AND buf_code.code = "CDN_Upd"
+     3119              NO-LOCK NO-ERROR.
+     3120            IF NOT AVAIL buf_code
+     3121            THEN DO:
+     3122               dbgPrint("marking.log", SUBSTITUTE("Обновляем список площадок, все заблокированы &1 время посл обновления &2 Частота обновления (ч) &3 ",
+     3123                                                 vAllBlock, vTimeUpd, gismt-cdnTimeUpd )).
+     3124               vNeedUpd = YES.
+     3125            END.
+     3126            ELSE IF DATETIME-TZ(buf_code.codeval) < (NOW - 20 * 60000) THEN DO:
+     3127               dbgPrint("marking.log", SUBSTITUTE("Обновляем список площадок, флаг обновления был установлен &1",
+     3128                                                   buf_code.codeval )).
+     3129               vNeedUpd = YES.
+     3130            END.
+     3131            ELSE dbgPrint("marking.log", SUBSTITUTE("Площадки не обновляем, идет обновление &1 ",  buf_code.codeval)).
+     3132         END.
+     3133         ELSE IF vNeedTimeUpd THEN DO:
+     3134            FIND FIRST buf_code WHERE
+     3135                     buf_code.parent = "CDN_GisMt"
+     3136                 AND buf_code.code = "CDN_Upd"
+     3137              NO-LOCK NO-ERROR.
+     3138            IF AVAIL buf_code
+     3139            THEN DO:
+     3140                vNeedTimeUpd = NO.
+     3141                dbgPrint("marking.log", SUBSTITUTE("Заблокированную площадку не обновляем, идет обновление &1 ",  buf_code.codeval)).
+     3142            END.
+     3143            ELSE dbgPrint("marking.log", SUBSTITUTE("Обновляем заблокированную площадку, 15 минут блокировки истекли в &1",
+     3144                                                 vTimeUpd )).
+     3145         END.
+     3146         ELSE
+     3147            dbgPrint("marking.log", SUBSTITUTE("Площадки не обновляем. Все заблокированы? &1 Время последнего обновления &2 Частота обновления (ч) &3 Заблокированные площадки &4",
+     3148                                                 vAllBlock, vTimeUpd, gismt-cdnTimeUpd, vNeedTimeUpd )).
+     3149         IF vNeedUpd THEN vReturnValue = 1.
+     3150         ELSE IF vNeedTimeUpd then vReturnValue = 2.
+     3151         ELSE vReturnValue = 0.
+     3152         dbgPrint("marking.log", SUBSTITUTE("Возвращаем значение &1 об обновлении площадок",
+     3153                                            vReturnValue )).
+     3154         RETURN vReturnValue.
+     3155     END METHOD.
+     3156     METHOD PRIVATE INTEGER RunCurlGisMT (
+     3157        vGisAdress AS CHARACTER,
+     3158        vDataMark AS CHARACTER,
+     3159        vDataMarkLM AS CHARACTER,
+     3160        CmdParamProxy AS CHARACTER,
+     3161        vFileResult AS CHARACTER,
+     3162        vFileResultErr AS CHARACTER,
+     3163        vFileBat AS CHARACTER,
+     3164        vFileResOf AS CHARACTER,
+     3165        vFileResOfErr AS CHARACTER,
+     3166        vFileBatOf AS CHARACTER
+     3167        ):
+     3168       DEFINE VARIABLE vBefCurl AS DATETIME-TZ NO-UNDO.
+     3169       DEFINE VARIABLE vAftCurl AS DATETIME-TZ NO-UNDO.
+     3170       DEFINE VARIABLE vpid     AS INTEGER     NO-UNDO.
+     3171       DEFINE VARIABLE vTimePause AS INTEGER   NO-UNDO.
+     3172       DEFINE VARIABLE vRetVal AS INTEGER   NO-UNDO.
+     3173       DEFINE VARIABLE cmd AS CHARACTER   NO-UNDO.
+     3174       DEFINE VARIABLE vlongJson AS LONGCHAR NO-UNDO.
+     3175       DEFINE VARIABLE vlongJson2 AS LONGCHAR NO-UNDO.
+     3176       DEFINE VARIABLE vCh AS CHARACTER NO-UNDO.
+     3177       DEFINE VARIABLE vNumCode AS INTEGER NO-UNDO.
+     3178       DEFINE VARIABLE vNumCode2 AS INTEGER NO-UNDO.
+     3179       DEFINE VARIABLE vcmdof AS CHARACTER   NO-UNDO.
+     3180       DEFINE VARIABLE vpidof AS INTEGER     NO-UNDO.
+     3181       vRetVal = -1.
+     3182       cmd = SUBSTITUTE ('&1 &8 --connect-timeout &9 --max-time &9 -X POST -H "Content-Type: application/json" -H &5 &6 --data @&4 &3 >&2 --stderr &7',
+     3183                         SEARCH ("exe/curl.exe"),
+     3184                         vFileResult,
+     3185                         QUOTER(vGisAdress),
+     3186                         searchfile(vDataMark),
+     3187                         QUOTER("X-api-Key: " + gismt-RegKey),
+     3188                         CmdParamProxy,
+     3189                         vFileResultErr,
+     3190                         gismt-DopParam,
+     3191                         TRIM(REPLACE(STRING(gismt-WaitTime + gismt-WaitTimePlus, "zzzz9.99999"),".",","),"")).
+     3192       dbgPrint("marking.log", "cmd: " + cmd).
+     3193       vBefCurl = NOW.
+     3194       vpid = runProcFile(cmd, vFileBat).
+     3195       IF vFileBatOf <> "" THEN DO:
+     3196           vcmdof = SUBSTITUTE ('&1 --connect-timeout &6 --max-time &6 -X POST -H "Accept: application/json" -H &2 --data @&7 &3 >&4 --stderr &5',
+     3197                             SEARCH ("exe/curl.exe"),
+     3198                             QUOTER("Authorization: Basic " + gismt-OflineAutoriz),
+     3199                             QUOTER(gismt-OflineAdress + "/cis/outCheck"),
+     3200                             vFileResOf,
+     3201                             vFileResOfErr,
+     3202                             TRIM(REPLACE(STRING(gismt-WaitTime, "zzzz9.99999"),".",","),""),
+     3203                             searchfile(vDataMarkLM)).
+     3204           dbgPrint("marking.log", "vcmdof: " + vcmdof).
+     3205           vpidof = runProcFile(vcmdof, vFileBatOf).
+     3206       END.
+     3207       block_wait:
+     3208       DO WHILE TRUE:
+     3209           IF searchFile(vfileresult) <> ? THEN DO:
+     3210               FILE-INFO:FILE-NAME = searchFile(vfileresult).
+     3211               IF FILE-INFO:FILE-SIZE <> 0 THEN DO:
+     3212                  COPY-LOB FROM FILE vFileResult TO vlongJson NO-ERROR.
+     3213                  IF (vlongJson BEGINS "<html>" AND
+     3214                      r-index(vlongJson,"</html>") > 0)
+     3215                     OR
+     3216                     (R-INDEX(vlongJson,"reqTimestamp") > 0 AND
+     3217                      r-index(SUBSTRING(vlongJson,R-INDEX(vlongJson,"reqTimestamp")),"}") > 0)
+     3218                     OR r-index(vlongJson,'"codes":[]}') > 0
+     3219                  THEN DO:
+     3220                      dbgPrint("marking.log", SUBSTITUTE("Сформирован файл-ответ &1", vfileresult)).
+     3221                      LEAVE block_wait.
+     3222                  END.
+     3223               END.
+     3224           END.
+     3225           IF vBefCurl + Int((gismt-WaitTime + gismt-WaitTimePlus) * 1000) < NOW THEN DO:
+     3226              dbgPrint("marking.log", "Время ожидания работы curl истекло").
+     3227              LEAVE block_wait.
+     3228           END.
+     3229           vTimePause = NOW - (vBefCurl + Int((gismt-WaitTime + gismt-WaitTimePlus) * 1000)) + 10.
+     3230           IF vTimePause < -10 THEN
+     3231              RUN gbl/pause.p(10).
+     3232           ELSE IF vTimePause < 0 AND vTimePause > -10
+     3233           THEN
+     3234              RUN gbl/pause.p(0 - vTimePause).
+     3235       END.
+     3236       vAftCurl = NOW.
+     3237       dbgPrint("marking.log", SUBSTITUTE("Время работы curl: Начало &1 Окончание &2 Всего (мс) &3  ", vBefCurl, vAftCurl, vAftCurl - vBefCurl)).
+     3238       vRetVal = ChkCurlGisMT (vlongJson).
+     3239       RETURN vRetVal.
+     3240     END METHOD.
+     3241     METHOD PRIVATE INTEGER ChkCurlGisMT (
+     3242       ilongJson AS LONGCHAR
+     3243       ):
+     3244       DEFINE VARIABLE vRetVal AS INTEGER   NO-UNDO.
+     3245       DEFINE VARIABLE vlongJson2 AS LONGCHAR NO-UNDO.
+     3246       DEFINE VARIABLE vCh AS CHARACTER NO-UNDO.
+     3247       DEFINE VARIABLE vNumCode AS INTEGER NO-UNDO.
+     3248       DEFINE VARIABLE vNumCode2 AS INTEGER NO-UNDO.
+     3249       vRetVal = -1.
+     3250       IF ilongJson BEGINS "<html>" AND index(ilongJson,"<title>") > 0 THEN
+     3251          vRetVal =  int(SUBSTRING(iLongJson, INDEX(iLongJson,"<title>") + 7,3)) NO-ERROR.
+     3252       ELSE IF INDEX(ilongJson,'"code":') > 0 THEN DO:
+     3253          vNumCode = INDEX(iLongJson,'"code":') + 7.
+     3254          vlongJson2 = SUBSTRING(iLongJson, vNumCode).
+     3255          vNumCode2 = INDEX(vLongJson2,",") - 1.
+     3256          vCh = STRING(SUBSTRING(iLongJson, vNumCode, vNumCode2)).
+     3257          vRetVal  = int(vCh).
+     3258       END.
+     3259       RETURN vRetVal.
+     3260     END METHOD.
+     3261     METHOD PRIVATE CHARACTER ChekLocalMark (
+     3262       mark-short AS CHARACTER
+     3263     ):
+     3264        DEFINE VARIABLE vFileResult  AS CHARACTER   NO-UNDO.
+     3265        DEFINE VARIABLE vFileLog     AS CHARACTER   NO-UNDO.
+     3266        DEFINE VARIABLE vlongJson    AS LONGCHAR NO-UNDO.
+     3267        DEFINE VARIABLE hDS          AS HANDLE NO-UNDO.
+     3268        DEFINE VARIABLE vFileResJson AS CHARACTER   NO-UNDO.
+     3269        DEFINE VARIABLE vRetOk       AS LOGICAL NO-UNDO.
+     3270        DEFINE VARIABLE vErrSts      AS CHARACTER   NO-UNDO.
+     3271        DEFINE VARIABLE vChkNotSell  AS LOG       NO-UNDO.
+     3272        DEFINE VARIABLE vErrTxt      AS CHARACTER NO-UNDO.
+     3273        ASSIGN
+     3274           vChkNotSell = NO
+     3275           vFileLog = "GisMtReq-" + replace(STRING(TODAY),"/","-") +  ".log"
+     3276           vErrTxt = "Ошибка при проверке товара в локальном модуле Честный знак. Товар не добавлен в чек. Сообщите управляющему/старшему смены. "
+     3277           mCheckStsOff = 0
+     3278           .
+     3279        FIND FIRST tt-file-name WHERE tt-file-name.ofline = YES NO-ERROR.
+     3280        IF AVAIL tt-file-name
+     3281           AND searchFile(tt-file-name.tmpFileName) <> ?
+     3282        THEN  DO:
+     3283           dbgPrint("marking.log", SUBSTITUTE("Файл офлайн-проверки &1 ", tt-file-name.tmpFileName)).
+     3284           vFileResult = searchFile(tt-file-name.tmpFileName).
+     3285           COPY-LOB FROM FILE vFileResult TO vlongJson NO-ERROR.
+     3286           hDS = DATASET gismt-local-mark:HANDLE.
+     3287           vRetOk  = hDS:read-json("longchar":U, vlongJson) NO-ERROR.
+     3288           DATASET gismt-local-mark:WRITE-JSON("FILE":U, vFileResJson) NO-ERROR.
+     3289           dbgPrint("marking.log", "ttlocal-mark").
+     3290           FIND FIRST ttlocal-mark NO-ERROR.
+     3291           IF AVAIL ttlocal-mark THEN DO:
+     3292               FIND FIRST ttlocal-mark-code NO-ERROR.
+     3293               ASSIGN
+     3294                  mReqId = STRING(ttlocal-mark.ReqId)
+     3295                  mReqTimestamp = STRING(ttlocal-mark.ReqTimestamp)
+     3296                  mInst = ttlocal-mark.inst
+     3297                  mVersion = ttlocal-mark.version
+     3298                  .
+     3299              IF ttlocal-mark.errorCode > 0 THEN DO:
+     3300                 ASSIGN
+     3301                    mCheckSts = 0
+     3302                    mCheckStsOff = 3
+     3303                    vErrSts = vErrTxt.
+     3304                 dbgPrint("marking.log", SUBSTITUTE("Ошибка проверки КИ в ЛМ ЧЗ. Ошибка errorCode &1 reason &2", ttlocal-mark.errorCode, ttlocal-mark.reason)).
+     3305              END.
+     3306              ELSE IF ttlocal-mark.code <> 0 THEN DO:
+     3307                 ASSIGN
+     3308                    mCheckSts = 0
+     3309                    mCheckStsOff = 3
+     3310                    vErrSts = vErrTxt.
+     3311                 dbgPrint("marking.log", SUBSTITUTE("Ошибка проверки КИ в ЛМ ЧЗ. Ошибка Code &1 Описание &2", ttlocal-mark.code, ttlocal-mark.description)).
+     3312              END.
+     3313              IF mReqId = "" OR
+     3314                 mReqTimestamp = "" OR
+     3315                 mInst = "" OR
+     3316                 mVersion = ""
+     3317              THEN DO:
+     3318                 ASSIGN
+     3319                    mCheckSts = 0
+     3320                    mCheckStsOff = 3
+     3321                    vErrSts = vErrTxt.
+     3322                 dbgPrint("marking.log",
+     3323                          SUBSTITUTE("Ошибка проверки КИ в ЛМ ЧЗ. Не определился один из обязательных параметров: ReqId &1 ReqTimestamp &2 Inst &3 Version &4 ",
+     3324                                     mReqId, mReqTimestamp, mInst, mVersion)).
+     3325              END.
+     3326              ELSE IF NOT AVAIL ttlocal-mark-code THEN DO:
+     3327                 ASSIGN
+     3328                    mCheckSts = 0
+     3329                    mCheckStsOff = 3
+     3330                    vErrSts = vErrTxt.
+     3331                 dbgPrint("marking.log", "Ошибка проверки КИ в ЛМ ЧЗ. Не удалось разобрать секцию codes").
+     3332              END.
+     3333              ELSE DO:
+     3334                  IF ttlocal-mark-code.isBlocked THEN
+     3335                  DO:
+     3336                      ASSIGN
+     3337                         vChkNotSell = YES
+     3338                         mCheckStsOff = 0
+     3339                         mCheckSts = 0
+     3340                         .
+     3341                      dbgPrint("marking.log", "КИ в ЛМ ЧЗ помечена как запрещенная к продаже.").
+     3342                      vErrSts = "Реализация товара запрещена контролирующими органами. Снимите с продажи и передайте товар управляющему/старшему смены. ".
+     3343                  END.
+     3344                  ELSE DO:
+     3345                     ASSIGN
+     3346                        mCheckSts = 2
+     3347                        mCheckStsOff = 1
+     3348                        vErrSts = "".
+     3349                     dbgPrint("marking.log", "Проверка в ЛМ ЧЗ прошла успешно.").
+     3350                  END.
+     3351              END.
+     3352           END.
+     3353           ELSE DO:
+     3354               ASSIGN
+     3355                  mCheckSts = 0
+     3356                  mCheckStsOff = 3
+     3357                  vErrSts = vErrTxt.
+     3358               dbgPrint("marking.log", "Ошибка проверки КИ в ЛМ ЧЗ.").
+     3359           END.
+     3360           OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     3361           PUT STREAM out_data UNFORMATTED
+     3362                NOW CHR(9) .
+     3363           OUTPUT STREAM out_data CLOSE.
+     3364           if vlongJson <> "" then
+     3365           COPY-LOB FROM vlongJson TO FILE vFileLog APPEND NO-ERROR.
+     3366           else do:
+     3367               OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     3368               PUT STREAM out_data UNFORMATTED
+     3369                   "Отсутствует ответ ЛМ ЧЗ".
+     3370               OUTPUT STREAM out_data CLOSE.
+     3371           end.
+     3372        END.
+     3373        ELSE DO:
+     3374           ASSIGN
+     3375              mCheckSts = 0
+     3376              mCheckStsOff = 3
+     3377              vErrSts = vErrTxt.
+     3378           dbgPrint("marking.log", "Отсутствует файл офлайн проверки в ЛМ ЧЗ.").
+     3379           OUTPUT STREAM out_data TO value(vFileLog) APPEND.
+     3380           PUT STREAM out_data UNFORMATTED
+     3381                NOW CHR(9) "Отсутствует ответ ЛМ ЧЗ".
+     3382           OUTPUT STREAM out_data CLOSE.
+     3383        END.
+     3384        IF mCheckSts = 0 AND NOT vChkNotSell
+     3385        AND (TODAY < gismt-OflineDate
+     3386             OR mCheckGisMT = 2)
+     3387        THEN  do:
+     3388            ASSIGN
+     3389               mCheckSts = 2
+     3390               mCheckStsOff = 2
+     3391               vErrSts = "".
+     3392            dbgPrint("marking.log", SUBSTITUTE("Разрешаем продавать при отсутствии ответа от ЛМ ЧЗ. mCheckSts &4 vChkNotSell &1 gismt-OflineDate &2 mCheckGisMT &3 mCheckStsOff &5",
+     3393                                               vChkNotSell, gismt-OflineDate, mCheckGisMT, mCheckSts, mCheckStsOff)).
+     3394        end.
+     3395        else do:
+     3396            IF mCheckSts = 0 then
+     3397               dbgPrint("marking.log", SUBSTITUTE("Не разрешаем продавать. mCheckSts &4 vChkNotSell &1 gismt-OflineDate &2 mCheckGisMT &3 mCheckStsOff &5",
+     3398                                                  vChkNotSell, gismt-OflineDate, mCheckGisMT, mCheckSts, mCheckStsOff)).
+     3399            else
+     3400               dbgPrint("marking.log", SUBSTITUTE("Разрешаем продавать. mCheckSts &4 vChkNotSell &1 gismt-OflineDate &2 mCheckGisMT &3 mCheckStsOff &5",
+     3401                                                  vChkNotSell, gismt-OflineDate, mCheckGisMT, mCheckSts, mCheckStsOff)).
+     3402        end.
+     3403        RETURN vErrSts.
+     3404     END.
+     3405     METHOD PRIVATE INTEGER GetResLocalMark (
+     3406       vDataMarkLM AS CHARACTER
+     3407     ):
+     3408       DEFINE VARIABLE vMarkShort AS CHARACTER NO-UNDO.
+     3409       DEFINE VARIABLE vFileResOf AS CHARACTER NO-UNDO.
+     3410       DEFINE VARIABLE vFileResOfErr AS CHARACTER NO-UNDO.
+     3411       DEFINE VARIABLE vFileBatOf AS CHARACTER NO-UNDO.
+     3412       DEFINE VARIABLE vBefCurl AS DATETIME-TZ NO-UNDO.
+     3413       DEFINE VARIABLE vAftCurl AS DATETIME-TZ NO-UNDO.
+     3414       DEFINE VARIABLE vpid     AS INTEGER     NO-UNDO.
+     3415       DEFINE VARIABLE vTimePause AS INTEGER   NO-UNDO.
+     3416       DEFINE VARIABLE vRetVal AS INTEGER   NO-UNDO.
+     3417       DEFINE VARIABLE cmd AS CHARACTER   NO-UNDO.
+     3418       DEFINE VARIABLE vlongJson AS LONGCHAR NO-UNDO.
+     3419       DEFINE VARIABLE vlongJson2 AS LONGCHAR NO-UNDO.
+     3420       DEFINE VARIABLE vCh AS CHARACTER NO-UNDO.
+     3421       DEFINE VARIABLE vNumCode AS INTEGER NO-UNDO.
+     3422       DEFINE VARIABLE vNumCode2 AS INTEGER NO-UNDO.
+     3423       DEFINE VARIABLE vcmdof AS CHARACTER   NO-UNDO.
+     3424       DEFINE VARIABLE vpidof AS INTEGER     NO-UNDO.
+     3425       RUN gbl/_tmpfile.p ( "ChkLMRes", ".txt", OUTPUT vFileResOf ) .
+     3426       CREATE tt-file-name.
+     3427       ASSIGN tt-file-name.tmpFileName = vFileResOf
+     3428              tt-file-name.ofline = YES.
+     3429       RUN gbl/_tmpfile.p ( "ChkLMResErr", ".txt", OUTPUT vFileResOfErr ) .
+     3430       CREATE tt-file-name.
+     3431       ASSIGN tt-file-name.tmpFileName = vFileResOfErr.
+     3432       RUN gbl/_tmpfile.p ( "ChkLM", ".bat", OUTPUT vFileBatOf ) .
+     3433       CREATE tt-file-name.
+     3434       ASSIGN tt-file-name.tmpFileName = vFileBatOf.
+     3435       dbgPrint("marking.log", SUBSTITUTE("vFileResOf &1 ", vFileResOf)).
+     3436       dbgPrint("marking.log", SUBSTITUTE("vFileResOfErr &1 ", vFileResOfErr)).
+     3437       dbgPrint("marking.log", SUBSTITUTE("vFileBatOf &1 ", vFileBatOf)).
+     3438       vcmdof = SUBSTITUTE ('&1 --connect-timeout &6 --max-time &6 -X POST -H "Accept: application/json" -H &2 --data @&7 &3 >&4 --stderr &5',
+     3439                             SEARCH ("exe/curl.exe"),
+     3440                             QUOTER("Authorization: Basic " + gismt-OflineAutoriz),
+     3441                             QUOTER(gismt-OflineAdress + "/cis/outCheck"),
+     3442                             vFileResOf,
+     3443                             vFileResOfErr,
+     3444                             TRIM(REPLACE(STRING(gismt-WaitTime, "zzzz9.99999"),".",","),""),
+     3445                             searchfile(vDataMarkLM)).
+     3446       dbgPrint("marking.log", "vcmdof: " + vcmdof).
+     3447       vBefCurl = NOW.
+     3448       vpidof = runProcFile(vcmdof, vFileBatOf).
+     3449       block_wait:
+     3450       DO WHILE TRUE:
+     3451           IF searchFile(vfileresOf) <> ? THEN DO:
+     3452               FILE-INFO:FILE-NAME = searchFile(vfileresOf).
+     3453               IF FILE-INFO:FILE-SIZE <> 0 THEN DO:
+     3454                  COPY-LOB FROM FILE vFileResOf TO vlongJson NO-ERROR.
+     3455                  IF (vlongJson BEGINS "<html>" AND
+     3456                      r-index(vlongJson,"</html>") > 0)
+     3457                     OR
+     3458                     (R-INDEX(vlongJson,"reqTimestamp") > 0 AND
+     3459                      r-index(SUBSTRING(vlongJson,R-INDEX(vlongJson,"reqTimestamp")),"}") > 0)
+     3460                     OR r-index(vlongJson,'"codes":[]}') > 0
+     3461                  THEN DO:
+     3462                      dbgPrint("marking.log", SUBSTITUTE("Сформирован файл-ответ от ЛМ ЧЗ &1", vfileresOf)).
+     3463                      LEAVE block_wait.
+     3464                  END.
+     3465               END.
+     3466           END.
+     3467           IF vBefCurl + Int(gismt-WaitTime * 1000) < NOW THEN DO:
+     3468              dbgPrint("marking.log", "Время ожидания работы curl истекло").
+     3469              LEAVE block_wait.
+     3470           END.
+     3471           vTimePause = NOW - (vBefCurl + Int(gismt-WaitTime * 1000)) + 10.
+     3472           IF vTimePause < -10 THEN
+     3473              RUN gbl/pause.p(10).
+     3474           ELSE IF vTimePause < 0 AND vTimePause > -10
+     3475           THEN
+     3476              RUN gbl/pause.p(0 - vTimePause).
+     3477       END.
+     3478       vAftCurl = NOW.
+     3479       dbgPrint("marking.log", SUBSTITUTE("Время работы curl: Начало &1 Окончание &2 Всего (мс) &3  ", vBefCurl, vAftCurl, vAftCurl - vBefCurl)).
+     3480       RETURN 1.
+     3481    END.
+     3482     METHOD PRIVATE VOID DelTmpFile(
+     3483         iOfline AS LOGICAL
+     3484         ):
+     3485         FOR EACH tt-file-name WHERE tt-file-name.ofline = iOfline:
+     3486             IF NOT SESSION:DEBUG-ALERT
+     3487             THEN DO:
+     3488                IF searchFile(tt-file-name.tmpFileName) <> ? THEN DO:
+     3489                    OS-DELETE silent value(tt-file-name.tmpFileName).
+     3490                END.
+     3491                IF searchFile(tt-file-name.tmpFileName) = ? THEN
+     3492                DELETE tt-file-name.
+     3493             END.
+     3494             ELSE DELETE tt-file-name.
+     3495         END.
+     3496     END METHOD.
+     3497     METHOD PUBLIC CHARACTER percentCoding(decode-str AS CHAR):
+     3498       DEFINE VARIABLE ii AS INTEGER NO-UNDO.
+     3499       DEFINE VARIABLE encode-str AS CHARACTER NO-UNDO.
+     3500       DEFINE VARIABLE vsimb  AS CHARACTER NO-UNDO.
+     3501       DEFINE VARIABLE spec-str  AS CHARACTER INIT "~"!#$%&'()*+,-./:;<=>?@[\]^" NO-UNDO.
+     3502       DEFINE VARIABLE vInd AS INTEGER NO-UNDO.
+     3503       encode-str = "".
+     3504       DO ii = 1 TO LENGTH (decode-str):
+     3505         vsimb = SUBSTRING(decode-str,ii,1).
+     3506         vInd = INDEX(spec-str,vsimb).
+     3507         encode-str = encode-str + (IF vInd = 0 THEN vsimb ELSE ("%%" + hexencode(vsimb))).
+     3508       END.
+     3509       RETURN encode-str.
+     3510     END METHOD.
+     3511     METHOD PUBLIC CHARACTER hexencode(decode-chr AS CHAR):
+     3512       DEFINE VARIABLE vRaw       AS RAW NO-UNDO.
+     3513       DEFINE VARIABLE encode-chr AS CHARACTER NO-UNDO.
+     3514       LENGTH(vRaw) = 1.
+     3515       put-string(vRaw, 1, 1) = decode-chr.
+     3516       encode-chr  = HEX-ENCODE(vRaw).
+     3517       LENGTH(vRaw) = 0.
+     3518       RETURN encode-chr.
+     3519     END METHOD.
+     3520     define variable vMsg as character no-undo.
+     3521     define frame fMsg
+     3522       vMsg format "x(72)" no-label skip
+     3523       with view-as dialog-box side-labels three-d
+     3524     .
+     3525     METHOD PUBLIC INTEGER checkScanMark (
+     3526       iObjCode AS INTEGER,
+     3527       iMark AS CHARACTER,
+     3528       iMarkShort AS CHARACTER,
+     3529       iRunOffLine AS LOGICAL,
+     3530       OUTPUT oRunedOffLine AS LOGICAL
+     3531     ):
+     3532       DEFINE VARIABLE vAccMarkCheck AS CHARACTER NO-UNDO.
+     3533       DEFINE VARIABLE vMarkGs       AS CHARACTER NO-UNDO.
+     3534       DEFINE VARIABLE vChkScanSts   AS INTEGER   NO-UNDO.
+     3535       DEFINE BUFFER buf_marking FOR ub.marking.
+     3536       dbgPrint("marking.log", SUBSTITUTE("Проверка марки для документа iObjCode &1 iMark &2 iMarkShort &3 iRunOffLine &4",
+     3537                                          iObjCode,
+     3538                                          iMark,
+     3539                                          iMarkShort,
+     3540                                          iRunOffLine)).
+     3541       gismt-WaitTimePlus = 3.
+     3542       oRunedOffLine = false.
+     3543       IF iMarkShort = ? THEN
+     3544       DO:
+     3545         iMarkShort = GetCodeIdent(iMark).
+     3546         IF iMarkShort = "" OR iMarkShort = ? THEN
+     3547           RETURN 2.
+     3548       END.
+     3549       assign
+     3550         mCheckGisMT = 0
+     3551         vMarkGs     = addGs2Mark(iMark)
+     3552         mMarkOrig   = vMarkGs
+     3553       .
+     3554       dbgPrint("marking.log", SUBSTITUTE("Отправка марки в ГИС МТ: &1 -> &2.",
+     3555                                          iMark,
+     3556                                          replace(vMarkGs,chr(29),"<gs>"))).
+     3557       vMsg = "Идет проверка марки, пожалуйста, подождите.".
+     3558       frame fMsg:visible = true.
+     3559       display vMsg with frame fMsg.
+     3560       vAccMarkCheck = ChekAccessMark('маг':U,iObjCode,vMarkGs,iMarkShort).
+     3561       hide frame fMsg.
+     3562       dbgPrint("marking.log", SUBSTITUTE("Проверка ГИС МТ: &1 Статус: &2 mReqId &3 mReqTimeStamp &4 mCheckGisMT &5",
+     3563                                          vAccMarkCheck,
+     3564                                          mCheckSts,
+     3565                                          mReqId,
+     3566                                          mReqTimeStamp,
+     3567                                          mCheckGisMT)).
+     3568       IF mCheckSts = 3 THEN vChkScanSts = 0.
+     3569       ELSE IF mCheckSts = 4 THEN vChkScanSts = 2.
+     3570       ELSE vChkScanSts = mCheckSts.
+     3571       IF NOT iRunOffLine AND vChkScanSts = 2 THEN DO:
+     3572           CASE mCheckGisMT:
+     3573              WHEN 0 THEN
+     3574              DO:
+     3575                 vChkScanSts = 2.
+     3576              END.
+     3577              WHEN 1 THEN
+     3578              DO:
+     3579                 vChkScanSts = 1.
+     3580              END.
+     3581              WHEN 2 THEN
+     3582              DO:
+     3583                 vChkScanSts = 1.
+     3584              END.
+     3585           END CASE.
+     3586       END.
+     3587       IF iRunOffLine THEN DO:
+     3588          IF mCheckGisMT = 1 AND vChkScanSts = 2  THEN vChkScanSts = 1.
+     3589          IF (vChkScanSts = 2 AND mCheckGisMT = 0) OR mCheckGisMT = 2
+     3590          THEN DO:
+     3591              oRunedOffLine = true.
+     3592              vAccMarkCheck = ChekLocalMark(iMarkShort).
+     3593              vChkScanSts = mCheckStsOff.
+     3594          END.
+     3595       END.
+     3596       dbgPrint("marking.log", SUBSTITUTE("Результат проверки ГИС МТ и ЛМ ЧЗ: &1 Проверка офлайн &2",
+     3597                                          vChkScanSts,
+     3598                                          oRunedOffLine)).
+     3599       RETURN vChkScanSts.
+     3600     END METHOD.
+     3601     METHOD PUBLIC CHARACTER ChekExpirationDate (
+     3602         p-obj-type  AS CHARACTER,
+     3603         p-obj-code  AS INTEGER,
+     3604         buffer buf_marking for ub.marking):
+     3605         DEFINE VARIABLE vExpireDate AS DATETIME-TZ NO-UNDO.
+     3606         DEFINE VARIABLE vCheckDate  AS LOGICAL     NO-UNDO.
+     3607         DEFINE VARIABLE vRetProp    AS CHARACTER   NO-UNDO.
+     3608         DEFINE VARIABLE vErrTxt     AS CHARACTER   NO-UNDO.
+     3609         DEFINE BUFFER buf_sys-ctrl     FOR ub.sys-ctrl.
+     3610         IF AVAILABLE buf_marking THEN
+     3611         DO:
+     3612            mTypeMark = "".
+     3613            ChekTypeMarkByDm(buf_marking.mark) .
+     3614         END.
+     3615         dbgPrint("marking.log", SUBSTITUTE("Проверка срока годности для типа марки &1 марка &2",
+     3616                                            mTypeMark,
+     3617                                            (IF AVAILABLE buf_marking then buf_marking.mark else mark))).
+     3618         if mTypeMark = ""
+     3619         then do :
+     3620            ASSIGN
+     3621              vErrTxt = "Не опредлен тип маркировки товара. "
+     3622              mCheckSts = 0
+     3623              .
+     3624         end .
+     3625         IF mTypeMark > "" THEN
+     3626            vCheckDate = GetMarkProp (p-obj-type,
+     3627                                      p-obj-code,
+     3628                                      'checkDate':U,
+     3629                                      mTypeMark).
+     3630         dbgPrint("marking.log", SUBSTITUTE("Требуется ли проверять срок годности &1", vCheckDate)).
+     3631         IF vCheckDate THEN DO:
+     3632            IF AVAILABLE buf_marking
+     3633                AND buf_marking.expDate <> ?
+     3634            THEN vExpireDate = datetime-tz(ENTRY(1,buf_marking.expDate,".")) NO-ERROR.
+     3635            IF vExpireDate = ?
+     3636            THEN DO:
+     3637               IF (StatusPos = 1 OR StatusPos = 2)
+     3638                  AND mCheckSts = 1
+     3639               THEN mCheckSts = 2 .
+     3640               dbgPrint("marking.log", SUBSTITUTE("Срок годности для марки &1 по данным из 1С отсутствует. Дата &2. Проверить срок годности не удалось.",
+     3641                                                  (IF AVAILABLE buf_marking then buf_marking.mark ELSE "<не найдена>"),
+     3642                                                  (IF AVAILABLE buf_marking then buf_marking.expDate ELSE ""))).
+     3643            END.
+     3644            ELSE IF vExpireDate < NOW + gismt-BanDate * 60 * 1000
+     3645            THEN DO:
+     3646               ASSIGN
+     3647                  vErrTxt   = substitute("Срок годности товара истек &1.", substring(string(vExpireDate,"99/99/9999 HH:MM+HH:MM"), 1, 16))
+     3648                  mCheckSts = 0
+     3649                  .
+     3650               LogWrite:WriteFileToLog(SUBSTITUTE("Проверка срока годности не прошла: марка &1 срок годности &2",buf_marking.mark,string(vExpireDate,"99/99/9999 HH:MM"))).
+     3651               dbgPrint("marking.log", SUBSTITUTE("Срок годности по данным из 1С: &1 . Товар просрочен, заблокирован к продаже.",
+     3652                                                  vExpireDate)).
+     3653            END.
+     3654            ELSE DO:
+     3655               IF (StatusPos = 1 OR StatusPos = 2)
+     3656                  AND mCheckSts = 2
+     3657               THEN mCheckSts = 1 .
+     3658               LogWrite:WriteFileToLog(SUBSTITUTE("Проверка срока годности прошла успешно: марка &1 срок годности &2",buf_marking.mark,string(vExpireDate,"99/99/9999 HH:MM"))).
+     3659               dbgPrint("marking.log", SUBSTITUTE("Срок годности по данным из 1С: &1 . Проверка прошла успешно.",
+     3660                                                   vExpireDate)).
+     3661            END.
+     3662         END.
+     3663         ELSE IF (StatusPos = 2 AND mCheckSts = 2)
+     3664              THEN mCheckSts = 1.
+     3665         RETURN vErrTxt.
+     3666     END METHOD.
+     3667     METHOD PRIVATE VOID setOnlineResult(buffer buf_marking for ub.marking):
+     3668       IF statusPOS <> ? AND mCheckGisMT = 1
+     3669       THEN ASSIGN
+     3670               buf_marking.online-result = mCheckStsSave
+     3671               mSaveOnlineResult = yes
+     3672               .
+     3673       ELSE DO:
+     3674          IF (mCheckSts = 0 AND mCheckGisMT = 1) OR mCheckSts = 3
+     3675          THEN
+     3676            buf_marking.online-result = 0.
+     3677          ELSE IF mCheckSts = 2 AND mCheckGisMT = 1
+     3678          THEN
+     3679            buf_marking.online-result = 2.
+     3680          ELSE IF mCheckSts = 1 AND mCheckGisMT = 1
+     3681          THEN
+     3682            buf_marking.online-result = 1.
+     3683       END.
+     3684       dbgprint("marking.log", SUBSTITUTE("Установка марке &1 результата проверки онлайн &2, mCheckSts &3 mCheckGisMT &4 ",
+     3685                                          buf_marking.mark, buf_marking.online-result, mCheckSts, mCheckGisMT )).
+     3686     END METHOD.
+     3687     METHOD PUBLIC CHARACTER GetMarkOnlineResult():
+     3688       define variable mark-short as character no-undo.
+     3689       mark-short = GetCodeIdent(mark).
+     3690       IF mSaveOnlineResult = yes THEN
+     3691          RETURN substitute("&1&2&3",mark-short,chr(9),mCheckStsSave).
+     3692       ELSE
+     3693          RETURN "".
+     3694     END METHOD.
+     3695           DESTRUCTOR PUBLIC marking ( ):
+     3696         DELETE OBJECT cashSts.
+     3697           END DESTRUCTOR.
+     3698   END CLASS.

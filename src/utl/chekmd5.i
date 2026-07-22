@@ -1,0 +1,1 @@
+encode({1} + "sysadm" ) + string(index(encode(string({1})), "k"))

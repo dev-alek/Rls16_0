@@ -1,0 +1,59 @@
+block-level on error undo, throw.
+/*
+
+$Revision$
+$Author$
+$Date$
+$Workfile$
+$Archive$
+
+Триггер на запись истории изменения атрибутов оснований (причин) создания документов
+
+Автор: Чернова Светлана Александровна
+Дата создания: 01/17/07
+Author: Svetlana Chernova
+Creation date: 01/17/07
+
+create: Булгаков Андрей Николаевич
+Дата создания: 10/18/05
+
+*/
+
+TRIGGER PROCEDURE FOR WRITE OF ub.c-trn-rsn-attr NEW BUFFER Buf_New OLD BUFFER Buf_Old.
+
+define variable vss-revision    as character no-undo initial "$Revision$":U.
+define variable vss-author      as character no-undo initial "$Author$":U.
+define variable vss-date        as character no-undo initial "$Date$":U.
+define variable vss-workfile    as character no-undo initial "$Workfile$":U.
+define variable vss-archive     as character no-undo initial "$Archive$":U.
+define variable vss-description as character no-undo initial "Триггер на запись истории изменения атрибутов оснований (причин) создания документов":U.
+{ cmp/vssrevis.i }
+{ cmp/trg-def.i  }
+
+main-block:
+do
+on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, {&new-line}, error-status :get-message (1))
+on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+:
+    if g#news <> yes or ( g#db-num = 0 and Buf_New.corr-user-name <> {&nts-user} ) or
+                        ( g#db-num > 0 and Buf_New.corr-user-name =  {&nts-user} ) then do:
+        run str/callnews.p ( input "c-trn-rsn-attr", input ( buffer Buf_New :handle ) ).
+    end.
+    if g#oxml = yes
+    then do:
+    run str/calloxml.p (
+          input {&nwsdochs_action_update}
+        , input {&table_c-trn-rsn-attr}
+        , input ( buffer ub.c-trn-rsn-attr:handle )
+    ) no-error.
+    if error-status :error
+    then do:
+        undo, return error substitute( "&2&1Ошибка при отправке записи в систему OpenXML&1&3&1&4"
+                             , {&new-line}
+                             , vss-workfile
+                             , return-value
+                             , error-status :get-message ( 1 ) ).
+    end.
+    end.
+end.

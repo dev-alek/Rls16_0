@@ -1,0 +1,327 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-parent-handle as handle no-undo .
+        3   define input parameter p-db-num as integer no-undo .
+        4   define input parameter p-obj-type as character no-undo .
+        5   define input parameter p-obj-code as integer no-undo .
+        6   define input parameter p-host-code as integer no-undo .
+        7   define input parameter count-str as character no-undo .
+        8   define input parameter p-buffer-names as character no-undo .
+        9   define input parameter p-buffer-export as character no-undo .
+       10   define input parameter p-where-phrase as character no-undo .
+       11   define input parameter p-if-phrase as character no-undo .
+       12   define input parameter p-if-buffer-num as integer no-undo .
+       13   define input parameter p-dump-point as character no-undo .
+       14   define input parameter p-hn as logical no-undo .
+       15   define input parameter p-run-or-check as logical no-undo .
+       16   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+       17   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+       18   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+       19   define variable vss-workfile    as character no-undo init "$Workfile: cred-tbl.p $":U .
+       20   define variable vss-archive     as character no-undo init "$Archive: adm/cred-tbl.p $":U .
+       21   define variable vss-description as character no-undo init "Динамическая выгрузка по query".
+       22   procedure vss-get-info :
+       23     define output parameter p-vss-revision    like vss-revision    no-undo .
+       24     define output parameter p-vss-author      like vss-author      no-undo .
+       25     define output parameter p-vss-date        like vss-date        no-undo .
+       26     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       27     define output parameter p-vss-archive     like vss-archive     no-undo .
+       28     define output parameter p-vss-description like vss-description no-undo .
+       29     assign
+       30       p-vss-revision    = vss-revision
+       31       p-vss-author      = vss-author
+       32       p-vss-date        = vss-date
+       33       p-vss-workfile    = vss-workfile
+       34       p-vss-archive     = vss-archive
+       35       p-vss-description = vss-description
+       36     .
+       37   end procedure.
+       38   procedure vss-get-parameters :
+       39     define output parameter p-vss-parameters as character no-undo .
+       40   end procedure.
+       41   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       42   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       43   define variable v-vssrevis-logger                   as handle    no-undo .
+       44   procedure vss-logevent :
+       45     define input  parameter p-extra-paramters as character no-undo .
+       46     define variable v-vssrevis-parameters as character no-undo .
+       47     do
+       48     on error undo, return error return-value
+       49     :
+       50       if  valid-handle(v-vssrevis-logger)
+       51       and v-vssrevis-logger :get-signature("logevent") <> ""
+       52       then do:
+       53         run vss-get-parameters in this-procedure
+       54           (output v-vssrevis-parameters
+       55           ).
+       56         run logevent in v-vssrevis-logger
+       57           (input vss-workfile
+       58           ,input vss-revision
+       59           ,input v-vssrevis-parameters
+       60           ,input p-extra-paramters
+       61           ).
+       62       end.
+       63     end.
+       64   end procedure.
+       65   assign
+       66     v-vssrevis-logger = g#vssrevis-logger
+       67   .
+       68   if  valid-handle(v-vssrevis-logger)
+       69   and v-vssrevis-logger :get-signature("logevent") <> ""
+       70   then do:
+       71     assign
+       72       v-vssrevis-logevent = true
+       73     .
+       74     run vss-logevent in this-procedure (input vss-description) .
+       75   end.
+       76   define new global shared variable g#language as character no-undo .
+       77   if g#language <> '' and g#language <> 'rus':U then do:
+       78     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       79   end.
+       80   define variable v_bh as handle no-undo extent 6.
+       81   define variable v_qh as handle no-undo .
+       82   define variable v-ii as integer no-undo .
+       83   define variable v-dop as character no-undo .
+       84   define variable v-num-buffers as integer no-undo .
+       85   define variable v-buffer-name as character no-undo .
+       86   define variable glog as logical no-undo .
+       87   define variable v-restore as logical no-undo .
+       88   define variable v-prepare-phrase as character no-undo .
+       89   define variable v-dump-point-phrase as character no-undo .
+       90   define variable v-dop-e as character no-undo .
+       91   define variable v-dop-e-log as logical no-undo .
+       92   define temp-table temp-buffers no-undo
+       93   field ub-tbl-name as character
+       94   field dst-tbl-name as character
+       95   field ub-buf-name as character
+       96   field dst-buf-name as character
+       97   field ub-handle as handle
+       98   field dst-handle as handle
+       99   field num-buffer as integer
+      100   field to-export as logical
+      101   index pi is unique primary num-buffer
+      102   .
+      103   define buffer if_temp-buffers for temp-buffers.
+      104   do
+      105   on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      106   :
+      107     define variable fl    as character no-undo .
+      108     define variable v-ind as integer no-undo.
+      109     define variable v-ind-rest as integer no-undo .
+      110     define new shared frame ddd
+      111       count-str  label "":U format "X(50)"
+      112       fl         label "Таблица" format "X(50)"
+      113       v-ind      label "Записей просм."
+      114       v-ind-rest label "Записей перекач."
+      115       with view-as dialog-box side-labels 1 columns three-d title "Перекачка данных".
+      116     if transaction = true
+      117     then do:
+      118       message
+      119         vss-workfile vss-revision vss-description skip
+      120         "Активна транзакция" skip
+      121         substitute( "Выгрузка таблицы &1 невозможна", fl) skip
+      122         view-as alert-box error .
+      123       undo, return error substitute( "Выгрузка таблицы &1 невозможна", fl) .
+      124     end.
+      125     if current-window:window-state = 2 then do:
+      126         current-window:window-state = 3.
+      127     end.
+      128     view frame ddd.
+      129     _ii:
+      130     do v-ii = 1 to num-entries(p-buffer-names)
+      131     on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      132     :
+      133       assign
+      134       v-dop = entry(v-ii, p-buffer-names)
+      135       v-dop-e = entry(v-ii, p-buffer-export)
+      136       .
+      137       if v-dop = '':U then do:
+      138         leave _ii.
+      139       end.
+      140       assign
+      141       v-dop = if v-dop begins "ub."
+      142               then substring(v-dop, 4)
+      143               else v-dop
+      144       v-dop-e-log  = logical(v-dop-e)
+      145       .
+      146       create temp-buffers.
+      147       assign
+      148       temp-buffers.ub-tbl-name = "ub." + (if v-dop begins "buf_"
+      149                                           then entry(2, v-dop, "_")
+      150                                           else entry(1, v-dop, "_"))
+      151       temp-buffers.dst-tbl-name = "dst." + (if v-dop begins "buf_"
+      152                                             then entry(2, v-dop, "_")
+      153                                             else entry(1, v-dop, "_")
+      154                                             )
+      155       temp-buffers.ub-buf-name =
+      156                                   v-dop
+      157       temp-buffers.dst-buf-name = (if v-dop begins "buf_"
+      158                                   then ("dst_" + v-dop)
+      159                                   else v-dop)
+      160       temp-buffers.to-export = v-dop-e-log
+      161       temp-buffers.num-buffer = v-ii
+      162       .
+      163       create buffer temp-buffers.ub-handle for table entry(1, temp-buffers.ub-tbl-name, "_")  buffer-name temp-buffers.ub-buf-name .
+      164       create buffer temp-buffers.dst-handle for table entry(1, temp-buffers.dst-tbl-name, "_")  buffer-name temp-buffers.dst-buf-name .
+      165       v_bh[v-ii] = temp-buffers.ub-handle.
+      166       release temp-buffers.
+      167     end.
+      168     v-num-buffers = v-ii - 1.
+      169     CREATE QUERY v_qh.
+      170     if v-num-buffers = 1 then do:
+      171       glog = v_qh:SET-BUFFERS(v_bh[1]).
+      172       if not glog then return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1)).
+      173     end.
+      174     if v-num-buffers = 2 then do:
+      175       glog = v_qh:SET-BUFFERS(v_bh[1], v_bh[2]).
+      176       if not glog then return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1)).
+      177     end.
+      178     if v-num-buffers = 3 then do:
+      179       glog = v_qh:SET-BUFFERS(v_bh[1], v_bh[2], v_bh[3]).
+      180       if not glog then return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1)).
+      181     end.
+      182     if v-num-buffers = 4 then do:
+      183       glog = v_qh:SET-BUFFERS(v_bh[1], v_bh[2], v_bh[3], v_bh[4]).
+      184       if not glog then return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1)).
+      185     end.
+      186     if v-num-buffers = 5 then do:
+      187       glog = v_qh:SET-BUFFERS(v_bh[1], v_bh[2], v_bh[3], v_bh[4], v_bh[5]).
+      188       if not glog then return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1)).
+      189     end.
+      190     if v-num-buffers = 6 then do:
+      191       glog = v_qh:SET-BUFFERS(v_bh[1], v_bh[2], v_bh[3], v_bh[4], v_bh[5], v_bh[6]).
+      192       if not glog then return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1)).
+      193     end.
+      194     find first temp-buffers.
+      195     assign
+      196     fl = ub-tbl-name.
+      197     case p-dump-point:
+      198       when "obj"
+      199       or
+      200       when "xobj"
+      201       then do:
+      202         assign
+      203         v-dump-point-phrase = substitute(p-where-phrase, p-obj-type, p-obj-code).
+      204       end.
+      205       when "host-obj"
+      206       then do:
+      207         assign
+      208         v-dump-point-phrase = substitute(p-where-phrase, p-obj-type, p-obj-code, p-host-code).
+      209       end.
+      210       when "firm-db"
+      211       then do:
+      212         assign
+      213         v-dump-point-phrase = substitute(p-where-phrase, p-host-code).
+      214       end.
+      215       otherwise do:
+      216         assign
+      217         v-dump-point-phrase = p-where-phrase.
+      218       end.
+      219     end case.
+      220     if v-dump-point-phrase <> '':U then do:
+      221       v-prepare-phrase = substitute("for each &1 where &2"
+      222                                   , temp-buffers.ub-buf-name
+      223                                   , v-dump-point-phrase).
+      224     end.
+      225     else do:
+      226       v-prepare-phrase = substitute("for each &1", temp-buffers.ub-buf-name).
+      227     end.
+      228     assign
+      229     glog = v_qh:QUERY-PREPARE(v-prepare-phrase) no-error .
+      230     if not glog then do:
+      231       run delete-objects in this-procedure .
+      232        return error substitute( "&1. &2&3&4&5&6"
+      233                                             , vss-workfile
+      234                                             , return-value
+      235                                             , chr(10)
+      236                                             , error-status :get-message (1)
+      237                                             , chr(4)
+      238                                             , v-prepare-phrase
+      239                                             ).
+      240     end.
+      241     if not p-run-or-check then do:
+      242       run delete-objects in this-procedure .
+      243       return.
+      244     end.
+      245     glog = v_qh:QUERY-OPEN.
+      246     if not glog then do:
+      247       run delete-objects in this-procedure .
+      248       return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1)).
+      249     end.
+      250     _repeat:
+      251     REPEAT
+      252     on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      253     :
+      254       v_qh:GET-NEXT(no-lock).
+      255       IF v_qh:QUERY-OFF-END THEN LEAVE.
+      256       v-ind = v-ind + 1.
+      257       if not p-hn then do:
+      258         if temp-buffers.ub-handle::corr-user-db-num <> p-db-num then next.
+      259       end.
+      260       if p-if-phrase <> ''
+      261       and p-if-buffer-num <> 1 then do:
+      262         find first if_temp-buffers where
+      263                   if_temp-buffers.num-buffer = p-if-buffer-num.
+      264         CASE p-if-phrase:
+      265           when "ha" then do:
+      266           end.
+      267           otherwise do:
+      268             case p-if-phrase:             when 'if-simple' then do:               if if_temp-buffers.ub-handle::corr-user-name <> (chr(4) +  'СПН':U) or if_temp-buffers.ub-handle::corr-user-db-num = p-db-num then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-self' then do:               if if_temp-buffers.ub-handle::corr-user-db-num = p-db-num then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-simple-and-global' then do:               if (if_temp-buffers.ub-handle::corr-user-name <> (chr(4) +  'СПН':U) or if_temp-buffers.ub-handle::corr-user-db-num = p-db-num)               and (if_temp-buffers.ub-handle::host-code = 0                   or                     (if_temp-buffers.ub-handle::obj-type = '':U                     and                     if_temp-buffers.ub-handle::obj-code = 0)                   )                   then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-global' then do:               if  (if_temp-buffers.ub-handle::host-code = 0                   or                     (if_temp-buffers.ub-handle::obj-type = '':U                     and                     if_temp-buffers.ub-handle::obj-code = 0)                   )                   then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-db-num-1' then do:               if if_temp-buffers.ub-handle::db-num = -1 then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.           end.           end case.
+      269             if v-restore = no then do:
+      270               next _repeat.
+      271             end.
+      272           end.
+      273         end case.
+      274       end.
+      275       _temp:
+      276       for each temp-buffers
+      277       on error undo _temp, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      278       :
+      279         if temp-buffers.num-buffer = 1
+      280         and p-if-buffer-num = 1
+      281         and p-if-phrase <> '':U then do:
+      282           CASE p-if-phrase:
+      283             when "ha" then do:
+      284             end.
+      285             otherwise do:
+      286             case p-if-phrase:             when 'if-simple' then do:               if temp-buffers.ub-handle::corr-user-name <> (chr(4) +  'СПН':U) or temp-buffers.ub-handle::corr-user-db-num = p-db-num then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-self' then do:               if temp-buffers.ub-handle::corr-user-db-num = p-db-num then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-simple-and-global' then do:               if (temp-buffers.ub-handle::corr-user-name <> (chr(4) +  'СПН':U) or temp-buffers.ub-handle::corr-user-db-num = p-db-num)               and (temp-buffers.ub-handle::host-code = 0                   or                     (temp-buffers.ub-handle::obj-type = '':U                     and                     temp-buffers.ub-handle::obj-code = 0)                   )                   then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-global' then do:               if  (temp-buffers.ub-handle::host-code = 0                   or                     (temp-buffers.ub-handle::obj-type = '':U                     and                     temp-buffers.ub-handle::obj-code = 0)                   )                   then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.             end.             when 'if-db-num-1' then do:               if temp-buffers.ub-handle::db-num = -1 then do:                 v-restore = yes.               end.               else do:                 v-restore = no.               end.           end.           end case.
+      287               if v-restore = no then do:
+      288                 next _repeat.
+      289               end.
+      290             end.
+      291           end case.
+      292         end.
+      293         DO TRANSACTION:
+      294           if temp-buffers.to-export
+      295           and temp-buffers.ub-handle:available
+      296           then do:
+      297             glog = temp-buffers.dst-handle:buffer-create.
+      298             glog = temp-buffers.dst-handle:buffer-copy (temp-buffers.ub-handle).
+      299             assign
+      300             v-ind-rest = v-ind-rest + 1.
+      301             if v-ind-rest modulo 1000 = 0 then
+      302             display
+      303             count-str
+      304             fl
+      305             v-ind
+      306             v-ind-rest
+      307             with frame ddd side-labels.
+      308             pause 0.
+      309           end.
+      310         end.
+      311       end.
+      312     END.
+      313     v_qh:QUERY-CLOSE().
+      314     run delete-objects in this-procedure .
+      315   end.
+      316   procedure delete-objects :
+      317     do
+      318     on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+      319     :
+      320       DELETE OBJECT v_qh.
+      321       for each temp-buffers:
+      322        delete object temp-buffers.ub-handle.
+      323        delete object temp-buffers.dst-handle .
+      324        delete temp-buffers.
+      325       end.
+      326     end.
+      327   end procedure.

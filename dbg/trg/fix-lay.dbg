@@ -1,0 +1,2500 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-forced as logical no-undo .
+        3   define input parameter p-read-only as logical no-undo .
+        4   define variable vss-revision    as character no-undo init "$Revision$":U .
+        5   define variable vss-author      as character no-undo init "$Author$":U .
+        6   define variable vss-date        as character no-undo init "$Date$":U .
+        7   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        8   define variable vss-archive     as character no-undo init "$Archive$":U .
+        9   define variable vss-description as character no-undo init "Приведение дефолтных раскладок, имеющихся в БД к эталонному виду".
+       10   procedure vss-get-info :
+       11     define output parameter p-vss-revision    like vss-revision    no-undo .
+       12     define output parameter p-vss-author      like vss-author      no-undo .
+       13     define output parameter p-vss-date        like vss-date        no-undo .
+       14     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       15     define output parameter p-vss-archive     like vss-archive     no-undo .
+       16     define output parameter p-vss-description like vss-description no-undo .
+       17     assign
+       18       p-vss-revision    = vss-revision
+       19       p-vss-author      = vss-author
+       20       p-vss-date        = vss-date
+       21       p-vss-workfile    = vss-workfile
+       22       p-vss-archive     = vss-archive
+       23       p-vss-description = vss-description
+       24     .
+       25   end procedure.
+       26   procedure vss-get-parameters :
+       27     define output parameter p-vss-parameters as character no-undo .
+       28   end procedure.
+       29   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       30   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       31   define variable v-vssrevis-logger                   as handle    no-undo .
+       32   procedure vss-logevent :
+       33     define input  parameter p-extra-paramters as character no-undo .
+       34     define variable v-vssrevis-parameters as character no-undo .
+       35     do
+       36     on error undo, return error return-value
+       37     :
+       38       if  valid-handle(v-vssrevis-logger)
+       39       and v-vssrevis-logger :get-signature("logevent") <> ""
+       40       then do:
+       41         run vss-get-parameters in this-procedure
+       42           (output v-vssrevis-parameters
+       43           ).
+       44         run logevent in v-vssrevis-logger
+       45           (input vss-workfile
+       46           ,input vss-revision
+       47           ,input v-vssrevis-parameters
+       48           ,input p-extra-paramters
+       49           ).
+       50       end.
+       51     end.
+       52   end procedure.
+       53   assign
+       54     v-vssrevis-logger = g#vssrevis-logger
+       55   .
+       56   if  valid-handle(v-vssrevis-logger)
+       57   and v-vssrevis-logger :get-signature("logevent") <> ""
+       58   then do:
+       59     assign
+       60       v-vssrevis-logevent = true
+       61     .
+       62     run vss-logevent in this-procedure (input vss-description) .
+       63   end.
+       64   define new global shared variable g#language as character no-undo .
+       65   if g#language <> '' and g#language <> 'rus':U then do:
+       66     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       67   end.
+       68   define new global shared variable g#library  as handle no-undo .
+       69   define new global shared variable g#library2 as handle no-undo .
+       70   define   shared variable g#auto as logical no-undo.
+       71   define   shared variable g#news as logical no-undo.
+       72   define   shared variable g#oxml as logical no-undo.
+       73   define   shared variable g#esys as logical no-undo.
+       74   define   shared variable g#news-source-db as integer no-undo.
+       75   define   shared variable g#esys-source-esys as integer no-undo.
+       76   define   shared variable g#db-num as integer   no-undo .
+       77   define   shared variable g#userid as character no-undo .
+       78   define   shared variable g#passwd as character no-undo .
+       79   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       80   procedure factord :
+       81     define input  parameter p-fact-date            as date    no-undo .
+       82     define input  parameter p-fact-time            as integer no-undo .
+       83     define input  parameter p-fact-num             as integer no-undo .
+       84     define input  parameter p-shift-date           as date    no-undo .
+       85     define input  parameter p-shift-num            as integer no-undo .
+       86     define input  parameter p-shift-on             as logical no-undo .
+       87     define output parameter p-fact-order           as decimal no-undo .
+       88     define output parameter p-shift-end-fact-order as decimal no-undo .
+       89     define output parameter p-day-end-fact-order   as decimal no-undo .
+       90     define variable vss-description as character no-undo init "factord: Определение порядкового номера документа".
+       91     if p-fact-date = ?
+       92     then do:
+       93       return error "Не указана фактическая дата" .
+       94     end.
+       95     define variable v-fact-date-num as integer no-undo .
+       96     assign
+       97       v-fact-date-num = integer(p-fact-date)
+       98     .
+       99     if p-fact-num = ?
+      100     or p-fact-num = 0
+      101     then do:
+      102       return error "Не задан p-fact-num " + string(p-fact-num) .
+      103     end.
+      104     if p-fact-num < 0
+      105     then do:
+      106       return error "Отрицательный fact-num " + string(p-fact-num) .
+      107     end.
+      108     if p-fact-num >= 100000000
+      109     then do:
+      110       return error "Недопустимо большой fact-num " + string(p-fact-num) .
+      111     end.
+      112     if p-shift-on = true
+      113     then do:
+      114       if p-shift-date = ?
+      115       then do:
+      116         return error "Не задана дата смены" .
+      117       end.
+      118       if p-shift-num = ?
+      119       or p-shift-num = 0
+      120       then do:
+      121         return error "Не задан номер смены" .
+      122       end.
+      123     end.
+      124     else do:
+      125       assign
+      126         p-shift-date = p-fact-date
+      127         p-shift-num  = 24
+      128       .
+      129     end.
+      130     define variable v-shift-offset as integer no-undo .
+      131     if p-shift-date = p-fact-date
+      132     then do:
+      133       assign
+      134         v-shift-offset = 1
+      135       .
+      136     end.
+      137     if p-shift-date < p-fact-date
+      138     then do:
+      139       assign
+      140         v-shift-offset = 0
+      141       .
+      142     end.
+      143     if p-shift-date > p-fact-date
+      144     then do:
+      145       message
+      146         vss-workfile vss-revision vss-description skip
+      147         "Неправильная дата закрытия смены" skip
+      148         "Дата закрытия не смены не может быть раньше чем дата открытия смены" skip
+      149         view-as alert-box error .
+      150       undo, return error
+      151         substitute("Дата закрытия не смены &1 не может быть раньше чем дата открытия смены &2"
+      152           ,string(p-fact-date, '99/99/9999':U)
+      153           ,string(p-shift-date, '99/99/9999':U)
+      154           )
+      155       .
+      156     end.
+      157     if p-shift-num < 1
+      158     or p-shift-num > 24
+      159     then do:
+      160       message
+      161         vss-workfile vss-revision vss-description skip
+      162         "Неправильный номер смены" skip
+      163         "p-shift-num" p-shift-num skip
+      164         view-as alert-box error .
+      165       undo, return error return-value .
+      166     end.
+      167     assign
+      168       p-fact-order           = v-fact-date-num
+      169                              + v-shift-offset * 0.5
+      170                              + p-shift-num    * 0.02 - 0.01
+      171                              + p-fact-num     * 0.0000000001
+      172       p-shift-end-fact-order = v-fact-date-num
+      173                              + v-shift-offset * 0.5
+      174                              + p-shift-num    * 0.02
+      175       p-day-end-fact-order   = v-fact-date-num
+      176                              + 0.99
+      177     .
+      178     if p-fact-order           <= v-fact-date-num
+      179     or p-shift-end-fact-order <= v-fact-date-num
+      180     or p-fact-order           >= p-shift-end-fact-order - 0.0000000001
+      181     or p-shift-end-fact-order >= p-day-end-fact-order
+      182     then do:
+      183       message
+      184         vss-workfile vss-revision vss-description skip
+      185         "Внутренняя ошибка при генерации фактического номера" skip
+      186         "p-fact-date"            p-fact-date            skip
+      187         "p-fact-time"            p-fact-time            skip
+      188         "p-fact-num"             p-fact-num             skip
+      189         "p-shift-date"           p-shift-date           skip
+      190         "p-shift-num"            p-shift-num            skip
+      191         "p-shift-on"             p-shift-on             skip
+      192         "p-shift-end-fact-order" p-shift-end-fact-order skip
+      193         "p-day-end-fact-order"   p-day-end-fact-order   skip
+      194         "v-fact-date-num"        v-fact-date-num        skip
+      195         view-as alert-box error .
+      196       undo, return error return-value .
+      197     end.
+      198   end procedure.
+      199   procedure day-begin-fact-order :
+      200     define input  parameter p-fact-date            as date    no-undo .
+      201     define output parameter p-day-begin-fact-order as decimal no-undo .
+      202     do
+      203     on error undo, return error return-value
+      204     :
+      205       if p-fact-date = ?
+      206       then do:
+      207         assign
+      208           p-day-begin-fact-order = 0
+      209         .
+      210       end.
+      211       else do:
+      212         assign
+      213           p-day-begin-fact-order = integer(p-fact-date)
+      214         .
+      215       end.
+      216     end.
+      217   end procedure.
+      218   procedure factord-max-fact-order :
+      219     define output parameter p-max-fact-order as decimal   no-undo .
+      220     do
+      221     on error undo, return error return-value
+      222     :
+      223       run day-begin-fact-order in this-procedure
+      224         (input  date(1, 1, 5000)
+      225         ,output p-max-fact-order
+      226         ) .
+      227     end.
+      228   end procedure.
+      229   procedure factord-cut-archive :
+      230     define input  parameter p-obj-type             as character no-undo .
+      231     define input  parameter p-obj-code             as integer   no-undo .
+      232     define input  parameter p-fact-date            as date      no-undo .
+      233     define output parameter p-shift-on             as logical   no-undo .
+      234     define output parameter p-shift-date           as date      no-undo .
+      235     define output parameter p-shift-num            as integer   no-undo .
+      236     define output parameter p-day-end-fact-order   as decimal   no-undo .
+      237     define output parameter p-shift-end-fact-order as decimal   no-undo .
+      238     define variable v-fact-order as decimal   no-undo .
+      239     define buffer buf_shift-obj for ub.shift-obj .
+      240     do
+      241     on error undo, return error return-value
+      242     :
+      243   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      244   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      245     (input  p-obj-type
+      246     ,input  p-obj-code
+      247     ,input  'shift-on=request'
+      248     ,output p-shift-on
+      249     ) no-error .
+      250       if error-status :error
+      251       then do:
+      252         message
+      253           vss-workfile vss-revision vss-description skip
+      254           "Ошибка при определении атрибута объекта" skip
+      255           "Объект" p-obj-type p-obj-code skip
+      256           error-status :get-message(1) skip
+      257           return-value skip
+      258           view-as alert-box error .
+      259         undo, return error return-value .
+      260       end.
+      261       if p-shift-on = false
+      262       then do:
+      263         assign
+      264           p-shift-date               = ?
+      265           p-shift-num                = 0
+      266         .
+      267       end.
+      268       else do:
+      269         find first buf_shift-obj share-lock
+      270           where buf_shift-obj.obj-type   = p-obj-type
+      271             and buf_shift-obj.obj-code   = p-obj-code
+      272             and buf_shift-obj.shift-date > p-fact-date
+      273           use-index pi
+      274           no-error .
+      275         if not available buf_shift-obj
+      276         or buf_shift-obj.status_ <> 'зкр':U
+      277         then do:
+      278           message
+      279             vss-workfile vss-revision vss-description skip
+      280             "Невозможно вычислить последнюю смену" skip
+      281             "Отсутствует закрытая смена с датой большей чем дата инициализации архива" skip
+      282             "Объект" p-obj-type p-obj-code skip
+      283             "Дата" p-fact-date skip
+      284             view-as alert-box error .
+      285           undo, return error return-value .
+      286         end.
+      287         find last buf_shift-obj share-lock
+      288           where buf_shift-obj.obj-type = p-obj-type
+      289             and buf_shift-obj.obj-code = p-obj-code
+      290             and buf_shift-obj.shift-date <= p-fact-date
+      291           use-index pi
+      292           no-error .
+      293         if available buf_shift-obj
+      294         then do:
+      295           if  buf_shift-obj.status_ = 'зкр':U
+      296           then do:
+      297             assign
+      298               p-shift-date = buf_shift-obj.shift-date
+      299               p-shift-num  = buf_shift-obj.shift-num
+      300             .
+      301           end.
+      302           else do:
+      303             message
+      304               vss-workfile vss-revision vss-description skip
+      305               "Невозможно вычислить последнюю смену" skip
+      306               "Статус смены отличен от статуса" 'зкр':U skip
+      307               "Объект" p-obj-type p-obj-code skip
+      308               "Дата" p-fact-date skip
+      309               "Смена" buf_shift-obj.shift-date buf_shift-obj.shift-num skip
+      310               view-as alert-box error .
+      311             undo, return error return-value .
+      312           end.
+      313         end.
+      314         else do:
+      315           assign
+      316             p-shift-date = p-fact-date - 1
+      317             p-shift-num  = 1
+      318           .
+      319         end.
+      320       end.
+      321       run factord in this-procedure
+      322         (input  p-fact-date
+      323         ,input  1
+      324         ,input  1
+      325         ,input  p-shift-date
+      326         ,input  p-shift-num
+      327         ,input  p-shift-on
+      328         ,output v-fact-order
+      329         ,output p-shift-end-fact-order
+      330         ,output p-day-end-fact-order
+      331         ) no-error .
+      332       if error-status :error
+      333       then do:
+      334         message
+      335           vss-workfile vss-revision vss-description skip
+      336           "Ошибка при вызове процедуры factord"
+      337           error-status :get-message(1) skip
+      338           return-value skip
+      339           view-as alert-box error .
+      340         undo, return error return-value .
+      341       end.
+      342     end.
+      343   end procedure.
+      344   procedure factord-lock-shift :
+      345     define input  parameter p-obj-type  as character no-undo .
+      346     define input  parameter p-obj-code  as integer   no-undo .
+      347     define input  parameter p-fact-date as date      no-undo .
+      348     define parameter buffer buf_shift-obj for ub.shift-obj .
+      349     define variable v-shift-on      as logical   no-undo .
+      350     define variable v-extra-message as character no-undo .
+      351     define variable v-error as character no-undo .
+      352     do
+      353     on error undo, return error return-value
+      354     :
+      355   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      356   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      357     (input  p-obj-type
+      358     ,input  p-obj-code
+      359     ,input  'shift-on=request'
+      360     ,output v-shift-on
+      361     ) no-error .
+      362       if error-status :error
+      363       then do:
+      364         v-error = substitute("Ошибка при определении атрибута объекта  &1 &2 &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value) .
+      365         undo, return error v-error .
+      366       end.
+      367       if v-shift-on = true
+      368       then do:
+      369         find first buf_shift-obj share-lock
+      370           where buf_shift-obj.obj-type   = p-obj-type
+      371             and buf_shift-obj.obj-code   = p-obj-code
+      372             and buf_shift-obj.shift-date > p-fact-date
+      373           use-index pi
+      374           no-error .
+      375         if not available buf_shift-obj
+      376         or buf_shift-obj.status_ <> 'зкр':U
+      377         then do:
+      378           find last buf_shift-obj
+      379             where buf_shift-obj.obj-type = p-obj-type
+      380               and buf_shift-obj.obj-code = p-obj-code
+      381               and buf_shift-obj.status_  = 'зкр':U
+      382             use-index stts
+      383             no-error .
+      384           if available buf_shift-obj
+      385           then do:
+      386             assign
+      387               v-extra-message =
+      388                     substitute("Дата начала последеней закрытой смены на объекте &1"
+      389                               ,string(buf_shift-obj.shift-date, '99/99/9999':u)
+      390                               )
+      391             .
+      392           end.
+      393           v-error = substitute("Ошибка при блокировке смены объекта  &1 &2 Отсутствует закрытая смена с датой большей чем указанная дата  &5  &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value , p-fact-date) .
+      394           undo, return error v-error .
+      395         end.
+      396       end.
+      397     end.
+      398   end procedure.
+      399   procedure factord-end-day :
+      400     define input  parameter p-fact-date            as date    no-undo .
+      401     define output parameter p-day-end-fact-order   as decimal no-undo .
+      402     do
+      403     on error undo, return error return-value
+      404     :
+      405       if p-fact-date = ?
+      406       then do:
+      407         return error "Не указана фактическая дата" .
+      408       end.
+      409       assign
+      410         p-day-end-fact-order = integer(p-fact-date) + 0.99
+      411       .
+      412     end.
+      413   end procedure.
+      414   procedure factord-to-date :
+      415     define input  parameter p-fact-order as decimal no-undo .
+      416     define output parameter p-fact-date  as date    no-undo .
+      417     define variable v-ref-date  as date      no-undo .
+      418     define variable v-ref-delta as integer   no-undo .
+      419     do
+      420     on error undo, return error return-value
+      421     :
+      422       if p-fact-order = ?
+      423       or p-fact-order = 0
+      424       then do:
+      425         return error "Не указан fact-order" .
+      426       end.
+      427       assign
+      428         v-ref-date  = date(1, 1, 2000)
+      429       .
+      430       assign
+      431         v-ref-delta = integer(truncate(p-fact-order, 0)) - integer(v-ref-date)
+      432       .
+      433       assign
+      434         p-fact-date = v-ref-date + v-ref-delta
+      435       .
+      436     end.
+      437   end procedure.
+      438   procedure factord-to-fact-num :
+      439     define input  parameter p-fact-order as decimal no-undo .
+      440     define output parameter p-fact-num   as integer no-undo .
+      441     define variable v-fact-order-trunc as decimal no-undo .
+      442     do
+      443     on error undo, return error return-value
+      444     :
+      445       if p-fact-order = ?
+      446       or p-fact-order = 0
+      447       then do:
+      448         return error "Не указан fact-order" .
+      449       end.
+      450       assign
+      451        v-fact-order-trunc = truncate(p-fact-order, 2)
+      452       .
+      453       assign
+      454         p-fact-num = (p-fact-order - v-fact-order-trunc ) * 10000000000
+      455       .
+      456     end.
+      457   end procedure.
+      458   procedure factord-to-shift-num :
+      459     define input  parameter p-fact-order as decimal no-undo .
+      460     define output parameter p-shift-num   as integer no-undo .
+      461     define variable  p-shift-numd  as decimal   no-undo .
+      462     define variable v-fact-order-trunc as decimal no-undo .
+      463     do
+      464     on error undo, return error return-value
+      465     :
+      466       if p-fact-order = ?
+      467       or p-fact-order = 0
+      468       then do:
+      469         return error "Не указан fact-order" .
+      470       end.
+      471       assign
+      472        v-fact-order-trunc = truncate(p-fact-order, 2)  - truncate(p-fact-order,0)
+      473       .
+      474       if v-fact-order-trunc < 0.5 then do:
+      475         v-fact-order-trunc = v-fact-order-trunc + 0.5.
+      476       end.
+      477       assign
+      478         p-shift-numd = (( v-fact-order-trunc  * 100 - 50 ) + 1 ) / 2
+      479         .
+      480        assign
+      481         p-shift-num = truncate (p-shift-numd , 0)
+      482       .
+      483     end.
+      484   end procedure.
+      485   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      486   procedure cur-time :
+      487      define output parameter p-today as date      no-undo .
+      488      define output parameter p-time  as integer   no-undo .
+      489     do
+      490     on error undo, return error
+      491     :
+      492       define variable v-date1 as date      no-undo .
+      493       define variable v-date2 as date      no-undo .
+      494       define variable v-time  as integer   no-undo .
+      495       assign
+      496         v-date1 = today
+      497         v-time  = time
+      498         v-date2 = today
+      499       .
+      500       if v-date1 <> v-date2
+      501       then do:
+      502         assign
+      503           v-date1 = today
+      504           v-time  = v-time
+      505         .
+      506       end.
+      507       assign
+      508         p-today = v-date1
+      509         p-time  = v-time
+      510       .
+      511     end.
+      512   end.
+      513   function cur-time-date returns character
+      514   :
+      515     return string(today, '99/99/9999':U) .
+      516   end.
+      517   function cur-time-mjd returns decimal
+      518   :
+      519     define variable v-date as date      no-undo .
+      520     define variable v-time as integer   no-undo .
+      521     run cur-time in this-procedure
+      522       (output v-date
+      523       ,output v-time
+      524       ) .
+      525     return integer(v-date) - 2400002 + (v-time / 86400) .
+      526   end.
+      527   function cur-time-get-ending-index returns integer
+      528   (input p-number as integer
+      529   )
+      530   :
+      531     if p-number < 0
+      532     or p-number = ?
+      533     then do:
+      534       return 1 .
+      535     end.
+      536     define variable v-rest as integer   no-undo .
+      537     assign
+      538       p-number = p-number modulo 100
+      539     .
+      540     if p-number < 20
+      541     then do:
+      542       assign
+      543         v-rest = p-number
+      544       .
+      545     end.
+      546     else do:
+      547       assign
+      548         v-rest = p-number modulo 10
+      549       .
+      550     end.
+      551     case v-rest :
+      552       when 1
+      553       then do:
+      554         return 2 .
+      555       end.
+      556       when 2 or
+      557       when 3 or
+      558       when 4
+      559       then do:
+      560         return 3 .
+      561       end.
+      562       otherwise do:
+      563         return 1 .
+      564       end.
+      565     end case .
+      566   end.
+      567   procedure cur-time-mjd-to-date :
+      568      define input  parameter i-mjd-diff as decimal no-undo.
+      569      define output parameter o-Date     as date    no-undo.
+      570      define output parameter o-Time     as integer no-undo.
+      571      define variable v-day-number as integer   no-undo .
+      572      if    i-mjd-diff < 0
+      573         or i-mjd-diff = ?
+      574      then do:
+      575         return "?" .
+      576      end.
+      577      assign
+      578         v-day-number = truncate(i-mjd-diff,0).
+      579         o-Date = date(v-day-number + 2400002).
+      580         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      581     .
+      582   end.
+      583   function cur-time-mjd-to-string returns character
+      584   (input p-mjd-diff as decimal
+      585   )
+      586   :
+      587     define variable v-day-number as integer   no-undo .
+      588     define variable v-seconds    as integer   no-undo .
+      589     define variable v-hour       as integer   no-undo .
+      590     define variable v-min        as integer   no-undo .
+      591     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      592     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      593     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      594     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      595     if p-mjd-diff < 0
+      596     or p-mjd-diff = ?
+      597     then do:
+      598       return "?" .
+      599     end.
+      600     assign
+      601       v-day-number = integer(truncate(p-mjd-diff,0))
+      602       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      603     .
+      604     if v-seconds > 86400
+      605     then do:
+      606       assign
+      607         v-seconds = 86400 - 1
+      608       .
+      609     end.
+      610     if v-seconds < 0
+      611     then do:
+      612       assign
+      613         v-seconds = 0
+      614       .
+      615     end.
+      616     assign
+      617       v-hour = truncate(v-seconds / 3600, 0)
+      618     .
+      619     assign
+      620       v-seconds = v-seconds modulo 3600
+      621     .
+      622     assign
+      623       v-min = truncate(v-seconds / 60, 0)
+      624     .
+      625     assign
+      626       v-seconds = v-seconds modulo 60
+      627     .
+      628     return
+      629         (if v-day-number <> 0
+      630           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      631           else ""
+      632         )
+      633       + (if v-day-number <> 0 or v-hour <> 0
+      634           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      635           else ""
+      636         )
+      637       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      638           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      639           else ""
+      640         )
+      641       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      642       .
+      643   end.
+      644   function cur-time-string returns character
+      645   :
+      646     define variable v-date as date      no-undo .
+      647     define variable v-time as integer   no-undo .
+      648     run cur-time in this-procedure
+      649       (output v-date
+      650       ,output v-time
+      651       ) .
+      652     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      653   end.
+      654   function cur-time-string-sec returns character
+      655   :
+      656     define variable v-date as date      no-undo .
+      657     define variable v-time as integer   no-undo .
+      658     run cur-time in this-procedure
+      659       (output v-date
+      660       ,output v-time
+      661       ) .
+      662     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      663   end.
+      664   function cur-time-custom  returns character
+      665   (input p-prefix as character
+      666   ,input p-date-format as character
+      667   ,input p-delimiter as character
+      668   ,input p-time-format as character
+      669   ,input p-suffix as character
+      670   )
+      671   :
+      672     define variable v-date as date      no-undo .
+      673     define variable v-time as integer   no-undo .
+      674     run cur-time in this-procedure
+      675       (output v-date
+      676       ,output v-time
+      677       ) .
+      678     return
+      679       p-prefix
+      680       + string(v-date, p-date-format)
+      681       + p-delimiter
+      682       + string(v-time, p-time-format)
+      683       + p-suffix
+      684       .
+      685   end.
+      686   function cur-time-print  returns character
+      687   :
+      688     define variable v-date as date      no-undo .
+      689     define variable v-time as integer   no-undo .
+      690     run cur-time in this-procedure
+      691       (output v-date
+      692       ,output v-time
+      693       ) .
+      694     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      695   end.
+      696   function cur-time-datetime returns datetime
+      697   :
+      698     define variable v-char as character no-undo .
+      699     define variable v-datetime as datetime no-undo .
+      700     v-char = cur-time-string().
+      701     v-datetime = datetime(v-char).
+      702     return  v-datetime.
+      703   end.
+      704   function cur-time-string-msec returns character
+      705   :
+      706     define variable v-date as datetime  no-undo .
+      707     v-date = now.
+      708     return string(v-date) .
+      709   end.
+      710   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      711   define variable v-waitfram-action01         as character   no-undo .
+      712   define variable v-waitfram-action02         as character   no-undo .
+      713   define variable v-waitfram-action03         as character   no-undo .
+      714   define variable mWaitFramTextBeg            as character   no-undo.
+      715   define variable mWaitFramTextEnd            as character   no-undo.
+      716   define variable mWaitFramView               as logical     no-undo.
+      717   define variable mWaitProcEvent              as logical     no-undo init yes.
+      718   define variable mWaitFramInterval           as integer     no-undo init 1 .
+      719   define variable mWaitFramStop               as logical     no-undo.
+      720   define variable mWaitFramStopUser           as logical     no-undo.
+      721   define variable mWaitFramStopTimeOut        as logical     no-undo.
+      722   define variable mWaitFramStartProc          as datetime-tz no-undo.
+      723   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+      724   define button B-WaitFramStop auto-end-key
+      725        label "Стоп"
+      726        size 10 by 1 tooltip "Остоновить процесс".
+      727   define button B-viewProcInfo
+      728        label "Информация"
+      729        size 15 by 1 tooltip "Информация о процесс".
+      730   define frame waitfram
+      731     v-waitfram-action01 format "x(72)" no-label skip
+      732     v-waitfram-action02 format "x(72)" no-label skip
+      733     v-waitfram-action03 format "x(72)" no-label skip
+      734     B-viewProcInfo
+      735     B-WaitFramStop at row 4 col 30
+      736     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+      737     .
+      738   define new global shared variable mBatchMode as logical no-undo init ?.
+      739   define variable mFramBachModHandle as handle no-undo.
+      740   mFramBachModHandle = frame waitfram:handle.
+      741   define variable mFameOldVis as logical no-undo.
+      742   define variable mVisCUrentVin as logical no-undo.
+      743   if session:batch-mode
+      744   then
+      745      mBatchMode = yes.
+      746   if mBatchMode = ? then do:
+      747     mVisCUrentVin = current-window:visible.
+      748     mFameOldVis = mFramBachModHandle:visible.
+      749     mFramBachModHandle:visible  = yes.
+      750     mBatchMode = mFramBachModHandle:visible ne yes.
+      751     mFramBachModHandle:visible = mFameOldVis.
+      752     current-window:visible = mVisCUrentVin.
+      753   end.
+      754    if  log-manager:logfile-name ne ?
+      755     then DO:
+      756         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      757         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      758         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+      759     end.
+      760   on choose of B-WaitFramStop in frame waitfram
+      761   do:
+      762     mWaitFramStop = yes.
+      763     mWaitFramStopUser = yes.
+      764   end.
+      765   function waitfram-check-timeout returns logical():
+      766      define variable vtime as int64 no-undo.
+      767      if mWaitFramStopTimeOut
+      768      then
+      769         return yes.
+      770      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      771      if     mWaitFramTimeOut ne ?
+      772         and mWaitFramTimeOut ne 0
+      773         and mWaitFramTimeOut lt vtime
+      774      then do:
+      775         mWaitFramStopTimeOut = yes.
+      776      end.
+      777      return mWaitFramStopTimeOut.
+      778   end.
+      779   procedure waitfram-hide :
+      780     if not session:batch-mode
+      781     then do
+      782     on error undo, return error return-value
+      783     :
+      784       pause 0 before-hide .
+      785       if not mBatchMode then
+      786         hide frame waitfram .
+      787     if     not mWaitFramView
+      788        and mWaitProcEvent
+      789     then
+      790       process events .
+      791     end.
+      792   end procedure.
+      793   procedure waitfram-show :
+      794     define input  parameter p-message as character no-undo .
+      795     define variable v-left-margin as integer   no-undo .
+      796     if not session:batch-mode
+      797     then do
+      798     on error undo, return error return-value
+      799     :
+      800       if length(p-message) <= 70 then do:
+      801         assign
+      802           v-left-margin = integer((70 - length(p-message)) / 2)
+      803         .
+      804         assign
+      805           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      806         .
+      807         assign
+      808           v-waitfram-action01 = " "
+      809           v-waitfram-action02 = " "
+      810                                    + fill(" ", v-left-margin)
+      811                                    + p-message
+      812           v-waitfram-action03 = " "
+      813         .
+      814       end.
+      815       else do:
+      816         define variable vRindex1 as integer no-undo.
+      817         define variable vRindex2 as integer no-undo.
+      818         vRindex1 = r-index(p-message," ",70).
+      819         if vRindex1 = 0
+      820         then
+      821            vRindex1 = 70.
+      822         if length(p-message)  <= vRindex1 + 70 then do:
+      823           assign
+      824             v-waitfram-action01 = " "
+      825             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+      826             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+      827           .
+      828         end.
+      829         else do:
+      830           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+      831           if vRindex2 <= vRindex1
+      832           then
+      833              vRindex2 = vRindex1 + 70.
+      834           assign
+      835             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+      836             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+      837             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+      838           .
+      839         end.
+      840       end.
+      841       B-viewProcInfo:visible   in frame waitfram = no.
+      842       B-viewProcInfo:sensitive in frame waitfram = no.
+      843       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      844       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      845       if  (   mWaitFramView
+      846          or  mWaitProcEvent)
+      847          and not mBatchMode
+      848       then
+      849          display
+      850             v-waitfram-action01 skip
+      851             v-waitfram-action02 skip
+      852             v-waitfram-action03 skip
+      853          with frame waitfram .
+      854       if     mWaitFramView
+      855          then do:
+      856             if     mWaitFramInterval ne ?
+      857                and not mBatchMode
+      858             then
+      859                wait-for go of frame waitfram pause mWaitFramInterval.
+      860          end.
+      861          else
+      862             if     mWaitProcEvent
+      863                and not mBatchMode
+      864             then
+      865                process events .
+      866     end.
+      867   end procedure.
+      868      procedure waitfram-show-this:
+      869         define input  parameter iInterval as int64 no-undo.
+      870         define variable vtime as int64 no-undo.
+      871         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      872         mWaitFramInterval = iInterval.
+      873         run waitfram-show (substitute("&1&2 &3&4" ,
+      874                                       mWaitFramTextBeg ,
+      875                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+      876                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+      877                                       mWaitFramTextEnd
+      878                                      )
+      879                           ).
+      880      end.
+      881      procedure WaitFramRunPause:
+      882         define input  parameter iInterval as dec no-undo.
+      883         define variable vStart  as datetime-tz no-undo.
+      884         define variable vend    as datetime-tz no-undo.
+      885         define variable vint as int64 no-undo.
+      886         define variable vOk as logical no-undo.
+      887         vStart = now.
+      888         vend   = vStart.
+      889         publish "WaitFramPause" (iInterval,output vOk).
+      890         vend   =  now.
+      891         vint = vend - vStart.
+      892         vint = iInterval - vint / 1000.
+      893         if     not mWaitFramStop
+      894            and (   vint > 0
+      895                 or (    not vOk
+      896                     and iInterval eq ?
+      897                     )
+      898                 )
+      899         then
+      900            run waitfram-show-this (iInterval).
+      901         vend   =  now.
+      902         vint = vend - vStart.
+      903         vint = iInterval - vint / 1000.
+      904         if     not mWaitFramStop
+      905            and vint > 0
+      906         then do:
+      907            run gbl/pause.p (vint * 1000).
+      908         end.
+      909         if iInterval ne ?
+      910         then
+      911            publish "WaitFramStop".
+      912         waitfram-check-timeout().
+      913      end.
+      914      procedure WaitFramWaitFor:
+      915         define input  parameter iInterval as dec no-undo.
+      916         assign
+      917            mWaitFramStartProc   = now
+      918            mWaitFramStopUser    = no
+      919            mWaitFramStopTimeOut = no
+      920         .
+      921         block-wait:
+      922         do while not mWaitFramStop:
+      923            run WaitFramRunPause (iInterval).
+      924            if  waitfram-check-timeout()
+      925            then do:
+      926               leave block-wait.
+      927            end.
+      928         end.
+      929         run waitfram-hide.
+      930      end.
+      931   procedure waitfram-join :
+      932     define input  parameter p-line-1  as character no-undo .
+      933     define input  parameter p-line-2  as character no-undo .
+      934     define input  parameter p-line-3  as character no-undo .
+      935     define output parameter p-message as character no-undo .
+      936     do
+      937     on error undo, return error return-value
+      938     :
+      939       assign
+      940         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+      941                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+      942                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+      943       .
+      944     end.
+      945   end procedure.
+      946   function waitfram-join-function returns character
+      947     (input p-line-1 as character
+      948     ,input p-line-2 as character
+      949     ,input p-line-3 as character
+      950     ).
+      951     define variable v-message as character no-undo .
+      952     run waitfram-join in this-procedure
+      953       (input  p-line-1
+      954       ,input  p-line-2
+      955       ,input  p-line-3
+      956       ,output v-message
+      957       ) .
+      958     return v-message .
+      959   end function .
+      960   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      961   procedure check-layout-version :
+      962   define output parameter p-check as logical no-undo .
+      963   define variable v-dopi1 as integer no-undo .
+      964   define variable v-dopi2 as integer no-undo .
+      965   define variable v-dopi3 as integer no-undo .
+      966   define variable v-dopi4 as integer no-undo .
+      967   define buffer buf_layout for ub.layout .
+      968     do
+      969     on error undo, return error
+      970     :
+      971       find first buf_layout no-lock where
+      972                 buf_layout.layout-id = '_'  no-error.
+      973       if (not available buf_layout
+      974       or buf_layout.layout-name <> "v15_1.11" )
+      975       then do:
+      976         assign
+      977         v-dopi1 = integer(entry(2, buf_layout.layout-name,  "."))
+      978         v-dopi2 = integer(entry(2, "v15_1.11", "."))
+      979         v-dopi3 = integer(entry(2, entry(1, buf_layout.layout-name, "."), "_"))
+      980         v-dopi4 = integer(entry(2, entry(1, "v15_1.11", "."), "_"))
+      981         no-error .
+      982         if error-status:error
+      983         or v-dopi2 > v-dopi1
+      984         or v-dopi4 > v-dopi3
+      985         or left-trim(entry(1, buf_layout.layout-name, "."), "v":U) < "15"
+      986         then do:
+      987           assign
+      988           p-check = yes.
+      989         end.
+      990       end.
+      991     end.
+      992   end procedure.
+      993   procedure get-layout-version :
+      994   define output parameter p-layout-version as character no-undo init ?.
+      995   define buffer buf_layout for ub.layout .
+      996   do
+      997   on error undo, return error
+      998   :
+      999     find first buf_layout no-lock where
+     1000                 buf_layout.layout-id = '_'  no-error.
+     1001     if available buf_layout then do:
+     1002       p-layout-version = buf_layout.layout-name.
+     1003     end.
+     1004   end.
+     1005   end procedure.
+     1006   define stream imp-stream.
+     1007   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1008   define new shared temp-table temp-tables no-undo
+     1009   field tbl-name as character
+     1010   field buf-handle as handle
+     1011   field tbl-handle as handle
+     1012   index pi is unique primary
+     1013   tbl-name.
+     1014   define new shared temp-table temp-command no-undo
+     1015   field command-name as character
+     1016   field tbl-name as character
+     1017   field uniq-key-rec as character
+     1018   index pi is unique primary
+     1019   tbl-name
+     1020   command-name
+     1021   uniq-key-rec
+     1022   index icommand
+     1023   command-name
+     1024   tbl-name
+     1025   uniq-key-rec
+     1026   .
+     1027   define buffer buf_temp-tables for temp-tables.
+     1028   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1029   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1030   procedure layouth_create-layout_h :
+     1031   define input parameter p-mode as character no-undo .
+     1032   define input parameter p-layout-id as character no-undo .
+     1033   define parameter buffer buf_layout for ub.layout.
+     1034   define output parameter p-chip-num as integer no-undo .
+     1035   define variable v-chip-num as integer no-undo .
+     1036   DEFINE VARIABLE v-today as date no-undo .
+     1037   DEFINE VARIABLE v-time as integer no-undo .
+     1038   define buffer buf_c-layout for ub.c-layout.
+     1039   do
+     1040   on error undo, return error
+     1041   :
+     1042     run cur-time in this-procedure ( output v-today, output v-time).
+     1043     find last buf_c-layout no-lock where
+     1044               buf_c-layout.layout-id = p-layout-id
+     1045          and  buf_c-layout.corr-user-db-num = g#db-num
+     1046          use-index pi no-error.
+     1047     assign
+     1048     v-chip-num = (if available buf_c-layout
+     1049                   then buf_c-layout.chip-num + 1
+     1050                   else 0).
+     1051     create buf_c-layout.
+     1052     if available buf_layout
+     1053     and p-mode <> 'ДОБАВЛЕНИЕ':U
+     1054     then do:
+     1055       buffer-copy buf_layout
+     1056       to buf_c-layout.
+     1057     end.
+     1058     if not available buf_layout then do:
+     1059       assign
+     1060       buf_c-layout.layout-id = p-layout-id
+     1061       .
+     1062     end.
+     1063     if p-mode = 'ДОБАВЛЕНИЕ':U then do:
+     1064       assign
+     1065       buf_c-layout.layout-id = p-layout-id
+     1066       .
+     1067     end.
+     1068     assign
+     1069     buf_c-layout.subject = 'layout':U
+     1070     buf_c-layout.action = (if p-mode = 'ДОБАВЛЕНИЕ':U
+     1071                            then integer('1':U)
+     1072                            else (if p-mode = 'ИЗМЕНЕНИЕ':U
+     1073                                  then integer('2':U)
+     1074                                  else integer('99':U)
+     1075                                  )
+     1076                           )
+     1077     buf_c-layout.chip-num = v-chip-num
+     1078     buf_c-layout.corr-user-db-num = g#db-num
+     1079     buf_c-layout.corr-user-name = g#userid
+     1080     buf_c-layout.corr-date = v-today
+     1081     buf_c-layout.corr-time = v-time
+     1082     p-chip-num = v-chip-num
+     1083     .
+     1084   end.
+     1085   end procedure.
+     1086   procedure layouth_create-layout-elem-rule_h :
+     1087   define input parameter p-mode as character no-undo .
+     1088   define input parameter p-layout-id as character no-undo .
+     1089   define input parameter p-mode-id as character no-undo .
+     1090   define input parameter p-widget-id as character no-undo .
+     1091   define parameter buffer buf_layout-elem-rule for ub.layout-elem-rule.
+     1092   define input parameter p-chip-num as integer no-undo .
+     1093   DEFINE VARIABLE v-today as date no-undo .
+     1094   DEFINE VARIABLE v-time as integer no-undo .
+     1095   define buffer buf_c-layout-elem-rule for ub.c-layout-elem-rule.
+     1096   do
+     1097   on error undo, return error
+     1098   :
+     1099     run cur-time in this-procedure ( output v-today, output v-time).
+     1100     create buf_c-layout-elem-rule.
+     1101     if available buf_layout-elem-rule
+     1102     and p-mode <> 'ДОБАВЛЕНИЕ':U
+     1103     then do:
+     1104       buffer-copy buf_layout-elem-rule
+     1105       to buf_c-layout-elem-rule.
+     1106     end.
+     1107     if p-mode = 'ДОБАВЛЕНИЕ':U then do:
+     1108       assign
+     1109       buf_c-layout-elem-rule.layout-id = p-layout-id
+     1110       buf_c-layout-elem-rule.mode-id = p-mode-id
+     1111       buf_c-layout-elem-rule.widget-id = p-widget-id
+     1112       .
+     1113     end.
+     1114     assign
+     1115     buf_c-layout-elem-rule.subject = 'layout-elem-rule':U
+     1116     buf_c-layout-elem-rule.action = (if p-mode = 'ДОБАВЛЕНИЕ':U
+     1117                            then integer('1':U)
+     1118                            else (if p-mode = 'ИЗМЕНЕНИЕ':U
+     1119                                  then integer('2':U)
+     1120                                  else integer('99':U)
+     1121                                  )
+     1122                           )
+     1123     buf_c-layout-elem-rule.chip-num = p-chip-num
+     1124     buf_c-layout-elem-rule.corr-user-db-num = g#db-num
+     1125     buf_c-layout-elem-rule.corr-user-name = g#userid
+     1126     buf_c-layout-elem-rule.corr-date = v-today
+     1127     buf_c-layout-elem-rule.corr-time = v-time
+     1128     .
+     1129   end.
+     1130   end procedure.
+     1131   procedure layouth_create-rule-call-param_h :
+     1132   define input parameter p-mode as character no-undo .
+     1133   define input parameter p-call#-id as integer no-undo .
+     1134   define input parameter p-codex-id as integer no-undo .
+     1135   define input parameter p-ruleset-id as integer no-undo .
+     1136   define input parameter p-order-id as integer no-undo .
+     1137   define input parameter p-param-name as character no-undo .
+     1138   define input parameter p-index as integer no-undo .
+     1139   define input parameter p-call-id as character no-undo .
+     1140   define parameter buffer buf_rule-call-param for ub.rule-call-param.
+     1141   define input parameter p-chip-num as integer no-undo .
+     1142   DEFINE VARIABLE v-today as date no-undo .
+     1143   DEFINE VARIABLE v-time as integer no-undo .
+     1144   define buffer buf_c-rule-call-param for ub.c-rule-call-param.
+     1145   do
+     1146   on error undo, return error
+     1147   :
+     1148     run cur-time in this-procedure ( output v-today, output v-time).
+     1149     create buf_c-rule-call-param.
+     1150     if available buf_rule-call-param
+     1151     and p-mode <> 'ДОБАВЛЕНИЕ':U
+     1152     then do:
+     1153       buffer-copy buf_rule-call-param
+     1154       to buf_c-rule-call-param.
+     1155     end.
+     1156     if p-mode = 'ДОБАВЛЕНИЕ':U then do:
+     1157       assign
+     1158       buf_c-rule-call-param.call#_id = p-call#-id
+     1159       buf_c-rule-call-param.codex_id = p-codex-id
+     1160       buf_c-rule-call-param.ruleset_id = p-ruleset-id
+     1161       buf_c-rule-call-param.order_id = p-order-id
+     1162       buf_c-rule-call-param.param-name = p-param-name
+     1163       buf_c-rule-call-param.p-index = p-index
+     1164       buf_c-rule-call-param.call_id = p-call-id
+     1165       .
+     1166     end.
+     1167     assign
+     1168     buf_c-rule-call-param.action = (if p-mode = 'ДОБАВЛЕНИЕ':U
+     1169                                     then integer('1':U)
+     1170                                     else (if p-mode = 'удаление':U
+     1171                                           then integer('99':U)
+     1172                                           else integer('2':U)
+     1173                                           )
+     1174                                     )
+     1175     buf_c-rule-call-param.chip-num = p-chip-num
+     1176     buf_c-rule-call-param.corr-user-db-num = g#db-num
+     1177     buf_c-rule-call-param.corr-user-name = g#userid
+     1178     buf_c-rule-call-param.corr-date = v-today
+     1179     buf_c-rule-call-param.corr-time = v-time
+     1180     .
+     1181   end.
+     1182   end procedure.
+     1183   def var vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1184   procedure gen-key-rec :
+     1185     define input  parameter p-tbl-name    as character no-undo.
+     1186     define input  parameter p-bh_tbl-name as handle    no-undo.
+     1187     define output parameter p-key-rec     as character no-undo.
+     1188     do
+     1189     on error  undo, return error substitute( "&1 (gen-key-rec). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     1190     on stop   undo, return error substitute( "&1 (gen-key-rec). stop", vss-workfile )
+     1191     on endkey undo, return error substitute( "&1 (gen-key-rec). endkey", vss-workfile )
+     1192     :
+     1193       define variable fh               as handle    no-undo .
+     1194       define variable v-ok             as logical   no-undo .
+     1195       define variable v-inform         as character no-undo .
+     1196       define variable v-ind            as integer   no-undo .
+     1197       define variable v-idx-field-qnty as integer   no-undo .
+     1198       if p-tbl-name = ?
+     1199         or p-tbl-name = "":U
+     1200       then do:
+     1201         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Не задано имя таблицы.", vss-include-info9 ).
+     1202       end.
+     1203       if not p-bh_tbl-name:available then do:
+     1204         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Переданый буфер таблицы &2 не доступен", vss-include-info9, p-tbl-name ).
+     1205       end.
+     1206       assign
+     1207         p-key-rec = p-tbl-name
+     1208         v-inform  = p-bh_tbl-name:index-information(1)
+     1209         v-ind     = 2
+     1210       .
+     1211       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+     1212       on error undo, return error
+     1213       :
+     1214         assign
+     1215           v-inform = p-bh_tbl-name:index-information( v-ind )
+     1216           v-ind    = v-ind + 1
+     1217         .
+     1218       end.
+     1219       if v-inform = ?
+     1220         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+     1221         or entry( 3, v-inform, ",":U ) <> "1":U
+     1222       then do:
+     1223         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info9, p-tbl-name ).
+     1224       end.
+     1225       else do:
+     1226         assign
+     1227           v-idx-field-qnty = num-entries( v-inform ) - 4
+     1228         .
+     1229         if v-idx-field-qnty < 2 then do:
+     1230           return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info9, v-inform, p-tbl-name ).
+     1231         end.
+     1232         do v-ind = 1 to v-idx-field-qnty by 2
+     1233         on error undo, return error
+     1234         :
+     1235           assign
+     1236             fh = p-bh_tbl-name:buffer-field( entry( 4 + v-ind, v-inform, ",":U ) ).
+     1237             p-key-rec = p-key-rec + chr(3) + substitute("&1", replace(fh:buffer-value(),chr(3),chr(2) + chr(9) + chr (2)))
+     1238           .
+     1239         end.
+     1240       end.
+     1241       if p-key-rec = ? then do:
+     1242         assign
+     1243           p-key-rec = "":U
+     1244         .
+     1245         return error substitute( "&1. Поле(поля) первичного ключа таблицы &2 имеет(ют) неопределенное значение", vss-include-info9, p-tbl-name ).
+     1246       end.
+     1247     end.
+     1248     return.
+     1249   end procedure.
+     1250   procedure gen-where-keyr-tab :
+     1251     define input  parameter i-tableSerach as character no-undo.
+     1252     define input  parameter i-tablekey   as character  no-undo.
+     1253     define input  parameter p-key-rec    as character  no-undo.
+     1254     define input  parameter p-key-handle as handle     no-undo .
+     1255     define input  parameter p-db-name    as character  no-undo .
+     1256     define input  parameter p-tt-handle  as handle     no-undo .
+     1257     define output parameter o-Where      as character  no-undo.
+     1258     do
+     1259     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     1260     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+     1261     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile )
+     1262     :
+     1263       define variable v-full-tbl-name  as character no-undo .
+     1264       define variable bh_tbl-name      as handle    no-undo .
+     1265       define variable fh_key           as handle    no-undo .
+     1266       define variable fh_search        as handle    no-undo .
+     1267       define variable v-field-num      as integer   no-undo .
+     1268       define variable v-count-fld      as integer   no-undo .
+     1269       define variable v-inform         as character no-undo .
+     1270       define variable v-ind            as integer   no-undo .
+     1271       define variable v-idx-field-qnty as integer   no-undo .
+     1272       define variable v-field-name     as character no-undo .
+     1273       define variable v-field-val      as character no-undo .
+     1274       define variable v-word-link      as character no-undo .
+     1275       define variable vTable           as character no-undo.
+     1276       define variable bh_tbl-key       as handle    no-undo .
+     1277       assign
+     1278         p-key-rec = trim( p-key-rec )
+     1279       .
+     1280       if p-key-handle <> ? then do:
+     1281         if not valid-handle(p-key-handle)
+     1282            or p-key-handle:type <> "buffer"
+     1283         then do:
+     1284           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Задан невалидный буфер для поиска.", vss-include-info9 ).
+     1285         end.
+     1286         if num-entries( p-key-rec, chr(3) ) > 1
+     1287           or p-key-rec = ?
+     1288           or p-key-rec = "":U
+     1289         then do:
+     1290           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. При поиске по буферу вместо ключа (&2) должено быть 'имя таблицы'.", vss-include-info9, p-key-rec ).
+     1291         end.
+     1292       end.
+     1293       else do:
+     1294         if p-key-rec = ?
+     1295           or p-key-rec = "":U
+     1296         then do:
+     1297           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info9 ).
+     1298         end.
+     1299       end.
+     1300       assign
+     1301         vTable = entry( 1 , p-key-rec, chr(3) )
+     1302       .
+     1303       if p-tt-handle <> ?
+     1304         and ( not valid-handle(p-tt-handle)
+     1305               or p-tt-handle:type <> "buffer"
+     1306             )
+     1307       then do:
+     1308         return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. &2&3Передан невалидный handle для поиска или handle не типа BUFFER", vss-include-info9, vTable, chr(10) ).
+     1309       end.
+     1310       if p-tt-handle = ? then do:
+     1311         assign
+     1312           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable )
+     1313         .
+     1314         create buffer bh_tbl-name for table v-full-tbl-name .
+     1315       end.
+     1316       else do:
+     1317         create buffer bh_tbl-name for table p-tt-handle:table-handle .
+     1318       end.
+     1319       assign
+     1320         v-inform = bh_tbl-name:index-information(1)
+     1321         v-ind    = 2
+     1322       .
+     1323       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+     1324       on error undo, return error
+     1325       :
+     1326         assign
+     1327           v-inform = bh_tbl-name:index-information( v-ind )
+     1328           v-ind    = v-ind + 1
+     1329         .
+     1330       end.
+     1331       if v-inform = ?
+     1332         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+     1333         or entry( 3, v-inform, ",":U ) <> "1":U
+     1334       then do:
+     1335         delete object bh_tbl-name no-error.
+     1336         return error substitute( "&1. Таблица &2 не имеет первичного ключа", vss-include-info9, vTable ).
+     1337       end.
+     1338       assign
+     1339         v-idx-field-qnty = num-entries( v-inform ) - 4
+     1340       .
+     1341       if v-idx-field-qnty < 2 then do:
+     1342         delete object bh_tbl-name no-error.
+     1343         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info9, v-inform, vTable ).
+     1344       end.
+     1345       assign
+     1346         o-where     = "where":U
+     1347         v-word-link = "":U
+     1348         v-field-num = num-entries( p-key-rec, chr(3) ) - 1
+     1349         v-count-fld = 0
+     1350       .
+     1351       if i-tablekey ne "" and i-tablekey ne ?
+     1352       then do:
+     1353         assign
+     1354           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tablekey )
+     1355         .
+     1356         create buffer bh_tbl-key for table v-full-tbl-name .
+     1357       end.
+     1358       if i-tableSerach ne "" and i-tableSerach ne ?
+     1359       then do:
+     1360         delete object bh_tbl-name no-error.
+     1361         assign
+     1362           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach )
+     1363         .
+     1364         create buffer bh_tbl-name for table v-full-tbl-name .
+     1365       end.
+     1366       block_where:
+     1367       do v-ind = 1 to v-idx-field-qnty by 2
+     1368       on error undo, return error
+     1369       :
+     1370         assign
+     1371           v-count-fld = v-count-fld + 1
+     1372         .
+     1373         if p-key-handle = ?
+     1374           and v-count-fld > v-field-num
+     1375         then do:
+     1376           leave block_where.
+     1377         end.
+     1378         define variable VfieldKeyTable as handle no-undo.
+     1379         assign
+     1380           v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+     1381           fh_search    = bh_tbl-name:buffer-field( v-field-name )
+     1382         .
+     1383         if     bh_tbl-key ne ?
+     1384         then do:
+     1385            VfieldKeyTable = bh_tbl-key:buffer-field( v-field-name ) no-error.
+     1386            if VfieldKeyTable eq ?
+     1387            then next block_where.
+     1388         end.
+     1389         if v-full-tbl-name ne "" and v-full-tbl-name ne ?
+     1390         then
+     1391            o-where = substitute( "&1 &2 &3.&4 =", o-where, v-word-link,v-full-tbl-name, v-field-name ).
+     1392         else
+     1393            o-where = substitute( "&1 &2 &3 =", o-where, v-word-link, v-field-name ).
+     1394         if p-key-handle = ? then do:
+     1395           assign
+     1396             v-field-val = replace (entry( v-count-fld + 1 , p-key-rec, chr(3) ),chr(2) + chr(9) + chr (2),chr(3))
+     1397           .
+     1398         end.
+     1399         else do:
+     1400           assign
+     1401             fh_key = p-key-handle:buffer-field( v-field-name )
+     1402           .
+     1403           if fh_key = ?
+     1404             or not valid-handle( fh_key )
+     1405           then do:
+     1406             delete object bh_tbl-name.
+     1407             if     bh_tbl-key ne ?
+     1408             then
+     1409                delete object bh_tbl-key.
+     1410             return error substitute( "&1. Буфер &2 не содержит поля &3 необходимого для поиска.", vss-include-info9, p-key-handle:name, v-field-name ).
+     1411           end.
+     1412           assign
+     1413             v-field-val = fh_key:buffer-value
+     1414           .
+     1415         end.
+     1416         if fh_search:data-type ="character":U then do:
+     1417           assign
+     1418             v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+     1419             v-field-val = replace( v-field-val, '"':U, '~~"':U )
+     1420             v-field-val = replace( v-field-val, "'":U, "~~'":U )
+     1421             v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+     1422             v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+     1423             v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+     1424             v-field-val = replace( v-field-val, chr(10), '~~n':U )
+     1425             v-field-val = replace( v-field-val, chr(9), '~~t':U )
+     1426             v-field-val = replace( v-field-val, chr(13), '~~r':U )
+     1427             v-field-val = replace( v-field-val, chr(27), '~~E':U )
+     1428             v-field-val = replace( v-field-val, chr(8), '~~b':U )
+     1429             v-field-val = replace( v-field-val, chr(12), '~~f':U )
+     1430             v-field-val = substitute( '"&1"', v-field-val )
+     1431           .
+     1432         end.
+     1433         assign
+     1434           o-where = substitute( "&1 &2", o-where, v-field-val )
+     1435         .
+     1436         if v-word-link = "":U then do:
+     1437           assign
+     1438             v-word-link = "and":U
+     1439           .
+     1440         end.
+     1441       end.
+     1442       delete object bh_tbl-name.
+     1443       if     bh_tbl-key ne ?
+     1444       then
+     1445          delete object bh_tbl-key.
+     1446       if p-key-handle = ?
+     1447         and v-count-fld <> v-field-num
+     1448       then do:
+     1449         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2", vss-include-info9, vTable ).
+     1450       end.
+     1451     end.
+     1452   end procedure.
+     1453   procedure gen-hn-keyr-tab :
+     1454     define input  parameter i-tableSerach as character no-undo.
+     1455     define input  parameter i-tablekey   as character no-undo.
+     1456     define input  parameter p-key-rec    as character no-undo.
+     1457     define input  parameter p-key-handle as handle    no-undo .
+     1458     define input  parameter p-db-name    as character no-undo .
+     1459     define input  parameter p-tt-handle  as handle    no-undo .
+     1460     define input  parameter p-stts-lock  as integer   no-undo .
+     1461     define output parameter o-hn         as handle    no-undo.
+     1462     define variable v-full-tbl-name as character no-undo.
+     1463     define variable v-where         as character no-undo.
+     1464     define variable bh_tbl-name     as handle    no-undo.
+     1465     define variable vTable          as character no-undo.
+     1466     do
+     1467     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     1468     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+     1469     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile ):
+     1470         run gen-where-keyr-tab(i-tableSerach,
+     1471                                i-tablekey,
+     1472                                p-key-rec,
+     1473                                p-key-handle,
+     1474                                p-db-name,
+     1475                                p-tt-handle,
+     1476                                output v-where).
+     1477         if i-tableSerach ne "" and i-tableSerach ne ?
+     1478         then do:
+     1479            v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach ).
+     1480            create buffer bh_tbl-name for table v-full-tbl-name .
+     1481         end.
+     1482         else do:
+     1483            if p-tt-handle = ? then do:
+     1484               assign
+     1485                  vTable = entry( 1 , p-key-rec, chr(3) )
+     1486               .
+     1487               v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable ).
+     1488               create buffer bh_tbl-name for table v-full-tbl-name .
+     1489            end.
+     1490            else do:
+     1491               create buffer bh_tbl-name for table p-tt-handle:table-handle .
+     1492            end.
+     1493         end.
+     1494         if p-tt-handle = ? then do:
+     1495            bh_tbl-name:find-first( v-where, p-stts-lock ) no-error .
+     1496         end.
+     1497         else do:
+     1498            bh_tbl-name:find-first( v-where ) no-error .
+     1499         end.
+     1500         o-hn = bh_tbl-name.
+     1501      end.
+     1502   end procedure.
+     1503   procedure gen-hn-keyr :
+     1504     define input  parameter p-key-rec    as character no-undo.
+     1505     define input  parameter p-key-handle as handle    no-undo .
+     1506     define input  parameter p-db-name    as character no-undo .
+     1507     define input  parameter p-tt-handle  as handle    no-undo .
+     1508     define input  parameter p-stts-lock  as integer   no-undo .
+     1509     define output parameter o-hn         as handle    no-undo.
+     1510     run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output o-hn).
+     1511   end.
+     1512   procedure gen-row-keyr :
+     1513     define input  parameter p-key-rec    as character no-undo.
+     1514     define input  parameter p-key-handle as handle    no-undo .
+     1515     define input  parameter p-db-name    as character no-undo .
+     1516     define input  parameter p-tt-handle  as handle    no-undo .
+     1517     define input  parameter p-stts-lock  as integer   no-undo .
+     1518     define output parameter p-tbl-row    as rowid     no-undo.
+     1519     define output parameter p-tbl-name   as character no-undo.
+     1520     define variable vHn as handle no-undo.
+     1521       run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output vHn).
+     1522       p-tbl-row = if vHn:available then vHn:rowid else ?.
+     1523       p-tbl-name =  vHn:table.
+     1524       delete object vHn no-error.
+     1525     if p-tbl-row = ? then do:
+     1526       return substitute( "Не найдена запись таблицы &2 по ключу &3", vss-include-info9, p-tbl-name, p-key-rec ).
+     1527     end.
+     1528     else do:
+     1529       return.
+     1530     end.
+     1531   end procedure.
+     1532   procedure gen-key-fv :
+     1533     define input  parameter p-key-rec    as character no-undo .
+     1534     define output parameter p-field-list as character no-undo .
+     1535     define output parameter p-value-list as character no-undo.
+     1536     do
+     1537     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     1538     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+     1539     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+     1540     :
+     1541       define variable v-full-tbl-name  as character no-undo .
+     1542       define variable bh_tbl-name      as handle    no-undo .
+     1543       define variable v-tbl-name       as character no-undo .
+     1544       define variable v-field-num      as integer   no-undo .
+     1545       define variable v-count-fld      as integer   no-undo .
+     1546       define variable v-inform         as character no-undo .
+     1547       define variable v-ind            as integer   no-undo .
+     1548       define variable v-idx-field-qnty as integer   no-undo .
+     1549       define variable v-delim-key      as character no-undo .
+     1550       if p-key-rec = ?
+     1551         or p-key-rec = "":U
+     1552       then do:
+     1553         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info9 ).
+     1554       end.
+     1555       assign
+     1556         v-tbl-name      = entry( 1 , p-key-rec, chr(3) )
+     1557         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+     1558       .
+     1559       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+     1560       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверный уникальный ключ.", vss-include-info9 ).
+     1561       assign
+     1562         v-inform = bh_tbl-name:index-information(1)
+     1563         v-ind    = 2
+     1564       .
+     1565       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+     1566       on error undo, return error
+     1567       :
+     1568         assign
+     1569           v-inform = bh_tbl-name:index-information( v-ind )
+     1570           v-ind    = v-ind + 1
+     1571         .
+     1572       end.
+     1573       if v-inform = ?
+     1574         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+     1575         or entry( 3, v-inform, ",":U ) <> "1":U
+     1576       then do:
+     1577         delete object bh_tbl-name no-error.
+     1578         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info9, v-tbl-name ).
+     1579       end.
+     1580       assign
+     1581         v-idx-field-qnty = num-entries( v-inform ) - 4
+     1582       .
+     1583       if v-idx-field-qnty < 2 then do:
+     1584         delete object bh_tbl-name no-error.
+     1585         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info9, v-inform, v-tbl-name ).
+     1586       end.
+     1587       assign
+     1588         p-field-list = "":U
+     1589         p-value-list = "":U
+     1590         v-delim-key  = "":U
+     1591         v-field-num  = num-entries( p-key-rec, chr(3) ) - 1
+     1592         v-count-fld  = 0
+     1593       .
+     1594       block_where:
+     1595       do v-ind = 1 to v-idx-field-qnty by 2
+     1596       on error undo, return error
+     1597       :
+     1598         assign
+     1599           v-count-fld = v-count-fld + 1
+     1600         .
+     1601         if v-count-fld > v-field-num then do:
+     1602           leave block_where.
+     1603         end.
+     1604         assign
+     1605           p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U )
+     1606           p-value-list = p-value-list + v-delim-key + entry( v-count-fld + 1 , p-key-rec, chr(3) )
+     1607         .
+     1608         if v-ind = 1 then do:
+     1609           assign
+     1610             v-delim-key = chr(3)
+     1611           .
+     1612         end.
+     1613       end.
+     1614       delete object bh_tbl-name.
+     1615       if v-count-fld <> v-field-num then do:
+     1616         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2 в БД", vss-include-info9, v-tbl-name ).
+     1617       end.
+     1618     end.
+     1619   end procedure.
+     1620   procedure gen-key-field :
+     1621     define input  parameter p-table      as character no-undo .
+     1622     define output parameter p-field-list as character no-undo .
+     1623     do
+     1624     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     1625     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+     1626     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+     1627     :
+     1628       define variable v-full-tbl-name  as character no-undo .
+     1629       define variable bh_tbl-name      as handle    no-undo .
+     1630       define variable v-tbl-name       as character no-undo .
+     1631       define variable v-field-num      as integer   no-undo .
+     1632       define variable v-count-fld      as integer   no-undo .
+     1633       define variable v-inform         as character no-undo .
+     1634       define variable v-ind            as integer   no-undo .
+     1635       define variable v-idx-field-qnty as integer   no-undo .
+     1636       define variable v-delim-key      as character no-undo .
+     1637       if p-table = ?
+     1638         or p-table = "":U
+     1639       then do:
+     1640         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан таблица.", vss-include-info9 ).
+     1641       end.
+     1642       assign
+     1643         v-tbl-name      = p-table
+     1644         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+     1645       .
+     1646       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+     1647       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверная таблица.", vss-include-info9 ).
+     1648       assign
+     1649         v-inform = bh_tbl-name:index-information(1)
+     1650         v-ind    = 2
+     1651       .
+     1652       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+     1653       on error undo, return error
+     1654       :
+     1655         assign
+     1656           v-inform = bh_tbl-name:index-information( v-ind )
+     1657           v-ind    = v-ind + 1
+     1658         .
+     1659       end.
+     1660       if v-inform = ?
+     1661         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+     1662         or entry( 3, v-inform, ",":U ) <> "1":U
+     1663       then do:
+     1664         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info9, v-tbl-name ).
+     1665       end.
+     1666       assign
+     1667         v-idx-field-qnty = num-entries( v-inform ) - 4
+     1668       .
+     1669       if v-idx-field-qnty < 2 then do:
+     1670         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info9, v-inform, v-tbl-name ).
+     1671       end.
+     1672       assign
+     1673         p-field-list = "":U
+     1674         v-delim-key  = "":U
+     1675         v-count-fld  = 0
+     1676       .
+     1677       block_where:
+     1678       do v-ind = 1 to v-idx-field-qnty by 2
+     1679       on error undo, return error
+     1680       :
+     1681         assign
+     1682           v-count-fld = v-count-fld + 1
+     1683         .
+     1684         p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U ).
+     1685         if v-ind = 1 then do:
+     1686           assign
+     1687             v-delim-key = chr(3)
+     1688           .
+     1689         end.
+     1690       end.
+     1691       delete object bh_tbl-name.
+     1692     end.
+     1693   end procedure.
+     1694   define variable v-check1 as logical no-undo .
+     1695   define variable v-check2 as logical no-undo .
+     1696   define variable v-force as logical no-undo .
+     1697   define variable v-mes   as character no-undo .
+     1698   define variable v-full-path        as character no-undo .
+     1699   define variable v-path             as character no-undo .
+     1700   define variable v-file-name        as character no-undo .
+     1701   define variable v-file-name-no-ext as character no-undo .
+     1702   define variable v-file-name-ext    as character no-undo .
+     1703   define variable v-md5-signature as character no-undo .
+     1704   define new shared temp-table tt-layout no-undo like ub.layout . find first buf_temp-tables where buf_temp-tables.tbl-name = "layout" no-error. if not available buf_temp-tables then do:   create buf_temp-tables.   assign   buf_temp-tables.tbl-name = "layout"    buf_temp-tables.buf-handle = buffer tt-layout:handle    buf_temp-tables.tbl-handle = buf_temp-tables.buf-handle:table-handle   .   release buf_temp-tables. end.
+     1705   define new shared temp-table tt-layout-elem no-undo like ub.layout-elem . find first buf_temp-tables where buf_temp-tables.tbl-name = "layout-elem" no-error. if not available buf_temp-tables then do:   create buf_temp-tables.   assign   buf_temp-tables.tbl-name = "layout-elem"    buf_temp-tables.buf-handle = buffer tt-layout-elem:handle    buf_temp-tables.tbl-handle = buf_temp-tables.buf-handle:table-handle   .   release buf_temp-tables. end.
+     1706   define new shared temp-table tt-layout-elem-rule no-undo like ub.layout-elem-rule . find first buf_temp-tables where buf_temp-tables.tbl-name = "layout-elem-rule" no-error. if not available buf_temp-tables then do:   create buf_temp-tables.   assign   buf_temp-tables.tbl-name = "layout-elem-rule"    buf_temp-tables.buf-handle = buffer tt-layout-elem-rule:handle    buf_temp-tables.tbl-handle = buf_temp-tables.buf-handle:table-handle   .   release buf_temp-tables. end.
+     1707   define new shared temp-table tt-wi-mode no-undo like ub.wi-mode . find first buf_temp-tables where buf_temp-tables.tbl-name = "wi-mode" no-error. if not available buf_temp-tables then do:   create buf_temp-tables.   assign   buf_temp-tables.tbl-name = "wi-mode"    buf_temp-tables.buf-handle = buffer tt-wi-mode:handle    buf_temp-tables.tbl-handle = buf_temp-tables.buf-handle:table-handle   .   release buf_temp-tables. end.
+     1708   define new shared temp-table tt-rule-call-param no-undo like ub.rule-call-param . find first buf_temp-tables where buf_temp-tables.tbl-name = "rule-call-param" no-error. if not available buf_temp-tables then do:   create buf_temp-tables.   assign   buf_temp-tables.tbl-name = "rule-call-param"    buf_temp-tables.buf-handle = buffer tt-rule-call-param:handle    buf_temp-tables.tbl-handle = buf_temp-tables.buf-handle:table-handle   .   release buf_temp-tables. end.
+     1709   define new shared temp-table tt-rule-by-call no-undo like ub.rule-by-call . find first buf_temp-tables where buf_temp-tables.tbl-name = "rule-by-call" no-error. if not available buf_temp-tables then do:   create buf_temp-tables.   assign   buf_temp-tables.tbl-name = "rule-by-call"    buf_temp-tables.buf-handle = buffer tt-rule-by-call:handle    buf_temp-tables.tbl-handle = buf_temp-tables.buf-handle:table-handle   .   release buf_temp-tables. end.
+     1710   define new shared temp-table tt-rule-by-set no-undo like ub.rule-by-set . find first buf_temp-tables where buf_temp-tables.tbl-name = "rule-by-set" no-error. if not available buf_temp-tables then do:   create buf_temp-tables.   assign   buf_temp-tables.tbl-name = "rule-by-set"    buf_temp-tables.buf-handle = buffer tt-rule-by-set:handle    buf_temp-tables.tbl-handle = buf_temp-tables.buf-handle:table-handle   .   release buf_temp-tables. end.
+     1711   define buffer buf_tt-layout for tt-layout.
+     1712   define buffer buf_tt-layout-elem for tt-layout-elem.
+     1713   define buffer buf_tt-wi-mode for tt-wi-mode.
+     1714   run waitfram-show in this-procedure ("Реинициализация раскладок").
+     1715   main-block:
+     1716   do
+     1717   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1718   on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     1719   on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     1720   :
+     1721     if ( g#db-num > 0 ) then return.
+     1722     if not p-forced then do:
+     1723       run check-layout-version in this-procedure (output v-check1).
+     1724     end.
+     1725     if v-check1
+     1726     or p-forced
+     1727     then do:
+     1728       if v-check1
+     1729        and p-read-only then do:
+     1730           return error substitute("&1 &2 &3&4До начала работы с данной БД (режим RO) необходимо произвести вход в ОСНОВНУЮ БД!!!"
+     1731                                   ,vss-workfile
+     1732                                   ,vss-revision
+     1733                                   ,vss-description
+     1734                                   ,chr(10)).
+     1735        end.
+     1736        run gbl/md5.p (
+     1737          input  "cmp/fix-lay.txt"
+     1738         ,output v-md5-signature
+     1739         ) .
+     1740       if v-md5-signature <> "0FE47550AC5DF79F387CB798B90641F8" then do:
+     1741         message
+     1742         substitute("Несовпадение файла эталонных записей по расладкам (fix-lay.txt) с контрольным числом")
+     1743         view-as alert-box error .
+     1744         undo, return error .
+     1745       end.
+     1746       run gbl/filename.p ( input "cmp/fix-lay.txt"
+     1747                           ,output v-full-path
+     1748                           ,output v-path
+     1749                           ,output v-file-name
+     1750                           ,output v-file-name-no-ext
+     1751                           ,output v-file-name-ext
+     1752                           ) no-error .
+     1753       if error-status:error then do:
+     1754         message
+     1755         substitute("Не найден файл эталонных записей по раскладкам (fix-lay.txt)")
+     1756         view-as alert-box error .
+     1757         undo, return error .
+     1758       end.
+     1759       run str/diallog.w (
+     1760             input ?
+     1761           ,input this-procedure
+     1762           ,input ('utl/upgimptt.p' + chr(4)  +
+     1763                   '1' + chr(4) +
+     1764                   '1' + chr(4) +
+     1765                   '1' + chr(4) +
+     1766                   '1')
+     1767           ,input v-full-path
+     1768           ,input yes
+     1769           ,input 'Прервать'
+     1770           ,input 'Чтение файла в память') no-error .
+     1771       if error-status:error then do:
+     1772         message
+     1773         substitute("Ошибка при чтении в память файла эталонных записей по раскладкам (fix-lay.txt)&1&2&1&3"
+     1774                      , chr(10)
+     1775                      , error-status:get-message(1)
+     1776                      , return-value )
+     1777         view-as alert-box error .
+     1778         undo, return error .
+     1779       end.
+     1780       if v-check1 then do:
+     1781         find first buf_tt-layout no-lock where
+     1782                   buf_tt-layout.layout-id = '_'  no-error.
+     1783         if not available buf_tt-layout
+     1784         or buf_tt-layout.layout-name <> "v15_1.11" then do:
+     1785           message
+     1786           substitute("Версии дефолтных раскладок в r-кодах и файле эталонных записей по раскладкам (fix-lay.txt) НЕ СОВПАДАЮТ&1" +
+     1787                      "в r-кодах - &2&1" +
+     1788                      "в файле - &3"
+     1789                      , chr(10)
+     1790                      , "v15_1.11"
+     1791                      , (if available buf_tt-layout then buf_tt-layout.layout-name else '')
+     1792                      )
+     1793           view-as alert-box error .
+     1794           undo, return error .
+     1795         end.
+     1796       end.
+     1797       run add-wi-mode in this-procedure no-error .
+     1798       if error-status:error then do:
+     1799         run waitfram-hide in this-procedure .
+     1800         assign
+     1801         v-mes = substitute("Ошибки при инициализации режимов работы IBS TH POS:&1&2 &3"
+     1802                            , chr(10)
+     1803                            , error-status:get-message(1)
+     1804                            , return-value ).
+     1805         if p-forced then do:
+     1806           message
+     1807           v-mes
+     1808           view-as alert-box error .
+     1809         end.
+     1810         undo, return error v-mes.
+     1811       end.
+     1812       run add-layout-elem in this-procedure  no-error .
+     1813       if error-status:error then do:
+     1814         run waitfram-hide in this-procedure .
+     1815         assign
+     1816         v-mes = substitute("Ошибки при инициализации элементов для раскладок IBS TH POS:&1&2 &3"
+     1817                            , chr(10)
+     1818                            , error-status:get-message(1)
+     1819                            , return-value ).
+     1820         if p-forced then do:
+     1821           message
+     1822           v-mes
+     1823           view-as alert-box error .
+     1824         end.
+     1825         undo, return error v-mes.
+     1826       end.
+     1827       run add-layout in this-procedure no-error .
+     1828       if error-status:error then do:
+     1829         run waitfram-hide in this-procedure .
+     1830         assign
+     1831         v-mes = substitute("Ошибки при инициализации раскладок:&1&2 &3"
+     1832                            , chr(10)
+     1833                            , error-status:get-message(1)
+     1834                            , return-value ).
+     1835         if p-forced then do:
+     1836           message
+     1837           v-mes
+     1838           view-as alert-box error .
+     1839         end.
+     1840         undo, return error v-mes.
+     1841       end.
+     1842       run delete-layout-elem in this-procedure no-error .
+     1843       if error-status:error then do:
+     1844         run waitfram-hide in this-procedure .
+     1845         assign
+     1846         v-mes = substitute("Ошибки при удалении ненужных элементов для раскладок:&1&2 &3"
+     1847                            , chr(10)
+     1848                            , error-status:get-message(1)
+     1849                            , return-value ).
+     1850         if p-forced then do:
+     1851           message
+     1852           v-mes
+     1853           view-as alert-box error .
+     1854         end.
+     1855         undo, return error v-mes.
+     1856       end.
+     1857       run delete-wi-mode in this-procedure no-error .
+     1858       if error-status:error then do:
+     1859         run waitfram-hide in this-procedure .
+     1860         assign
+     1861         v-mes = substitute("Ошибки при удалении ненужных режимов:&1&2 &3"
+     1862                            , chr(10)
+     1863                            , error-status:get-message(1)
+     1864                            , return-value ).
+     1865         if p-forced then do:
+     1866           message
+     1867           v-mes
+     1868           view-as alert-box error .
+     1869         end.
+     1870         undo, return error v-mes.
+     1871       end.
+     1872       run delete-rule-by-set in this-procedure no-error.
+     1873       if error-status:error then do:
+     1874         run waitfram-hide in this-procedure .
+     1875         assign
+     1876         v-mes = substitute("Ошибки при удалении ненужных привязок правил:&1&2 &3"
+     1877                            , chr(10)
+     1878                            , error-status:get-message(1)
+     1879                            , return-value ).
+     1880         if p-forced then do:
+     1881           message
+     1882           v-mes
+     1883           view-as alert-box error .
+     1884         end.
+     1885         undo, return error v-mes.
+     1886       end.
+     1887     end.
+     1888     for each buf_temp-tables
+     1889     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1890     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     1891     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     1892     :
+     1893       if valid-handle(buf_temp-tables.tbl-handle) then do:
+     1894         delete object buf_temp-tables.tbl-handle.
+     1895        end.
+     1896     end.
+     1897   end.
+     1898   run waitfram-hide in this-procedure .
+     1899   procedure add-layout-elem :
+     1900   define variable v-cmp as logical   no-undo .
+     1901   define variable v-chip-num as integer no-undo .
+     1902   define buffer buf_tt-layout-elem for tt-layout-elem.
+     1903   define buffer buf_layout-elem for ub.layout-elem.
+     1904   define buffer buf_layout-elem-rule for ub.layout-elem-rule.
+     1905   define buffer buf_layout for ub.layout.
+     1906   define buffer buf2_layout-elem-rule for ub.layout-elem-rule.
+     1907   main-block:
+     1908   do
+     1909   on error undo, return error return-value
+     1910   :
+     1911     for each buf_tt-layout-elem
+     1912     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1913     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     1914     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     1915     :
+     1916       v-cmp = no.
+     1917       find first buf_layout-elem where
+     1918                buf_layout-elem.layout-type = buf_tt-layout-elem.layout-type
+     1919            and buf_layout-elem.device-type = buf_tt-layout-elem.device-type
+     1920            and buf_layout-elem.mode-id = buf_tt-layout-elem.mode-id
+     1921            and buf_layout-elem.widget-id = buf_tt-layout-elem.widget-id no-error .
+     1922       if not available buf_layout-elem then do:
+     1923         create buf_layout-elem.
+     1924         v-cmp = no.
+     1925       end.
+     1926       else do:
+     1927         buffer-compare buf_tt-layout-elem to buf_layout-elem save result in v-cmp.
+     1928       end.
+     1929       if not v-cmp then do:
+     1930         buffer-copy buf_tt-layout-elem to buf_layout-elem.
+     1931       end.
+     1932       if buf_tt-layout-elem.elem-type = integer('-1':U) then do:
+     1933         for each buf_layout-elem-rule no-lock where
+     1934                 buf_layout-elem-rule.mode-id = tt-layout-elem.mode-id
+     1935             and buf_layout-elem-rule.widget-id = tt-layout-elem.widget-id
+     1936           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1937           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     1938           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     1939           :
+     1940           find first buf_layout share-lock where
+     1941                    buf_layout.layout-id = buf_layout-elem-rule.layout-id
+     1942                and buf_layout.layout-type = buf_layout-elem.layout-type
+     1943                and buf_layout.device-type = buf_layout-elem.device-type no-error.
+     1944           if available buf_layout
+     1945           and buf_layout.is-default = integer('0':U)
+     1946           then do:
+     1947             run  layouth_create-layout_h  in this-procedure (
+     1948                                                            input 'ИЗМЕНЕНИЕ':U
+     1949                                                           ,input buf_layout.layout-id
+     1950                                                           ,buffer buf_layout
+     1951                                                           ,output v-chip-num).
+     1952             if buf_layout.sts <> integer('99':U) then
+     1953             assign
+     1954             buf_layout.sts = integer('50':U)
+     1955             .
+     1956             find first buf2_layout-elem-rule exclusive-lock where
+     1957                       recid(buf2_layout-elem-rule) = recid(buf_layout-elem-rule).
+     1958             run  layouth_create-layout-elem-rule_h  in this-procedure (
+     1959                                                             input 'ИЗМЕНЕНИЕ':U
+     1960                                                           ,input buf2_layout-elem-rule.layout-id
+     1961                                                           ,input buf2_layout-elem-rule.mode-id
+     1962                                                           ,input buf2_layout-elem-rule.widget-id
+     1963                                                           ,buffer buf2_layout-elem-rule
+     1964                                                           ,input v-chip-num).
+     1965             assign
+     1966             buf2_layout-elem-rule.sts = integer('1':U)
+     1967             .
+     1968           end.
+     1969         end.
+     1970       end.
+     1971     end.
+     1972   end.
+     1973   end procedure.
+     1974   procedure delete-layout-elem :
+     1975   define variable v-cmp as logical   no-undo .
+     1976   define variable v-chip-num as integer no-undo .
+     1977   define buffer buf_tt-layout-elem for tt-layout-elem.
+     1978   define buffer buf_layout-elem for ub.layout-elem.
+     1979   define buffer buf_layout-elem-rule for ub.layout-elem-rule.
+     1980   define buffer buf2_layout-elem-rule for ub.layout-elem-rule.
+     1981   define buffer buf_layout for ub.layout.
+     1982   main-block:
+     1983   do
+     1984   on error undo, return error return-value
+     1985   :
+     1986     for each buf_layout-elem
+     1987     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1988     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     1989     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     1990     :
+     1991       v-cmp = no.
+     1992       find first buf_tt-layout-elem where
+     1993                buf_tt-layout-elem.layout-type = buf_layout-elem.layout-type
+     1994            and buf_tt-layout-elem.device-type = buf_layout-elem.device-type
+     1995            and buf_tt-layout-elem.mode-id = buf_layout-elem.mode-id
+     1996            and buf_tt-layout-elem.widget-id = buf_layout-elem.widget-id no-error .
+     1997       if not available buf_tt-layout-elem then do:
+     1998         for each buf_layout-elem-rule no-lock where
+     1999                 buf_layout-elem-rule.mode-id = buf_layout-elem.mode-id
+     2000             and buf_layout-elem-rule.widget-id = buf_layout-elem.widget-id
+     2001           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2002           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2003           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2004           :
+     2005           find first buf_layout share-lock where
+     2006                    buf_layout.layout-id = buf_layout-elem-rule.layout-id
+     2007                and buf_layout.layout-type = buf_layout-elem.layout-type
+     2008                and buf_layout.device-type = buf_layout-elem.device-type no-error.
+     2009           if available buf_layout then do:
+     2010             run  layouth_create-layout_h  in this-procedure (
+     2011                                                            input 'ИЗМЕНЕНИЕ':U
+     2012                                                           ,input buf_layout.layout-id
+     2013                                                           ,buffer buf_layout
+     2014                                                           ,output v-chip-num).
+     2015             if buf_layout.sts <> integer('99':U) then
+     2016             assign
+     2017             buf_layout.sts = integer('50':U)
+     2018             .
+     2019           end.
+     2020           find first buf2_layout-elem-rule exclusive-lock where
+     2021                     recid(buf2_layout-elem-rule) = recid(buf_layout-elem-rule).
+     2022           run  layouth_create-layout-elem-rule_h  in this-procedure (
+     2023                                                           input 'ИЗМЕНЕНИЕ':U
+     2024                                                         ,input buf2_layout-elem-rule.layout-id
+     2025                                                         ,input buf2_layout-elem-rule.mode-id
+     2026                                                         ,input buf2_layout-elem-rule.widget-id
+     2027                                                         ,buffer buf2_layout-elem-rule
+     2028                                                         ,input v-chip-num).
+     2029           assign
+     2030           buf2_layout-elem-rule.sts = integer('1':U)
+     2031           .
+     2032         end.
+     2033       end.
+     2034     end.
+     2035   end.
+     2036   end procedure.
+     2037   procedure add-layout :
+     2038   define variable v-cmp as logical   no-undo .
+     2039   define variable v-chip-num as integer no-undo .
+     2040   define variable v-ler-uniq-key-rec as character no-undo .
+     2041   define variable v-rbc-uniq-key-rec as character no-undo .
+     2042   define variable v-call#-id as integer no-undo .
+     2043   define buffer buf_tt-layout for tt-layout.
+     2044   define buffer buf_tt-layout-elem for tt-layout-elem.
+     2045   define buffer buf_layout for ub.layout.
+     2046   define buffer buf2_layout for ub.layout.
+     2047   define buffer buf3_layout for ub.layout.
+     2048   define buffer buf_layout-elem for ub.layout-elem.
+     2049   define buffer buf2_layout-elem-rule for ub.layout-elem-rule.
+     2050   define buffer buf_tt-layout-elem-rule for tt-layout-elem-rule.
+     2051   define buffer buf_layout-elem-rule for ub.layout-elem-rule.
+     2052   define buffer buf_rule-call-param for ub.rule-call-param.
+     2053   define buffer buf_tt-rule-call-param for tt-rule-call-param.
+     2054   define buffer buf_rule-by-call for ub.rule-by-call.
+     2055   define buffer buf_tt-rule-by-call for tt-rule-by-call.
+     2056   define buffer buf_wi-mode for ub.wi-mode.
+     2057   main-block:
+     2058   do
+     2059   on error undo, return error return-value
+     2060   :
+     2061     for each buf_tt-layout where
+     2062            (buf_tt-layout.is-default = integer('1':U)
+     2063             or
+     2064             buf_tt-layout.is-default = integer('-1':U)
+     2065             )
+     2066     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2067     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2068     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2069     :
+     2070       v-chip-num = -1.
+     2071       v-cmp = yes.
+     2072       find first buf_layout exclusive-lock where
+     2073                buf_layout.layout-id = buf_tt-layout.layout-id no-error.
+     2074       if not available buf_layout then do:
+     2075         create buf_layout.
+     2076         v-cmp = no.
+     2077       end.
+     2078       else do:
+     2079         buffer-compare buf_tt-layout to buf_layout case-sensitive save result in v-cmp.
+     2080       end.
+     2081       if not v-cmp then do:
+     2082         run  layouth_create-layout_h  in this-procedure (
+     2083                                                         input (if new(buf_layout) then 'ДОБАВЛЕНИЕ':U else 'ИЗМЕНЕНИЕ':U)
+     2084                                                       ,input buf_tt-layout.layout-id
+     2085                                                       ,buffer buf_layout
+     2086                                                       ,output v-chip-num).
+     2087         buffer-copy buf_tt-layout to buf_layout.
+     2088       end.
+     2089       for each buf_tt-layout-elem-rule where
+     2090               buf_tt-layout-elem-rule.layout-id = buf_tt-layout.layout-id
+     2091       on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2092       on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2093       on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile ):
+     2094         v-cmp = yes.
+     2095         find first buf_layout-elem-rule where
+     2096                   buf_layout-elem-rule.layout-id = buf_tt-layout.layout-id
+     2097               and buf_layout-elem-rule.mode-id = buf_tt-layout-elem-rule.mode-id
+     2098               and buf_layout-elem-rule.widget-id = buf_tt-layout-elem-rule.widget-id no-error.
+     2099         if not available buf_layout-elem-rule then do:
+     2100           create buf_layout-elem-rule.
+     2101           v-cmp = no.
+     2102         end.
+     2103         else do:
+     2104          buffer-compare buf_tt-layout-elem-rule to buf_layout-elem-rule case-sensitive save result in v-cmp.
+     2105         end.
+     2106         if not v-cmp then do:
+     2107           if v-chip-num < 0 then do:
+     2108             run  layouth_create-layout_h  in this-procedure (
+     2109                                                             input (if new(buf_layout) then 'ДОБАВЛЕНИЕ':U else 'ИЗМЕНЕНИЕ':U)
+     2110                                                           ,input buf_tt-layout.layout-id
+     2111                                                           ,buffer buf_layout
+     2112                                                           ,output v-chip-num).
+     2113           end.
+     2114           run  layouth_create-layout-elem-rule_h  in this-procedure (
+     2115                                                           input (if new(buf_layout-elem-rule)
+     2116                                                                  then 'ДОБАВЛЕНИЕ':U
+     2117                                                                  else 'ИЗМЕНЕНИЕ':U)
+     2118                                                         ,input buf_tt-layout-elem-rule.layout-id
+     2119                                                         ,input buf_tt-layout-elem-rule.mode-id
+     2120                                                         ,input buf_tt-layout-elem-rule.widget-id
+     2121                                                         ,buffer buf_layout-elem-rule
+     2122                                                         ,input v-chip-num).
+     2123           buffer-copy buf_tt-layout-elem-rule to buf_layout-elem-rule.
+     2124         end.
+     2125         for each buf_tt-rule-by-call where
+     2126                buf_tt-rule-by-call.call_id = buf_tt-layout-elem-rule.uniq-key-rec
+     2127         on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2128         on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2129         on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile ):
+     2130           v-cmp = yes.
+     2131           find first buf_rule-by-call where
+     2132                    buf_rule-by-call.call_id = buf_tt-rule-by-call.call_id
+     2133               and  buf_rule-by-call.codex_id = buf_tt-rule-by-call.codex_id
+     2134               and  buf_rule-by-call.ruleset_id = buf_tt-rule-by-call.ruleset_id
+     2135               and  buf_rule-by-call.order_id = buf_tt-rule-by-call.order_id no-error.
+     2136          if not available buf_rule-by-call then do:
+     2137            create buf_rule-by-call.
+     2138            v-cmp = no.
+     2139          end.
+     2140          else do:
+     2141            buffer-compare buf_tt-rule-by-call to buf_rule-by-call case-sensitive save result in v-cmp.
+     2142          end.
+     2143          if not v-cmp then do:
+     2144             buffer-copy buf_tt-rule-by-call to buf_rule-by-call.
+     2145           end.
+     2146         end.
+     2147         for each buf_tt-rule-call-param where
+     2148                buf_tt-rule-call-param.call_id = buf_tt-layout-elem-rule.uniq-key-rec
+     2149         on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2150         on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2151         on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile ):
+     2152           v-cmp = yes.
+     2153           find first buf_rule-call-param where
+     2154                    buf_rule-call-param.call_id = buf_tt-rule-call-param.call_id
+     2155               and  buf_rule-call-param.codex_id = buf_tt-rule-call-param.codex_id
+     2156               and  buf_rule-call-param.ruleset_id = buf_tt-rule-call-param.ruleset_id
+     2157               and  buf_rule-call-param.order_id = buf_tt-rule-call-param.order_id
+     2158               and  buf_rule-call-param.param-name = buf_tt-rule-call-param.param-name
+     2159               and  buf_rule-call-param.p-index = buf_tt-rule-call-param.p-index no-error.
+     2160          if not available buf_rule-call-param then do:
+     2161            create buf_rule-call-param.
+     2162            v-cmp = no.
+     2163          end.
+     2164          else do:
+     2165            buffer-compare buf_tt-rule-call-param to buf_rule-call-param case-sensitive save result in v-cmp.
+     2166          end.
+     2167          if not v-cmp then do:
+     2168             if v-chip-num < 0 then do:
+     2169               run  layouth_create-layout_h  in this-procedure (
+     2170                                                               input (if new(buf_layout) then 'ДОБАВЛЕНИЕ':U else 'ИЗМЕНЕНИЕ':U)
+     2171                                                             ,input buf_tt-layout.layout-id
+     2172                                                             ,buffer buf_layout
+     2173                                                             ,output v-chip-num).
+     2174             end.
+     2175             run  layouth_create-rule-call-param_h  in this-procedure (
+     2176                                                             input (if new(buf_rule-call-param)
+     2177                                                                   then 'ДОБАВЛЕНИЕ':U
+     2178                                                                   else 'ИЗМЕНЕНИЕ':U)
+     2179                                                           ,input buf_tt-rule-call-param.call#_id
+     2180                                                           ,input buf_tt-rule-call-param.codex_id
+     2181                                                           ,input buf_tt-rule-call-param.ruleset_id
+     2182                                                           ,input buf_tt-rule-call-param.order_id
+     2183                                                           ,input buf_tt-rule-call-param.param-name
+     2184                                                           ,input buf_tt-rule-call-param.p-index
+     2185                                                           ,input buf_tt-rule-call-param.call_id
+     2186                                                           ,buffer buf_rule-call-param
+     2187                                                           ,input v-chip-num).
+     2188             buffer-copy buf_tt-rule-call-param to buf_rule-call-param.
+     2189           end.
+     2190         end.
+     2191         for each buf_rule-call-param where
+     2192                buf_rule-call-param.call_id = buf_tt-layout-elem-rule.uniq-key-rec
+     2193         on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2194         on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2195         on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile ):
+     2196           find first buf_tt-rule-call-param where
+     2197                    buf_tt-rule-call-param.call_id = buf_rule-call-param.call_id
+     2198               and  buf_tt-rule-call-param.codex_id = buf_rule-call-param.codex_id
+     2199               and  buf_tt-rule-call-param.ruleset_id = buf_rule-call-param.ruleset_id
+     2200               and  buf_tt-rule-call-param.order_id = buf_rule-call-param.order_id
+     2201               and  buf_tt-rule-call-param.param-name = buf_rule-call-param.param-name
+     2202               and  buf_tt-rule-call-param.p-index = buf_rule-call-param.p-index no-error.
+     2203           if not available buf_tt-rule-call-param then do:
+     2204             if v-chip-num < 0 then do:
+     2205               run  layouth_create-layout_h  in this-procedure (
+     2206                                                               input (if new(buf_layout) then 'ДОБАВЛЕНИЕ':U else 'ИЗМЕНЕНИЕ':U)
+     2207                                                             ,input buf_tt-layout.layout-id
+     2208                                                             ,buffer buf_layout
+     2209                                                             ,output v-chip-num).
+     2210             end.
+     2211             run  layouth_create-rule-call-param_h  in this-procedure (
+     2212                                                             input 'удаление':U
+     2213                                                           ,input buf_rule-call-param.call#_id
+     2214                                                           ,input buf_rule-call-param.codex_id
+     2215                                                           ,input buf_rule-call-param.ruleset_id
+     2216                                                           ,input buf_rule-call-param.order_id
+     2217                                                           ,input buf_rule-call-param.param-name
+     2218                                                           ,input buf_rule-call-param.p-index
+     2219                                                           ,input buf_rule-call-param.call_id
+     2220                                                           ,buffer buf_rule-call-param
+     2221                                                           ,input v-chip-num).
+     2222           end.
+     2223         end.
+     2224       end.
+     2225       for each buf_layout-elem-rule where
+     2226               buf_layout-elem-rule.layout-id = buf_tt-layout.layout-id
+     2227       on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2228       on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2229       on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile ):
+     2230         find first buf_tt-layout-elem-rule where
+     2231                   buf_tt-layout-elem-rule.layout-id = buf_layout.layout-id
+     2232               and buf_tt-layout-elem-rule.mode-id = buf_layout-elem-rule.mode-id
+     2233               and buf_tt-layout-elem-rule.widget-id = buf_layout-elem-rule.widget-id no-error.
+     2234         if not available buf_tt-layout-elem-rule then do:
+     2235           if v-chip-num < 0 then do:
+     2236             run  layouth_create-layout_h  in this-procedure (
+     2237                                                             input (if new(buf_layout) then 'ДОБАВЛЕНИЕ':U else 'ИЗМЕНЕНИЕ':U)
+     2238                                                           ,input buf_tt-layout.layout-id
+     2239                                                           ,buffer buf_layout
+     2240                                                           ,output v-chip-num).
+     2241           end.
+     2242           run  layouth_create-layout-elem-rule_h  in this-procedure (
+     2243                                                           input 'удаление':U
+     2244                                                         ,input buf_layout-elem-rule.layout-id
+     2245                                                         ,input buf_layout-elem-rule.mode-id
+     2246                                                         ,input buf_layout-elem-rule.widget-id
+     2247                                                         ,buffer buf_layout-elem-rule
+     2248                                                         ,input v-chip-num).
+     2249           for each buf_rule-by-call where
+     2250                buf_rule-by-call.call_id = buf_layout-elem-rule.uniq-key-rec
+     2251           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2252           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2253           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile ):
+     2254              delete buf_rule-by-call.
+     2255           end.
+     2256           for each buf_rule-call-param where
+     2257                 buf_rule-call-param.call_id = buf_layout-elem-rule.uniq-key-rec
+     2258           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2259           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2260           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile ):
+     2261             if v-chip-num < 0 then do:
+     2262               run  layouth_create-layout_h  in this-procedure (
+     2263                                                               input (if new(buf_layout) then 'ДОБАВЛЕНИЕ':U else 'ИЗМЕНЕНИЕ':U)
+     2264                                                             ,input buf_tt-layout.layout-id
+     2265                                                             ,buffer buf_layout
+     2266                                                             ,output v-chip-num).
+     2267             end.
+     2268             run  layouth_create-rule-call-param_h  in this-procedure (
+     2269                                                             input 'удаление':U
+     2270                                                           ,input buf_rule-call-param.call#_id
+     2271                                                           ,input buf_rule-call-param.codex_id
+     2272                                                           ,input buf_rule-call-param.ruleset_id
+     2273                                                           ,input buf_rule-call-param.order_id
+     2274                                                           ,input buf_rule-call-param.param-name
+     2275                                                           ,input buf_rule-call-param.p-index
+     2276                                                           ,input buf_rule-call-param.call_id
+     2277                                                           ,buffer buf_rule-call-param
+     2278                                                           ,input v-chip-num).
+     2279              delete buf_rule-call-param.
+     2280           end.
+     2281           delete buf_layout-elem-rule.
+     2282         end.
+     2283       end.
+     2284       if buf_tt-layout.is-default = integer('-1':U) then do:
+     2285         for each buf2_layout no-lock where
+     2286                 buf2_layout.layout-type = buf_tt-layout.layout-type
+     2287             and buf2_layout.device-type = buf_tt-layout.device-type:
+     2288           if buf2_layout.layout-id = buf_tt-layout.layout-id then next .
+     2289           for each buf_tt-layout-elem-rule where
+     2290                   buf_tt-layout-elem-rule.layout-id = buf_tt-layout.layout-id
+     2291           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2292           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2293           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2294           :
+     2295             find first buf2_layout-elem-rule no-lock where
+     2296                   buf2_layout-elem-rule.layout-id = buf2_layout.layout-id
+     2297                and buf2_layout-elem-rule.mode-id = buf_tt-layout-elem-rule.mode-id
+     2298                and buf2_layout-elem-rule.widget-id = buf_tt-layout-elem-rule.widget-id no-error.
+     2299             if not available buf2_layout-elem-rule
+     2300             or (available (buf2_layout-elem-rule)
+     2301                and
+     2302                buf2_layout-elem-rule.rule_id <> buf_tt-layout-elem-rule.rule_id) then do:
+     2303                run  layouth_create-layout_h  in this-procedure (
+     2304                                                              input 'ИЗМЕНЕНИЕ':U
+     2305                                                             ,input buf2_layout.layout-id
+     2306                                                             ,buffer buf2_layout
+     2307                                                             ,output v-chip-num).
+     2308               if available buf2_layout-elem-rule then do:
+     2309                 find current buf2_layout-elem-rule share-lock.
+     2310                 run  layouth_create-layout-elem-rule_h  in this-procedure (
+     2311                                                                 input 'ИЗМЕНЕНИЕ':U
+     2312                                                               ,input buf2_layout-elem-rule.layout-id
+     2313                                                               ,input buf2_layout-elem-rule.mode-id
+     2314                                                               ,input buf2_layout-elem-rule.widget-id
+     2315                                                               ,buffer buf2_layout-elem-rule
+     2316                                                               ,input v-chip-num).
+     2317                 assign
+     2318                 buf2_layout-elem-rule.sts = integer('1':U).
+     2319                 find first buf3_layout share-lock where recid(buf3_layout) = recid(buf2_layout) no-error.
+     2320                 if available buf3_layout then do:
+     2321                   if buf3_layout.sts <> integer('99':U) then
+     2322                   buf3_layout.sts = integer('50':U)
+     2323                   .
+     2324                 end.
+     2325               end.
+     2326               else do:
+     2327                 run  layouth_create-layout-elem-rule_h  in this-procedure (
+     2328                                                                 input 'ДОБАВЛЕНИЕ':U
+     2329                                                               ,input buf2_layout.layout-id
+     2330                                                               ,input buf_tt-layout-elem-rule.mode-id
+     2331                                                               ,input buf_tt-layout-elem-rule.widget-id
+     2332                                                               ,buffer buf2_layout-elem-rule
+     2333                                                               ,input v-chip-num).
+     2334                 create buf2_layout-elem-rule.
+     2335                 buffer-copy buf_tt-layout-elem-rule
+     2336                 except layout-id
+     2337                 to buf2_layout-elem-rule
+     2338                 assign
+     2339                 buf2_layout-elem-rule.layout-id = buf2_layout.layout-id
+     2340                 buf2_layout-elem-rule.is-mandatory = integer('1':U)
+     2341                 .
+     2342                 run gen-key-rec in this-procedure ( input 'layout-elem-rule':U
+     2343                                                     ,input (buffer  buf2_layout-elem-rule:handle)
+     2344                                                     ,output v-ler-uniq-key-rec).
+     2345                 buf2_layout-elem-rule.uniq-key-rec = v-ler-uniq-key-rec.
+     2346                 find first buf_wi-mode no-lock where
+     2347                           buf_wi-mode.mode-type = 'cd-IBS-TH':U
+     2348                       and buf_wi-mode.mode-id  = buf2_layout-elem-rule.mode-id.
+     2349                 find first buf_rule-by-call share-lock where
+     2350                           buf_rule-by-call.call_id = buf2_layout-elem-rule.uniq-key-rec
+     2351                       and buf_rule-by-call.codex_id = buf_wi-mode.codex_id
+     2352                       and buf_rule-by-call.ruleset_id = buf_wi-mode.ruleset_id
+     2353                       and buf_rule-by-call.order_id = 0 no-error.
+     2354                 if not available buf_rule-by-call then do:
+     2355                   run rul/g-callid.p (
+     2356                                       input (if buf2_layout.is-default = integer('0':U)
+     2357                                               then 'layout-elem-rule':U
+     2358                                               else 'layout-elem-rule':U + chr(44) + "minus")
+     2359                                       ,input buf2_layout-elem-rule.uniq-key-rec
+     2360                                       ,output v-call#-id).
+     2361                   create buf_rule-by-call.
+     2362                   assign
+     2363                   buf_rule-by-call.call_id = buf2_layout-elem-rule.uniq-key-rec
+     2364                   buf_rule-by-call.call#_id = v-call#-id
+     2365                   buf_rule-by-call.codex_id = buf_wi-mode.codex_id
+     2366                   buf_rule-by-call.ruleset_id = buf_wi-mode.ruleset_id
+     2367                   buf_rule-by-call.order_id = 0
+     2368                   .
+     2369                   run gen-key-rec in this-procedure ( input 'rule-by-call':U
+     2370                                                       ,input (buffer  buf_rule-by-call:handle)
+     2371                                                       ,output v-rbc-uniq-key-rec).
+     2372                   buf_rule-by-call.uniq-key-rec = v-rbc-uniq-key-rec.
+     2373                   .
+     2374                 end.
+     2375               end.
+     2376             end.
+     2377           end.
+     2378         end.
+     2379       end.
+     2380     end.
+     2381   end.
+     2382   end procedure.
+     2383   procedure add-wi-mode:
+     2384   define variable v-cmp as logical   no-undo .
+     2385   define buffer buf_tt-wi-mode for tt-wi-mode.
+     2386   define buffer buf_wi-mode for ub.wi-mode.
+     2387   main-block:
+     2388   do
+     2389   on error undo, return error return-value
+     2390   :
+     2391     for each buf_tt-wi-mode
+     2392     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2393     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2394     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2395     :
+     2396       v-cmp = no.
+     2397       find first buf_wi-mode where
+     2398                buf_wi-mode.mode-type = buf_tt-wi-mode.mode-type
+     2399            and buf_wi-mode.mode-id = buf_tt-wi-mode.mode-id  no-error .
+     2400       if not available buf_wi-mode then do:
+     2401         create buf_wi-mode.
+     2402         v-cmp = no.
+     2403       end.
+     2404       else do:
+     2405         buffer-compare buf_tt-wi-mode to buf_wi-mode save result in v-cmp.
+     2406       end.
+     2407       if not v-cmp then do:
+     2408         buffer-copy buf_tt-wi-mode to buf_wi-mode.
+     2409       end.
+     2410     end.
+     2411   end.
+     2412   end procedure.
+     2413   procedure delete-wi-mode :
+     2414   define variable v-chip-num as integer   no-undo .
+     2415   define buffer buf_tt-wi-mode for tt-wi-mode.
+     2416   define buffer buf_wi-mode for ub.wi-mode.
+     2417   define buffer buf_layout-elem-rule for ub.layout-elem-rule.
+     2418   define buffer buf2_layout-elem-rule for ub.layout-elem-rule.
+     2419   define buffer buf_layout for ub.layout.
+     2420   main-block:
+     2421   do
+     2422   on error undo, return error
+     2423   :
+     2424     for each buf_wi-mode share-lock
+     2425     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2426     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2427     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2428     :
+     2429       find first buf_tt-wi-mode where
+     2430                 buf_tt-wi-mode.mode-type = buf_wi-mode.mode-type
+     2431             and buf_tt-wi-mode.mode-id = buf_wi-mode.mode-id no-error.
+     2432       if not available buf_tt-wi-mode
+     2433       and buf_wi-mode.mode-type = 'cd-IBS-TH':U
+     2434       then do:
+     2435          for each buf_layout-elem-rule no-lock where
+     2436                   buf_layout-elem-rule.mode-id = buf_wi-mode.mode-id
+     2437           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2438           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2439           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2440          :
+     2441              v-chip-num = -1.
+     2442             find first buf_layout share-lock where
+     2443                   buf_layout.layout-id = buf_layout-elem-rule.layout-id no-error.
+     2444             if available buf_layout
+     2445             then do:
+     2446                run  layouth_create-layout_h  in this-procedure (
+     2447                                                              input 'ИЗМЕНЕНИЕ':U
+     2448                                                             ,input buf_layout.layout-id
+     2449                                                             ,buffer buf_layout
+     2450                                                             ,output v-chip-num).
+     2451               if buf_layout.sts <> integer('99':U) then
+     2452               assign
+     2453               buf_layout.sts = integer('50':U)
+     2454               .
+     2455             end.
+     2456             find first buf2_layout-elem-rule exclusive-lock where
+     2457                     recid(buf2_layout-elem-rule) = recid(buf_layout-elem-rule).
+     2458              if v-chip-num >= 0 then
+     2459              run  layouth_create-layout-elem-rule_h  in this-procedure (
+     2460                                                               input 'ИЗМЕНЕНИЕ':U
+     2461                                                             ,input buf2_layout-elem-rule.layout-id
+     2462                                                             ,input buf2_layout-elem-rule.mode-id
+     2463                                                             ,input buf2_layout-elem-rule.widget-id
+     2464                                                             ,buffer buf2_layout-elem-rule
+     2465                                                             ,input v-chip-num).
+     2466             assign
+     2467             buf2_layout-elem-rule.sts = integer('1':U)
+     2468             .
+     2469          end.
+     2470          delete buf_wi-mode.
+     2471       end.
+     2472     end.
+     2473   end.
+     2474   end procedure.
+     2475   procedure delete-rule-by-set :
+     2476   define buffer buf_tt-rule-by-set for tt-rule-by-set.
+     2477   define buffer buf_rule-by-set for ub.rule-by-set.
+     2478   main-block:
+     2479   do
+     2480   on error undo, return error
+     2481   :
+     2482     for each buf_rule-by-set share-lock
+     2483     where buf_rule-by-set.codex_id = 19
+     2484     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2485     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2486     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2487     :
+     2488       find first buf_tt-rule-by-set where
+     2489                 buf_tt-rule-by-set.codex_id = buf_rule-by-set.codex_id
+     2490             and buf_tt-rule-by-set.ruleset_id = buf_rule-by-set.ruleset_id
+     2491             and buf_tt-rule-by-set.rule_id = buf_rule-by-set.rule_id
+     2492             no-error.
+     2493       if not available buf_tt-rule-by-set
+     2494       and buf_rule-by-set.codex_id = 19
+     2495       then do:
+     2496         delete buf_rule-by-set.
+     2497       end.
+     2498     end.
+     2499   end.
+     2500   end procedure.

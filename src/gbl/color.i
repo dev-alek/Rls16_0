@@ -1,0 +1,44 @@
+/*
+
+$Revision$
+$Author$
+$Date$
+$Workfile$
+$Archive$
+
+Определение стандартный цветов системы
+
+Автор: Перваков Михаил Сергеевич
+Дата создания: 03/23/98
+Author: Mikhail Pervakov
+Creation date: 03/23/98
+
+*/
+
+&scoped-define vssseq {&sequence}
+define variable vss-include-info{&vssseq} as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+
+&IF DEFINED( PROTECT_COLOR_I ) = 0 &THEN
+
+&GLOB PROTECT_COLOR_I "YES":U
+
+DEF VAR BLACK_COLOR        AS INTEGER NO-UNDO INIT  0.
+DEF VAR DARK_BLUE_COLOR    AS INTEGER NO-UNDO INIT  1.
+DEF VAR DARK_GREEN_COLOR   AS INTEGER NO-UNDO INIT  2.
+DEF VAR CYAN_COLOR         AS INTEGER NO-UNDO INIT  3.
+DEF VAR BROWN_COLOR        AS INTEGER NO-UNDO INIT  4.
+DEF VAR DARK_GRAY_COLOR    AS INTEGER NO-UNDO INIT  7.
+DEF VAR DARK_GREY_COLOR    AS INTEGER NO-UNDO INIT  7.
+DEF VAR VERY_GRAY_COLOR    AS INTEGER NO-UNDO INIT  7.
+DEF VAR VERY_GREY_COLOR    AS INTEGER NO-UNDO INIT  7.
+DEF VAR GRAY_COLOR         AS INTEGER NO-UNDO INIT  8.
+DEF VAR GREY_COLOR         AS INTEGER NO-UNDO INIT  8.
+DEF VAR BLUE_COLOR         AS INTEGER NO-UNDO INIT  9.
+DEF VAR GREEN_COLOR        AS INTEGER NO-UNDO INIT 10.
+DEF VAR RED_COLOR          AS INTEGER NO-UNDO INIT 12.
+DEF VAR LIGHT_RED_COLOR    AS INTEGER NO-UNDO INIT 13.
+DEF VAR YELLOW_COLOR       AS INTEGER NO-UNDO INIT 14.
+DEF VAR WHITE_COLOR        AS INTEGER NO-UNDO INIT 15.
+
+&ENDIF
+/* $Workfile$ e n d */

@@ -1,0 +1,107 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.bge.1crn.subjects.*.
+        3   using ibs.th.bge.1crn.import.*.
+        4   block-level on error undo, throw.
+        5   class ibs.th.bge.1crn.import.impordansw implements ibs.th.bge.1crn.import.iimpsubject:
+        6     define private variable parparentproc   as handle no-undo .
+        7     define variable orderStatus  as class ibs.th.str.order.sts.order no-undo .
+        8     define variable DbNum        as integer no-undo .
+        9     define property Msg as character no-undo
+       10       get.
+       11       set.
+       12     define property Notification as character no-undo
+       13       get.
+       14       set.
+       15     constructor public impordansw():
+       16       find first sys-ctrl no-lock .
+       17       DbNum = sys-ctrl.db-num.
+       18     end constructor.
+       19     method public logical Excute( subjectObj as class ibs.th.bge.1crn.subjects.isubject ):
+       20       define variable vResult    as logical   no-undo.
+       21       define variable vMsg       as character no-undo.
+       22       define variable vNewSts    as integer   no-undo.
+       23       define variable vOrdansw    as class ordansw no-undo.
+       24       define buffer sys-ctrl       for ub.sys-ctrl .
+       25       define buffer buf_order-doc  for ub.order-doc .
+       26       define buffer buf_order-line for ub.order-line .
+       27       orderStatus =  new ibs.th.str.order.sts.order().
+       28       vOrdansw     = cast (subjectObj, ordansw).
+       29       find first buf_order-doc exclusive-lock where
+       30                  buf_order-doc.db-num   = DbNum
+       31              and buf_order-doc.doc-code = vOrdansw:order-item no-error no-wait.
+       32       if not avail buf_order-doc then
+       33       do:
+       34         Msg = if locked(buf_order-doc)
+       35               then substitute("Заказ &1 занят другим пользователем.", vOrdansw:order-item)
+       36               else substitute("Заказ &1 не найден.", vOrdansw:order-item).
+       37         return error.
+       38       end.
+       39       assign
+       40         buf_order-doc.order-item = if vOrdansw:order-item-ext <> ?
+       41                                    then vOrdansw:order-item-ext
+       42                                    else buf_order-doc.order-item
+       43         buf_order-doc.info       = if vOrdansw:mess <> "" then vOrdansw:mess else buf_order-doc.info
+       44       .
+       45       vNewSts = statusMapping(vOrdansw:sts).
+       46       if ( vNewSts = orderStatus:Corrected:KeyIntDB and buf_order-doc.sts <> orderStatus:Corrected:KeyIntDB )
+       47       or ( vNewSts = orderStatus:Cancelled:KeyIntDB and buf_order-doc.sts <> orderStatus:Cancelled:KeyIntDB ) then
+       48       do:
+       49         Notification = substitute("&1Заказ № &2 &3 - &4.&5", Notification,
+       50                                   if buf_order-doc.order-item <> "" then buf_order-doc.order-item else (string(buf_order-doc.doc-code) + " в TH"),
+       51                                   buf_order-doc.cli-name, orderStatus:GetLabel(vNewSts),
+       52                                   "~n").
+       53       end.
+       54       buf_order-doc.sts        = if vOrdansw:sts <> 6 then statusMapping(vOrdansw:sts) else buf_order-doc.sts.
+       55       if buf_order-doc.sts = orderStatus:Cancelled:KeyIntDB then
+       56       do:
+       57         for each buf_order-line exclusive-lock where
+       58                  buf_order-line.db-num   = buf_order-doc.db-num
+       59              and buf_order-line.doc-code = buf_order-doc.doc-code
+       60         :
+       61             buf_order-line.fact-qnty = 0.
+       62         end.
+       63       end.
+       64       vResult = true.
+       65       catch exAppErrors as class Progress.Lang.AppError :
+       66         Msg = Msg + "; " + exAppErrors:ReturnValue .
+       67         if Msg = "" then Msg = exAppErrors:GetMessage(1) .
+       68         vResult = false.
+       69       end catch .
+       70       catch exProErrors as class Progress.Lang.ProError :
+       71         Msg = exProErrors:GetMessage(1) .
+       72         vResult = false.
+       73       end catch .
+       74       catch exAnyErrors as class Progress.Lang.Error:
+       75         Msg = "Unexpected error occurred..." .
+       76         vResult = false.
+       77       end catch .
+       78       finally:
+       79         if valid-object(orderStatus) then
+       80           delete object orderStatus no-error.
+       81         return vResult.
+       82       end.
+       83     end method.
+       84     method public void sendNotification():
+       85       define buffer buf_db-attr for ub.db-attr.
+       86       if Notification <> "" then
+       87       do:
+       88         Notification = "ВНИМАНИЕ!~n" + Notification.
+       89         find first buf_db-attr no-lock where
+       90                    buf_db-attr.db-num = DbNum
+       91                and buf_db-attr.attr-code = "orderStatusNitif" no-error.
+       92         if not available (buf_db-attr) or logical(buf_db-attr.attr-value) then
+       93           run utl\proc-msg.p (trim(Notification,"~n")) no-error.
+       94       end.
+       95     end method.
+       96     method private integer statusMapping (iAnswer as integer):
+       97       case iAnswer:
+       98         when 0 then return orderStatus:Shipment:KeyIntDB.
+       99         when 1 then return orderStatus:Corrected:KeyIntDB.
+      100         when 2 then return orderStatus:Cancelled:KeyIntDB.
+      101         when 3 then return orderStatus:DeliveryWaiting:KeyIntDB.
+      102         when 4 then return orderStatus:DeliveryCompleted:KeyIntDB.
+      103         when 5 then return orderStatus:ReceivedProvider:KeyIntDB.
+      104       end case.
+      105       return ?.
+      106     end method.
+      107   end class.

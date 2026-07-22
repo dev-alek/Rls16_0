@@ -1,0 +1,236 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: sockserver.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: gbl/sockserver.p $":U .
+        7   define variable vss-description as character no-undo init "Сокет-сервер".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define stream slog.
+       13   define variable s-socket as handle    no-undo .
+       14   define variable v-retval as logical   no-undo .
+       15   define temp-table tt-cli-socket no-undo
+       16     field sock-handle     as handle
+       17     field remote-host     as character
+       18     field remote-port     as integer
+       19     field conn-time       as integer
+       20     field last-conn-time  as integer
+       21   index pi is primary unique
+       22     sock-handle
+       23   .
+       24   main-block :
+       25   do
+       26   on error undo main-block, return error return-value
+       27   :
+       28     run empty-tt-cli-socket in this-procedure .
+       29     create server-socket s-socket no-error .
+       30     if error-status :error or
+       31        not valid-handle (s-socket)
+       32     then do:
+       33       message
+       34         "Ошибка при создании серверного сокета!" skip
+       35         error-status :get-message(1) skip
+       36         error-status :get-message(2) skip
+       37         error-status :get-message(3) skip
+       38       view-as alert-box error.
+       39       undo main-block, return error.
+       40     end.
+       41     assign
+       42       v-retval = s-socket:enable-connections( "-S 12222" )
+       43     .
+       44     assign
+       45       v-retval = s-socket:set-connect-procedure( "conproc" )
+       46     .
+       47     wait-for "close" of this-procedure.
+       48     for each tt-cli-socket:
+       49       if valid-handle( tt-cli-socket.sock-handle )
+       50       then do:
+       51         tt-cli-socket.sock-handle :disconnect() .
+       52       end.
+       53     end.
+       54     s-socket:disable-connections() .
+       55     delete object s-socket.
+       56   end.
+       57   procedure conproc :
+       58     define input param clienthandle as handle.
+       59   do
+       60   on error undo, return error return-value
+       61   :
+       62     define variable v-log as logical   no-undo .
+       63     assign
+       64       v-log = clienthandle :set-read-response-procedure("readproc").
+       65     .
+       66     if v-log <> yes then do:
+       67     end.
+       68     clienthandle :set-socket-option( "SO-LINGER" , "FALSE" ).
+       69     clienthandle :set-socket-option( "TCP-NODELAY" , "TRUE" ).
+       70     find first tt-cli-socket no-lock
+       71       where tt-cli-socket.sock-handle = clienthandle
+       72     no-error .
+       73     if not available tt-cli-socket
+       74     then do:
+       75       create tt-cli-socket.
+       76       assign
+       77         tt-cli-socket.sock-handle = clienthandle
+       78       .
+       79     end.
+       80     assign
+       81       tt-cli-socket.remote-host     = clienthandle :remote-host
+       82       tt-cli-socket.remote-port     = clienthandle :remote-port
+       83       tt-cli-socket.conn-time       = time
+       84       tt-cli-socket.last-conn-time  = tt-cli-socket.conn-time
+       85     .
+       86     run write-log in this-procedure ( substitute( "Установлено соединение. Удаленный хост: &1 , удаленный порт: &2"
+       87                                                 , tt-cli-socket.remote-host
+       88                                                 , tt-cli-socket.remote-port
+       89                                                 )
+       90                                     ) .
+       91   end.
+       92   end procedure.
+       93   procedure readproc :
+       94     define variable v-size          as integer    no-undo .
+       95     define variable v-crc32         as int64      no-undo .
+       96     define variable v-func_num      as integer    no-undo .
+       97     define variable v-req_num       as integer    no-undo .
+       98     define variable v-field_num     as integer    no-undo .
+       99     define variable v-text          as character  no-undo .
+      100     define variable v-checked-crc32 as int64      no-undo .
+      101     define variable v-msg-size      as integer    no-undo .
+      102     define variable v-memptr        as memptr     no-undo .
+      103     define variable v-memptrw       as memptr     no-undo .
+      104     define variable v-memptrs       as memptr     no-undo .
+      105     define variable v-msg-str       as longchar   no-undo .
+      106     define variable v-bytes-readed  as integer    no-undo .
+      107     define variable v-log           as logical    no-undo .
+      108     define variable v-sendmemptr    as memptr     no-undo .
+      109     define variable v-sendstr       as longchar   no-undo .
+      110   do
+      111   on error undo, return error return-value
+      112   :
+      113       if not self:connected() then return.
+      114       set-size(v-memptr) = 20 .
+      115       self:read(v-memptr,1,20) .
+      116       assign
+      117           v-bytes-readed = self:bytes-read
+      118       .
+      119       if v-bytes-readed < 20
+      120       then do:
+      121           return.
+      122       end.
+      123       assign
+      124         v-size        = get-long(v-memptr,1)
+      125         v-crc32       = int64(4294967296 + get-long(v-memptr,5))
+      126         v-func_num    = get-long(v-memptr,9)
+      127         v-req_num     = get-long(v-memptr,13)
+      128         v-field_num   = get-long(v-memptr,17)
+      129         v-msg-size    =  v-size - 20
+      130       .
+      131       run check-crc32 in this-procedure ( input v-memptr , 12, output v-checked-crc32) .
+      132       set-size(v-memptr) = 0.
+      133       if v-msg-size > 0
+      134       then do:
+      135           set-size(v-memptrs) = v-msg-size .
+      136           self:read(v-memptrs,1,v-msg-size) .
+      137           assign
+      138               v-msg-str = get-string(v-memptrs, 1, v-msg-size)
+      139           .
+      140           set-size(v-memptrs) = 0 .
+      141       end.
+      142       assign
+      143         v-text =   substitute( "1=&1, 2=&2, 3=&3, 4=&4, 5=&5, CRC32=&6"
+      144                              , v-size
+      145                              , v-crc32
+      146                              , v-func_num
+      147                              , v-req_num
+      148                              , v-field_num
+      149                              , v-checked-crc32
+      150                              )
+      151       .
+      152       run write-log in this-procedure ( substitute( "&1:&2 &3&4&5 byte recieved : &4&6&4&7&4&6"
+      153                                                   , self :remote-host
+      154                                                   , self :remote-port
+      155                                                   , v-text
+      156                                                   , chr(10)
+      157                                                   , self :bytes-read
+      158                                                   , fill('-',120)
+      159                                                   , v-msg-str
+      160                                                   )
+      161                                       ) .
+      162       case v-req_num:
+      163           when 12
+      164           then do:
+      165               run gbl/mtreq12.p ( input this-procedure , input v-msg-str , output v-sendstr) .
+      166               set-size(v-sendmemptr) = 20 + length(v-sendstr) + 1 .
+      167               put-long(v-sendmemptr , 1 )   = 20 + length(v-sendstr) .
+      168               put-long(v-sendmemptr , 5 )   = 0 .
+      169               put-long(v-sendmemptr , 9 )   = 0 .
+      170               put-long(v-sendmemptr , 13 )  = 0 .
+      171               put-long(v-sendmemptr , 17 )  = 0 .
+      172               put-string(v-sendmemptr,21)   = v-sendstr .
+      173               v-log = self:write(v-sendmemptr, 1, 20 + length(v-sendstr) ) no-error .
+      174               if error-status :error
+      175               then do:
+      176                 message
+      177                   error-status :get-message(1) skip
+      178                   error-status :get-message(2) skip
+      179                   error-status :get-message(3)
+      180                 view-as alert-box error.
+      181               end.
+      182               set-size(v-sendmemptr) = 0 .
+      183                   run write-log in this-procedure ( substitute("&1 bytes writen: &2&3&2&4&2&3"
+      184                                                               , self:BYTES-WRITTEN
+      185                                                               , chr(10)
+      186                                                               , fill('-',120)
+      187                                                               , v-sendstr
+      188                                                               )
+      189                                                   ).
+      190           end.
+      191           when 13
+      192           then do:
+      193             self:disconnect().
+      194             run write-log in this-procedure ( substitute( "Client disconnected! &1&2&1"
+      195                                                         , chr(10)
+      196                                                         , fill('*',120)
+      197                                                         )
+      198                                             ).
+      199           end.
+      200       end case.
+      201   end.
+      202   end procedure.
+      203   procedure write-log :
+      204     define input  parameter p-message as character no-undo .
+      205   do
+      206   on error undo, return error return-value
+      207   :
+      208     output stream slog to value("c:\socklog.log":U) append.
+      209     put stream slog unformatted string( time , "HH:MM:SS") " " trim(p-message)   skip.
+      210     output stream slog close.
+      211   end.
+      212   end procedure.
+      213   procedure crc32 external "crc32.dll" CDECL :
+      214       define input    parameter p-crc    as long.
+      215       define input    parameter p-array  as memptr.
+      216       define input    parameter p-len    as long.
+      217       define return   parameter p-crc32  as long.
+      218   end.
+      219   procedure check-crc32:
+      220       define input parameter  p-mem   as memptr no-undo.
+      221       define input parameter  p-len   as integer no-undo.
+      222       define output parameter p-crc32     as int64 no-undo.
+      223       define variable v-message as memptr no-undo.
+      224       define variable v-crc32   as int64  no-undo.
+      225       SET-SIZE(v-message) = p-len .
+      226       set-pointer-value(v-message) = get-pointer-value(p-mem) + 8.
+      227       run crc32 ( input 0 , input v-message , input p-len , output v-crc32).
+      228       p-crc32 = int64(4294967296 + v-crc32).
+      229   end procedure.
+      230   procedure empty-tt-cli-socket :
+      231   do
+      232   on error undo, return error return-value
+      233   :
+      234     empty temp-table tt-cli-socket .
+      235   end.
+      236   end procedure.

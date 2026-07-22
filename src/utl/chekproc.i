@@ -1,0 +1,1 @@
+encode(string({1} * 13)) + string(index(encode(string({1})), "k"))

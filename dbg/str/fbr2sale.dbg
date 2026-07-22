@@ -1,0 +1,2187 @@
+        1   block-level on error undo, throw.
+        2   define input parameter parparentproc        as widget-handle    no-undo.
+        3   define input parameter p-fbrhist-handle     as widget-handle    no-undo.
+        4   define input parameter p-kitchen-type       as character        no-undo.
+        5   define input parameter p-kitchen-code       as integer          no-undo.
+        6   define input parameter p-res-type           as character        no-undo.
+        7   define input parameter p-res-code           as integer          no-undo.
+        8   define input parameter p-income-trn-doc-code as character       no-undo.
+        9   define input parameter p-sale-doc-code      as character        no-undo.
+       10   define input parameter p-kitchen-rest       as logical          no-undo.
+       11   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+       12   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+       13   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+       14   define variable vss-workfile    as character no-undo init "$Workfile: fbr2sale.p $":U .
+       15   define variable vss-archive     as character no-undo init "$Archive: str/fbr2sale.p $":U .
+       16   define variable vss-description as character no-undo init "Создание документа внутреннего перемещения для блюд с кухни в ресторан".
+       17   procedure vss-get-info :
+       18     define output parameter p-vss-revision    like vss-revision    no-undo .
+       19     define output parameter p-vss-author      like vss-author      no-undo .
+       20     define output parameter p-vss-date        like vss-date        no-undo .
+       21     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       22     define output parameter p-vss-archive     like vss-archive     no-undo .
+       23     define output parameter p-vss-description like vss-description no-undo .
+       24     assign
+       25       p-vss-revision    = vss-revision
+       26       p-vss-author      = vss-author
+       27       p-vss-date        = vss-date
+       28       p-vss-workfile    = vss-workfile
+       29       p-vss-archive     = vss-archive
+       30       p-vss-description = vss-description
+       31     .
+       32   end procedure.
+       33   procedure vss-get-parameters :
+       34     define output parameter p-vss-parameters as character no-undo .
+       35   end procedure.
+       36   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       37   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       38   define variable v-vssrevis-logger                   as handle    no-undo .
+       39   procedure vss-logevent :
+       40     define input  parameter p-extra-paramters as character no-undo .
+       41     define variable v-vssrevis-parameters as character no-undo .
+       42     do
+       43     on error undo, return error return-value
+       44     :
+       45       if  valid-handle(v-vssrevis-logger)
+       46       and v-vssrevis-logger :get-signature("logevent") <> ""
+       47       then do:
+       48         run vss-get-parameters in this-procedure
+       49           (output v-vssrevis-parameters
+       50           ).
+       51         run logevent in v-vssrevis-logger
+       52           (input vss-workfile
+       53           ,input vss-revision
+       54           ,input v-vssrevis-parameters
+       55           ,input p-extra-paramters
+       56           ).
+       57       end.
+       58     end.
+       59   end procedure.
+       60   assign
+       61     v-vssrevis-logger = g#vssrevis-logger
+       62   .
+       63   if  valid-handle(v-vssrevis-logger)
+       64   and v-vssrevis-logger :get-signature("logevent") <> ""
+       65   then do:
+       66     assign
+       67       v-vssrevis-logevent = true
+       68     .
+       69     run vss-logevent in this-procedure (input vss-description) .
+       70   end.
+       71   define new global shared variable g#language as character no-undo .
+       72   if g#language <> '' and g#language <> 'rus':U then do:
+       73     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       74   end.
+       75   define new global shared variable g#library  as handle no-undo .
+       76   define new global shared variable g#library2 as handle no-undo .
+       77   define new global shared variable g#lib-trn  as handle no-undo .
+       78   define new global shared variable g#lib-trn2 as handle no-undo .
+       79   define new global shared variable g#lib-trn3 as handle no-undo .
+       80   define new global shared variable g#lib-trn4 as handle no-undo .
+       81   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       82   procedure doc-code:
+       83   define input  parameter parmode          as   character           no-undo.
+       84   define input  parameter parobj-type      like ub.clients.obj-type no-undo.
+       85   define input  parameter parobj-code      like ub.clients.obj-code no-undo.
+       86   define input  parameter parroot-doc-code like ub.trn-doc.doc-code no-undo.
+       87   define output parameter pardoc-code      like ub.trn-doc.doc-code no-undo.
+       88   define buffer buf_sys-ctrl for ub.sys-ctrl  .
+       89   define variable vardb-remote     as   logical             no-undo.
+       90   define variable vartemp-doc-code like ub.trn-doc.doc-code no-undo.
+       91   define variable v-delimiter as character no-undo .
+       92   do
+       93   on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+       94   :
+       95   find first buf_sys-ctrl no-lock .
+       96   vardb-remote = buf_sys-ctrl.db-num <> 0 .
+       97     CASE parmode:
+       98       when "main":u then do:
+       99         if vardb-remote then do:
+      100           assign
+      101             pardoc-code = trim (string (next-value (s-trn-doc, ub), ">>>>>>>>>9")) + "-" + trim (string (parobj-code, ">>>>9")) + substring (parobj-type, (if g#language = "RUS" then 1 else 2), 1).
+      102         end.
+      103         else do:
+      104           assign
+      105             pardoc-code = trim (string (next-value (s-trn-doc, ub), ">>>>>>>>>9")) + "-".
+      106         end.
+      107       end.
+      108       when "trio" then do:
+      109         assign
+      110           pardoc-code = replace (parroot-doc-code, "=", "*").
+      111       end.
+      112       otherwise do:
+      113         assign
+      114         v-delimiter = entry(lookup(entry(1, parmode), "main,chip,pair,flora,trio-m,quadro,stock-up,stock-down,stock-fix," +                          "main_s,chip_s,pair_s,trio-m_s,quadro_s,stock-up_s,stock-down_s,stock-fix_s":U), ("-,-,=,#,*,^,+,`,":U + chr(126) + ",у-,у-,у=,у*,у^,у+,у`,у" + chr(126)))
+      115         no-error
+      116         .
+      117         if error-status:error  then do:
+      118           undo, return error substitute("Ошибка при генерации номера документа&1Неверное значение параметра parmode &2"
+      119                                         ,chr(10)
+      120                                         ,parmode
+      121                                         ).
+      122         end.
+      123         if num-entries(parmode) = 1
+      124         and parmode <> "chip":U
+      125         and parmode <> "chip_s":U
+      126         then do:
+      127           assign
+      128           pardoc-code = replace (parroot-doc-code, "-", v-delimiter).
+      129         end.
+      130         else if (lookup("chip":U, parmode) > 0
+      131                  or
+      132                  lookup("chip_s":U, parmode) > 0) then do:
+      133           assign
+      134             vartemp-doc-code = parroot-doc-code.
+      135           do while true:
+      136             if index (vartemp-doc-code , ".") = 0 then
+      137               vartemp-doc-code  = replace (vartemp-doc-code , v-delimiter, v-delimiter + "1.").
+      138             else
+      139               vartemp-doc-code  =
+      140               substring (vartemp-doc-code , 1, index (vartemp-doc-code, v-delimiter)) +
+      141               string (integer (substring (vartemp-doc-code, index (vartemp-doc-code, v-delimiter) + 1, index (vartemp-doc-code, ".") - index (vartemp-doc-code, v-delimiter) - 1)) + 1) +
+      142               substring (vartemp-doc-code, index (vartemp-doc-code, ".")).
+      143             if not can-find (ub.trn-doc where ub.trn-doc.doc-code = vartemp-doc-code no-lock) then leave.
+      144           end.
+      145           assign
+      146             pardoc-code = vartemp-doc-code.
+      147         end.
+      148       end.
+      149     end CASE.
+      150     if pardoc-code = '':U
+      151     or (parroot-doc-code <> '':U
+      152     and pardoc-code = parroot-doc-code) then do:
+      153       undo, return error substitute("Ошибка при генерации номера документа&1"
+      154                                     ,chr(10)).
+      155     end.
+      156   end.
+      157   end. // procedure/method
+      158   function get-doc-code-int64 returns int64
+      159     ( input p-doc-code as character ) :
+      160     define variable v-ind              as integer   no-undo .
+      161     define variable v-num-entries      as integer   no-undo .
+      162     define variable v-doc-code-int64   as int64     no-undo .
+      163     define variable v-canonic-doc-code as character no-undo .
+      164     assign
+      165       v-num-entries      = num-entries( ("-,-,=,#,*,^,+,`,":U + chr(126) + ",у-,у-,у=,у*,у^,у+,у`,у" + chr(126)) )
+      166       v-canonic-doc-code = p-doc-code
+      167     .
+      168     do v-ind = 1 to v-num-entries
+      169     :
+      170       assign
+      171         v-canonic-doc-code = entry(1, v-canonic-doc-code, entry( v-ind, ("-,-,=,#,*,^,+,`,":U + chr(126) + ",у-,у-,у=,у*,у^,у+,у`,у" + chr(126)) ) )
+      172       .
+      173     end.
+      174     assign
+      175       v-doc-code-int64 = int64(v-canonic-doc-code) no-error
+      176     .
+      177     return v-doc-code-int64 .
+      178   end. // function/method
+      179   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      180   procedure cur-time :
+      181      define output parameter p-today as date      no-undo .
+      182      define output parameter p-time  as integer   no-undo .
+      183     do
+      184     on error undo, return error
+      185     :
+      186       define variable v-date1 as date      no-undo .
+      187       define variable v-date2 as date      no-undo .
+      188       define variable v-time  as integer   no-undo .
+      189       assign
+      190         v-date1 = today
+      191         v-time  = time
+      192         v-date2 = today
+      193       .
+      194       if v-date1 <> v-date2
+      195       then do:
+      196         assign
+      197           v-date1 = today
+      198           v-time  = v-time
+      199         .
+      200       end.
+      201       assign
+      202         p-today = v-date1
+      203         p-time  = v-time
+      204       .
+      205     end.
+      206   end.
+      207   function cur-time-date returns character
+      208   :
+      209     return string(today, '99/99/9999':U) .
+      210   end.
+      211   function cur-time-mjd returns decimal
+      212   :
+      213     define variable v-date as date      no-undo .
+      214     define variable v-time as integer   no-undo .
+      215     run cur-time in this-procedure
+      216       (output v-date
+      217       ,output v-time
+      218       ) .
+      219     return integer(v-date) - 2400002 + (v-time / 86400) .
+      220   end.
+      221   function cur-time-get-ending-index returns integer
+      222   (input p-number as integer
+      223   )
+      224   :
+      225     if p-number < 0
+      226     or p-number = ?
+      227     then do:
+      228       return 1 .
+      229     end.
+      230     define variable v-rest as integer   no-undo .
+      231     assign
+      232       p-number = p-number modulo 100
+      233     .
+      234     if p-number < 20
+      235     then do:
+      236       assign
+      237         v-rest = p-number
+      238       .
+      239     end.
+      240     else do:
+      241       assign
+      242         v-rest = p-number modulo 10
+      243       .
+      244     end.
+      245     case v-rest :
+      246       when 1
+      247       then do:
+      248         return 2 .
+      249       end.
+      250       when 2 or
+      251       when 3 or
+      252       when 4
+      253       then do:
+      254         return 3 .
+      255       end.
+      256       otherwise do:
+      257         return 1 .
+      258       end.
+      259     end case .
+      260   end.
+      261   procedure cur-time-mjd-to-date :
+      262      define input  parameter i-mjd-diff as decimal no-undo.
+      263      define output parameter o-Date     as date    no-undo.
+      264      define output parameter o-Time     as integer no-undo.
+      265      define variable v-day-number as integer   no-undo .
+      266      if    i-mjd-diff < 0
+      267         or i-mjd-diff = ?
+      268      then do:
+      269         return "?" .
+      270      end.
+      271      assign
+      272         v-day-number = truncate(i-mjd-diff,0).
+      273         o-Date = date(v-day-number + 2400002).
+      274         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      275     .
+      276   end.
+      277   function cur-time-mjd-to-string returns character
+      278   (input p-mjd-diff as decimal
+      279   )
+      280   :
+      281     define variable v-day-number as integer   no-undo .
+      282     define variable v-seconds    as integer   no-undo .
+      283     define variable v-hour       as integer   no-undo .
+      284     define variable v-min        as integer   no-undo .
+      285     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      286     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      287     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      288     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      289     if p-mjd-diff < 0
+      290     or p-mjd-diff = ?
+      291     then do:
+      292       return "?" .
+      293     end.
+      294     assign
+      295       v-day-number = integer(truncate(p-mjd-diff,0))
+      296       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      297     .
+      298     if v-seconds > 86400
+      299     then do:
+      300       assign
+      301         v-seconds = 86400 - 1
+      302       .
+      303     end.
+      304     if v-seconds < 0
+      305     then do:
+      306       assign
+      307         v-seconds = 0
+      308       .
+      309     end.
+      310     assign
+      311       v-hour = truncate(v-seconds / 3600, 0)
+      312     .
+      313     assign
+      314       v-seconds = v-seconds modulo 3600
+      315     .
+      316     assign
+      317       v-min = truncate(v-seconds / 60, 0)
+      318     .
+      319     assign
+      320       v-seconds = v-seconds modulo 60
+      321     .
+      322     return
+      323         (if v-day-number <> 0
+      324           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      325           else ""
+      326         )
+      327       + (if v-day-number <> 0 or v-hour <> 0
+      328           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      329           else ""
+      330         )
+      331       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      332           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      333           else ""
+      334         )
+      335       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      336       .
+      337   end.
+      338   function cur-time-string returns character
+      339   :
+      340     define variable v-date as date      no-undo .
+      341     define variable v-time as integer   no-undo .
+      342     run cur-time in this-procedure
+      343       (output v-date
+      344       ,output v-time
+      345       ) .
+      346     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      347   end.
+      348   function cur-time-string-sec returns character
+      349   :
+      350     define variable v-date as date      no-undo .
+      351     define variable v-time as integer   no-undo .
+      352     run cur-time in this-procedure
+      353       (output v-date
+      354       ,output v-time
+      355       ) .
+      356     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      357   end.
+      358   function cur-time-custom  returns character
+      359   (input p-prefix as character
+      360   ,input p-date-format as character
+      361   ,input p-delimiter as character
+      362   ,input p-time-format as character
+      363   ,input p-suffix as character
+      364   )
+      365   :
+      366     define variable v-date as date      no-undo .
+      367     define variable v-time as integer   no-undo .
+      368     run cur-time in this-procedure
+      369       (output v-date
+      370       ,output v-time
+      371       ) .
+      372     return
+      373       p-prefix
+      374       + string(v-date, p-date-format)
+      375       + p-delimiter
+      376       + string(v-time, p-time-format)
+      377       + p-suffix
+      378       .
+      379   end.
+      380   function cur-time-print  returns character
+      381   :
+      382     define variable v-date as date      no-undo .
+      383     define variable v-time as integer   no-undo .
+      384     run cur-time in this-procedure
+      385       (output v-date
+      386       ,output v-time
+      387       ) .
+      388     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      389   end.
+      390   function cur-time-datetime returns datetime
+      391   :
+      392     define variable v-char as character no-undo .
+      393     define variable v-datetime as datetime no-undo .
+      394     v-char = cur-time-string().
+      395     v-datetime = datetime(v-char).
+      396     return  v-datetime.
+      397   end.
+      398   function cur-time-string-msec returns character
+      399   :
+      400     define variable v-date as datetime  no-undo .
+      401     v-date = now.
+      402     return string(v-date) .
+      403   end.
+      404   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      405   define  temp-table temp_gds-list no-undo like ub.goods
+      406     field qnty   as decimal
+      407     field to-del as logical
+      408     field order-num as integer
+      409     field to-sel as logical
+      410     field promo-code as character
+      411     field ActionId  as int64
+      412     field db-num as integer
+      413     index art  is primary unique artic prod-type prod-code
+      414     index code is         unique gds-code
+      415     index oi order-num
+      416     index isel to-sel
+      417     .
+      418   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      419   define    temp-table temp_gds-list-hist no-undo
+      420   field list-table as character
+      421   field id as integer
+      422   field line as integer
+      423   field hist-mode as character
+      424   field des as character
+      425   field num-recs as integer
+      426   field option_ as character
+      427   field item_ as character
+      428   field status_ as character
+      429   field num-add as integer
+      430   field num-ignored as integer
+      431   field done as logical
+      432   field err_ as logical
+      433   field err-mes as character
+      434   index pi is primary
+      435   id
+      436   line
+      437   index isdone
+      438   done
+      439   .
+      440   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      441   function octal-to-char return character
+      442   ( p-string as character ) :
+      443     def var v-asc     as integer no-undo .
+      444     def var v-new-asc as integer no-undo .
+      445     def var ind       as integer no-undo .
+      446     if length(p-string) <> 3 then do:
+      447       return ? .
+      448     end.
+      449     assign
+      450       v-asc = 0
+      451     .
+      452     do ind = 1 to length(p-string)
+      453     :
+      454       assign
+      455         v-new-asc = asc(substring(p-string, ind, 1)) - asc('0')
+      456       .
+      457       if v-new-asc < 0 or v-new-asc >= 8 then do:
+      458         return ? .
+      459       end.
+      460       assign
+      461         v-asc = v-asc * 8 + v-new-asc
+      462       .
+      463     end.
+      464     return chr(v-asc) .
+      465   end function .
+      466   function char-to-octal return character
+      467   ( p-chr as character ) :
+      468     def var v-asc    as integer   no-undo .
+      469     def var ind      as integer   no-undo .
+      470     def var v-string as character no-undo .
+      471     if length(p-chr) <> 1 then do:
+      472       return ? .
+      473     end.
+      474     assign
+      475       v-asc    = asc(p-chr)
+      476       v-string = ""
+      477     .
+      478     do ind = 1 to 3
+      479     :
+      480       assign
+      481         v-string = chr( v-asc mod 8 + asc('0')) + v-string
+      482       .
+      483       assign
+      484         v-asc = truncate(v-asc / 8, 0)
+      485       .
+      486     end.
+      487     return v-string .
+      488   end.
+      489   function str-encode return character
+      490   (   p-init-string       as character
+      491     , p-encode-char       as character
+      492     , p-special-char-list as character
+      493   ) :
+      494     def var p-encode-string as character no-undo .
+      495     def var ind                as integer no-undo .
+      496     def var v-num-special-char as integer no-undo .
+      497     def var v-special-char     as character no-undo .
+      498     if p-encode-char = ?
+      499     or p-encode-char = "" then do:
+      500       assign
+      501         p-encode-char = "~~"
+      502       .
+      503     end.
+      504     if p-init-string = ? then do:
+      505       return "?" .
+      506     end.
+      507     if p-init-string = "?" then do:
+      508       return p-encode-char + char-to-octal("?") .
+      509     end.
+      510     assign
+      511       v-num-special-char = length(p-special-char-list)
+      512       p-encode-string    = replace(p-init-string
+      513                                   ,p-encode-char
+      514                                   ,p-encode-char + char-to-octal(p-encode-char)
+      515                                   )
+      516     .
+      517     do ind = 1 to v-num-special-char
+      518     :
+      519       assign
+      520         v-special-char = substring(p-special-char-list, ind, 1)
+      521       .
+      522       if v-special-char <> p-encode-char then do:
+      523         assign
+      524           p-encode-string = replace (p-encode-string
+      525                                     ,v-special-char
+      526                                     ,p-encode-char + char-to-octal(v-special-char)
+      527                                     )
+      528         .
+      529       end.
+      530     end.
+      531     return p-encode-string .
+      532   end.
+      533   function str-decode returns character
+      534     (p-init-string   as character
+      535     ,p-encode-char   as character
+      536     ) :
+      537     def var p-decode-string as character no-undo .
+      538     def var ind                       as integer no-undo .
+      539     def var v-num-entries-init-string as integer no-undo .
+      540     def var v-sub-phrase              as character no-undo .
+      541     def var v-special-char            as character no-undo .
+      542     if p-encode-char = ?
+      543     or p-encode-char = "" then do:
+      544       assign
+      545         p-encode-char = "~~"
+      546       .
+      547     end.
+      548     if p-init-string = "?" then do:
+      549       return ? .
+      550     end.
+      551     assign
+      552       v-num-entries-init-string = num-entries(p-init-string, p-encode-char)
+      553     .
+      554     if v-num-entries-init-string > 1 then do:
+      555       assign
+      556         p-decode-string = entry(1, p-init-string, p-encode-char)
+      557       .
+      558       do ind = 2 to v-num-entries-init-string
+      559       :
+      560         assign
+      561           v-sub-phrase = entry(ind, p-init-string, p-encode-char)
+      562         .
+      563         assign
+      564           v-special-char = octal-to-char(substring(v-sub-phrase, 1, 3))
+      565         .
+      566         if v-special-char <> ? then do:
+      567           assign
+      568             p-decode-string = p-decode-string
+      569                             + v-special-char
+      570                             + substring(v-sub-phrase, 4)
+      571           .
+      572         end.
+      573         else do:
+      574           assign
+      575             p-decode-string = p-decode-string
+      576                             + p-encode-char
+      577                             + v-sub-phrase
+      578           .
+      579         end.
+      580       end.
+      581     end.
+      582     else do:
+      583       assign
+      584         p-decode-string = p-init-string
+      585       .
+      586     end.
+      587     return p-decode-string .
+      588   end.
+      589   define variable vss-include-info5 as character format "X(65)" no-undo
+      590   initial "@(#)$Workfile$ $Revision$".
+      591   procedure fbrrsrv-rsrv-goods :
+      592   define input parameter p-parent-proc            as handle                   no-undo.
+      593   define input parameter p-goods-recid            as recid                    no-undo.
+      594   define input parameter p-doc-line-recid         as recid                    no-undo.
+      595   define input parameter p-required-qnty          like doc-line.doc-qnty      no-undo.
+      596   define input parameter p-set-price              as logical                  no-undo.
+      597   define input parameter p-price                  as decimal                  no-undo.
+      598   define input parameter p-rsrv-by-parts          as logical                  no-undo.
+      599   define input parameter p-income-trn-doc-code    as character                no-undo.
+      600   define output parameter p-rsrv-qnty             like doc-line.doc-qnty      no-undo.
+      601       define variable v-parts-rsrv-qnty       as decimal      no-undo.
+      602       define variable v-sum-parts-rsrv-qnty   as decimal      no-undo.
+      603       define variable v-r-b-is-base           as logical      no-undo.
+      604       define variable v-cost-base             as decimal      no-undo.
+      605       define variable v-cost-rubl             as decimal      no-undo.
+      606       define variable v-parts-parameter       as character    no-undo.
+      607       define variable v-parts-found           as logical      no-undo.
+      608       define variable v-price-base            as decimal      no-undo.
+      609       define variable v-price-rubl            as decimal      no-undo.
+      610       define variable v-yesno                 as logical      no-undo.
+      611       define buffer buf_goods         for goods.
+      612       define buffer buf_gds-prt       for gds-prt.
+      613       define buffer buf_gds-dtl       for gds-dtl.
+      614       define buffer buf_trn-doc       for trn-doc.
+      615       define buffer buf_doc-line      for doc-line.
+      616       define buffer buf_parts         for parts.
+      617   do
+      618   for buf_goods
+      619     , buf_gds-prt
+      620     , buf_gds-dtl
+      621     , buf_trn-doc
+      622     , buf_doc-line
+      623     , buf_parts
+      624   on error undo, return error
+      625   :
+      626   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      627   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run rbisbase in g#library
+      628     (output v-r-b-is-base
+      629     )  .
+      630       find first buf_goods no-lock
+      631            where recid( buf_goods ) = p-goods-recid
+      632       .
+      633       find first buf_gds-prt no-lock
+      634            where buf_gds-prt.upper-code = buf_goods.prt-root
+      635       .
+      636       find first buf_doc-line no-lock
+      637            where recid( buf_doc-line ) = p-doc-line-recid
+      638       .
+      639       find first buf_trn-doc exclusive-lock
+      640            where buf_trn-doc.doc-code = buf_doc-line.doc-code
+      641       .
+      642       assign
+      643           buf_trn-doc.print-rubl = ( if v-r-b-is-base = yes then no else yes )
+      644       .
+      645   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_crgdsdtl in g#lib-trn
+      646     ( input buf_trn-doc.obj-code
+      647      ,input buf_trn-doc.obj-type
+      648      ,input buf_trn-doc.doc-code
+      649      ,input buf_goods.artic
+      650      ,input buf_goods.prod-code
+      651      ,input buf_goods.prod-type
+      652      ,input buf_gds-prt.node-code
+      653      ,input yes
+      654     ) no-error .
+      655       if error-status:error
+      656       then do:
+      657           message
+      658               "Ошибка при создании признака."
+      659               skip return-value
+      660           view-as alert-box error.
+      661       end.
+      662       find first buf_gds-dtl exclusive-lock
+      663            where buf_gds-dtl.doc-code  = buf_trn-doc.doc-code
+      664              and buf_gds-dtl.artic     = buf_goods.artic
+      665              and buf_gds-dtl.prod-type = buf_goods.prod-type
+      666              and buf_gds-dtl.prod-code = buf_goods.prod-code
+      667              and buf_gds-dtl.prt-code  = buf_gds-prt.node-code
+      668       .
+      669       if p-set-price = yes
+      670       then do:
+      671           if v-r-b-is-base = yes
+      672           then do:
+      673               assign
+      674                   buf_gds-dtl.price-base = p-price
+      675                   buf_gds-dtl.price-rubl = p-price * buf_trn-doc.base-rate / buf_trn-doc.base-scale
+      676               .
+      677           end.
+      678           else do:
+      679               assign
+      680                   buf_gds-dtl.price-rubl = p-price
+      681                   buf_gds-dtl.price-base = p-price / buf_trn-doc.base-rate * buf_trn-doc.base-scale
+      682               .
+      683           end.
+      684       end.
+      685       else do:
+      686   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      687   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn3) <> true) then do:   run str/lib-trn3.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn3) <> true) then do:     message       "Error starting lib-trn3.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn3 skip       ibs.th.gbl.gbl-hndllib:g#lib-trn3 :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn3 :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn3_set-pr in g#lib-trn3
+      688     ( input recid(buf_gds-dtl)
+      689     , input no
+      690     , input ?
+      691     ) no-error.
+      692           if error-status:error
+      693           then do:
+      694               message
+      695                   "Ошибка при назначении цены признака."
+      696                   skip return-value
+      697               view-as alert-box error.
+      698           end.
+      699           if v-r-b-is-base = yes
+      700           then do:
+      701               assign
+      702                   buf_gds-dtl.price-rubl = buf_gds-dtl.price-base * buf_trn-doc.base-rate / buf_trn-doc.base-scale
+      703                   buf_gds-dtl.price-base = buf_gds-dtl.price-base
+      704               .
+      705           end.
+      706           else do:
+      707               assign
+      708                   buf_gds-dtl.price-rubl = buf_gds-dtl.price-rubl
+      709                   buf_gds-dtl.price-base = buf_gds-dtl.price-rubl / buf_trn-doc.base-rate * buf_trn-doc.base-scale
+      710               .
+      711           end.
+      712       end.
+      713       assign
+      714           buf_trn-doc.status_ = 'накл':U
+      715           buf_trn-doc.flag_   = no
+      716       .
+      717       assign
+      718           buf_gds-dtl.ov  = yes
+      719           v-cost-base     = buf_doc-line.price-base
+      720           v-cost-rubl     = buf_doc-line.price-rubl
+      721           p-rsrv-qnty     = round( p-required-qnty, 3 )
+      722       .
+      723       if p-rsrv-by-parts = yes
+      724       then do:
+      725           assign
+      726               v-parts-found           = no
+      727               v-sum-parts-rsrv-qnty   = 0
+      728           .
+      729           if p-income-trn-doc-code <> ""
+      730           then do:
+      731               for each buf_parts no-lock
+      732                  where buf_parts.obj-type  = buf_doc-line.obj-type
+      733                    and buf_parts.obj-code  = buf_doc-line.obj-code
+      734                    and buf_parts.prod-type = buf_doc-line.prod-type
+      735                    and buf_parts.prod-code = buf_doc-line.prod-code
+      736                    and buf_parts.artic     = buf_doc-line.artic
+      737                    and buf_parts.in-code   = p-income-trn-doc-code
+      738                    and buf_parts.out-code  = p-income-trn-doc-code
+      739               on error undo, return error return-value
+      740               :
+      741                   assign
+      742                       v-parts-found     = yes
+      743                       v-parts-parameter = 'reserv':U
+      744                                   + ",":U + 'no-message':U
+      745                                   + ",":U + 'rsrv-single-part':U
+      746                                   + ",":U + 'rsrv-in-code':U   + "=":U + str-encode ( buf_parts.in-code  ,  "", ",=":U )
+      747                                   + ",":U + 'rsrv-part-code':U + "=":U + str-encode ( buf_parts.part-code,  "", ",=":U )
+      748                   .
+      749                   assign
+      750                       v-parts-rsrv-qnty = ( if p-rsrv-qnty < buf_parts.fact-qnty then p-rsrv-qnty else buf_parts.fact-qnty )
+      751                   .
+      752                   run trg/rsrv-dtl.p (
+      753                         input p-parent-proc
+      754                       , input v-parts-parameter
+      755                       , buffer buf_gds-dtl
+      756                       , input-output v-parts-rsrv-qnty
+      757                       , input-output v-cost-base
+      758                       , input-output v-cost-rubl
+      759                       , input -1
+      760                       , input ""
+      761                   ) no-error.
+      762                   if error-status:error
+      763                   then do:
+      764                       undo, return error return-value.
+      765                   end.
+      766                   if v-cost-base <= 0
+      767                   or v-cost-rubl <= 0
+      768                   then do:
+      769                       undo, return error substitute("Неправильные цены резервирования:&1&2&3&1БАЗ.ВАЛ.:&4&1Артикул:&5"
+      770                                                     ,chr(10)
+      771                                                     ,"РУБЛИ:   "
+      772                                                     ,v-cost-rubl
+      773                                                     ,v-cost-base
+      774                                                     ,buf_doc-line.artic).
+      775                       .
+      776                   end.
+      777                   assign
+      778                       v-sum-parts-rsrv-qnty = v-sum-parts-rsrv-qnty + v-parts-rsrv-qnty
+      779                       p-rsrv-qnty           = p-rsrv-qnty           - v-parts-rsrv-qnty
+      780                   .
+      781               end.
+      782           end.
+      783           if p-rsrv-qnty > 0
+      784           then do:
+      785               run trg/rsrv-dtl.p (
+      786                     input p-parent-proc
+      787                   , input 'reserv':U
+      788                           + ",":U + 'no-message':U
+      789                           + ",":U + 'negative-check':U + '=':U + '1':U
+      790                   , buffer buf_gds-dtl
+      791                   , input-output p-rsrv-qnty
+      792                   , input-output v-cost-base
+      793                   , input-output v-cost-rubl
+      794                   , input -1
+      795                   , input ""
+      796               ) no-error.
+      797               if error-status:error
+      798               then do:
+      799                   undo, return error return-value.
+      800               end.
+      801               if v-cost-base <= 0
+      802               or v-cost-rubl <= 0
+      803               then do:
+      804                   undo, return error substitute("Неправильные цены резервирования:&1&2&3&1БАЗ.ВАЛ.:&4&1Артикул:&5"
+      805                                                 ,chr(10)
+      806                                                 ,"РУБЛИ:   "
+      807                                                 ,v-cost-rubl
+      808                                                 ,v-cost-base
+      809                                                 ,buf_doc-line.artic).
+      810               end.
+      811           end.
+      812           assign
+      813               p-rsrv-qnty = p-rsrv-qnty + v-sum-parts-rsrv-qnty
+      814           .
+      815       end.
+      816       else do:
+      817           run trg/rsrv-dtl.p (
+      818                 input p-parent-proc
+      819               , input 'reserv':U
+      820                       + ",":U + 'no-message':U
+      821                       + ",":U + 'negative-check':U + '=':U + '1':U
+      822               , buffer buf_gds-dtl
+      823               , input-output p-rsrv-qnty
+      824               , input-output v-cost-base
+      825               , input-output v-cost-rubl
+      826               , input -1
+      827               , input ""
+      828           ) no-error.
+      829           if error-status:error
+      830           then do:
+      831               undo, return error return-value.
+      832           end.
+      833           if v-cost-base <= 0
+      834           or v-cost-rubl <= 0
+      835           then do:
+      836             undo, return error substitute("Неправильные цены резервирования:&1&2&3&1БАЗ.ВАЛ.:&4&1Артикул:&5"
+      837                                           ,chr(10)
+      838                                           ,"РУБЛИ:   "
+      839                                           ,v-cost-rubl
+      840                                           ,v-cost-base
+      841                                           ,buf_doc-line.artic).
+      842           end.
+      843       end.
+      844   end.
+      845   end procedure.
+      846   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      847   define temp-table temp-parts no-undo   like ub.parts   field free-qnty as decimal   field free-cli-qnty as decimal .
+      848   procedure partslib-clear-temp-parts :
+      849     define buffer buf_temp-parts for temp-parts .
+      850     do
+      851     on error undo, return error
+      852     :
+      853       for each buf_temp-parts
+      854       on error undo, return error
+      855       :
+      856         delete buf_temp-parts .
+      857       end.
+      858     end.
+      859   end procedure.
+      860   procedure partslib-create-temp-parts :
+      861     define parameter buffer buf_parts       for ub.parts .
+      862     define parameter buffer buf_temp-parts  for temp-parts .
+      863     define input  parameter p-goods-twounit as logical   no-undo .
+      864     define variable v-base-part-code as character no-undo .
+      865     do
+      866     on error undo, return error
+      867     :
+      868       if p-goods-twounit = true
+      869       then do:
+      870         assign
+      871           v-base-part-code = entry(1, buf_parts.part-code, '#':U)
+      872         .
+      873       end.
+      874       else do:
+      875         assign
+      876           v-base-part-code = buf_parts.part-code
+      877         .
+      878       end.
+      879       find first buf_temp-parts exclusive-lock
+      880         where buf_temp-parts.obj-type  = buf_parts.obj-type
+      881           and buf_temp-parts.obj-code  = buf_parts.obj-code
+      882           and buf_temp-parts.artic     = buf_parts.artic
+      883           and buf_temp-parts.prod-type = buf_parts.prod-type
+      884           and buf_temp-parts.prod-code = buf_parts.prod-code
+      885           and buf_temp-parts.in-code   = buf_parts.in-code
+      886           and buf_temp-parts.out-code  = 'free-zone':U
+      887           and buf_temp-parts.part-code = v-base-part-code
+      888         no-error.
+      889       if not available buf_temp-parts
+      890       then do:
+      891         create buf_temp-parts .
+      892         buffer-copy buf_parts to buf_temp-parts
+      893         assign
+      894           buf_temp-parts.out-code  = 'free-zone':U
+      895           buf_temp-parts.part-code = v-base-part-code
+      896           buf_temp-parts.rsrv-free = yes
+      897           buf_temp-parts.status_   = no
+      898           buf_temp-parts.qnty      = 0
+      899           buf_temp-parts.fact-qnty = 0
+      900           buf_temp-parts.real-qnty = 0
+      901           buf_temp-parts.cli-qnty  = 0
+      902         .
+      903       end.
+      904     end.
+      905   end procedure.
+      906   procedure partslib-init-temp-parts :
+      907     define input parameter p-obj-type        like ub.parts.obj-type  no-undo .
+      908     define input parameter p-obj-code        like ub.parts.obj-code  no-undo .
+      909     define input parameter p-artic           like ub.parts.artic     no-undo .
+      910     define input parameter p-prod-type       like ub.parts.prod-type no-undo .
+      911     define input parameter p-prod-code       like ub.parts.prod-code no-undo .
+      912     define buffer buf_parts      for ub.parts .
+      913     define buffer buf_temp-parts for temp-parts .
+      914     define variable v-goods-twounit    as logical   no-undo .
+      915     do
+      916     on error undo, return error
+      917     :
+      918   define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      919   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsat in g#library
+      920     (input  p-artic
+      921     ,input  p-prod-type
+      922     ,input  p-prod-code
+      923     ,input  'twounit=request':u
+      924     ,output v-goods-twounit
+      925     ) no-error .
+      926       if error-status :error
+      927       then do:
+      928         message
+      929           vss-workfile vss-revision vss-description skip
+      930           vss-include-info8 skip
+      931           "Ошибка при определении атрибута товара" skip
+      932           "Артикул" p-artic p-prod-type p-prod-code skip
+      933           "twounit=request" skip
+      934           error-status :get-message(1) skip
+      935           return-value skip
+      936           view-as alert-box error .
+      937         undo, return error return-value .
+      938       end.
+      939       run partslib-clear-temp-parts in this-procedure .
+      940       for each buf_parts
+      941         where buf_parts.obj-type  = p-obj-type
+      942           and buf_parts.obj-code  = p-obj-code
+      943           and buf_parts.artic     = p-artic
+      944           and buf_parts.prod-type = p-prod-type
+      945           and buf_parts.prod-code = p-prod-code
+      946           and buf_parts.rsrv-free = yes
+      947           and buf_parts.status_   = no
+      948           and buf_parts.in-code   <> buf_parts.out-code
+      949       on error undo, return error
+      950       :
+      951         run partslib-create-temp-parts in this-procedure
+      952           (buffer buf_parts
+      953           ,buffer buf_temp-parts
+      954           ,input  v-goods-twounit
+      955           ) .
+      956         define variable v-parts-qnty          as decimal   no-undo .
+      957         define variable v-parts-cli-qnty      as decimal   no-undo .
+      958         define variable v-parts-free-qnty     as decimal   no-undo .
+      959         define variable v-parts-free-cli-qnty as decimal   no-undo .
+      960         if buf_parts.out-code = 'free-zone':U
+      961         then do:
+      962           assign
+      963             v-parts-qnty          = buf_parts.qnty
+      964             v-parts-cli-qnty      = buf_parts.cli-qnty
+      965             v-parts-free-qnty     = buf_parts.qnty
+      966             v-parts-free-cli-qnty = buf_parts.cli-qnty
+      967           .
+      968         end.
+      969         else do:
+      970           assign
+      971             v-parts-qnty          = abs(buf_parts.qnty)
+      972             v-parts-cli-qnty      = abs(buf_parts.cli-qnty)
+      973             v-parts-free-qnty     = 0
+      974             v-parts-free-cli-qnty = 0
+      975           .
+      976         end.
+      977         assign
+      978           buf_temp-parts.qnty          = buf_temp-parts.qnty          + v-parts-qnty
+      979           buf_temp-parts.fact-qnty     = buf_temp-parts.fact-qnty     + v-parts-qnty
+      980           buf_temp-parts.real-qnty     = 0
+      981           buf_temp-parts.cli-qnty      = buf_temp-parts.cli-qnty      + v-parts-cli-qnty
+      982           buf_temp-parts.free-qnty     = buf_temp-parts.free-qnty     + v-parts-free-qnty
+      983           buf_temp-parts.free-cli-qnty = buf_temp-parts.free-cli-qnty + v-parts-free-cli-qnty
+      984         .
+      985       end.
+      986     end.
+      987   end procedure.
+      988   procedure partslib-init-temp-parts-by-factord :
+      989     define input parameter p-obj-type           like ub.parts.obj-type  no-undo .
+      990     define input parameter p-obj-code           like ub.parts.obj-code  no-undo .
+      991     define input parameter p-artic              like ub.parts.artic     no-undo .
+      992     define input parameter p-prod-type          like ub.parts.prod-type no-undo .
+      993     define input parameter p-prod-code          like ub.parts.prod-code no-undo .
+      994     define input parameter p-fact-order         as decimal   no-undo .
+      995     define input parameter p-include-fact-order as logical   no-undo .
+      996     define variable vss-description as character no-undo init "partslib-init-temp-parts-by-factord: определение партий свободной зоны на любую дату".
+      997     define buffer buf_gds-obj  for ub.gds-obj .
+      998     do
+      999     on error undo, return error
+     1000     :
+     1001       do transaction
+     1002       on error undo, return error
+     1003       :
+     1004   define variable vss-include-info10 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1005   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsobjcr in g#library
+     1006     (input  p-obj-type
+     1007     ,input  p-obj-code
+     1008     ,input  p-artic
+     1009     ,input  p-prod-type
+     1010     ,input  p-prod-code
+     1011     ,buffer buf_gds-obj
+     1012     ) no-error .
+     1013         if error-status :error
+     1014         then do:
+     1015           message
+     1016             vss-workfile vss-revision vss-description skip
+     1017             vss-include-info8 skip
+     1018             "Невозможно найти товар на объекте" skip
+     1019             "Объект" p-obj-type p-obj-code skip
+     1020             "Артикул" p-artic p-prod-type p-prod-code skip
+     1021             error-status :get-message(1) skip
+     1022             return-value skip
+     1023             view-as alert-box error .
+     1024           undo, return error .
+     1025         end.
+     1026         find current buf_gds-obj exclusive-lock .
+     1027       end.
+     1028       run partslib-init-temp-parts in this-procedure
+     1029         (input p-obj-type
+     1030         ,input p-obj-code
+     1031         ,input p-artic
+     1032         ,input p-prod-type
+     1033         ,input p-prod-code
+     1034         ) no-error .
+     1035       if error-status :error
+     1036       then do:
+     1037         message
+     1038           vss-workfile vss-revision vss-description skip
+     1039           vss-include-info8 skip
+     1040           "Ошибка при инициализации текущего остатка по партиям свободной зоны" skip
+     1041           "Объект" p-obj-type p-obj-code skip
+     1042           "Артикул" p-artic p-prod-type p-prod-code skip
+     1043           "p-fact-order" p-fact-order skip
+     1044           view-as alert-box error .
+     1045         undo, return error .
+     1046       end.
+     1047       if p-include-fact-order = true
+     1048       then do:
+     1049         assign
+     1050           p-fact-order = p-fact-order - 0.0000000001
+     1051         .
+     1052       end.
+     1053       define variable v-max-fact-order as character no-undo .
+     1054       run factord-max-fact-order in this-procedure
+     1055         (output v-max-fact-order
+     1056         ) no-error .
+     1057       if error-status :error
+     1058       then do:
+     1059         message
+     1060           vss-workfile vss-revision vss-description skip
+     1061           vss-include-info8 skip
+     1062           "Ошибка при вызове процедуры factord-max-fact-order" skip
+     1063           "Объект" p-obj-type p-obj-code skip
+     1064           "Артикул" p-artic p-prod-type p-prod-code skip
+     1065           "p-fact-order" p-fact-order skip
+     1066           view-as alert-box error .
+     1067         undo, return error .
+     1068       end.
+     1069       run partslib-update-by-factord in this-procedure
+     1070         (input p-obj-type
+     1071         ,input p-obj-code
+     1072         ,input p-artic
+     1073         ,input p-prod-type
+     1074         ,input p-prod-code
+     1075         ,input p-fact-order
+     1076         ,input v-max-fact-order
+     1077         ,input false
+     1078         ) no-error .
+     1079       if error-status :error
+     1080       then do:
+     1081         message
+     1082           vss-workfile vss-revision vss-description skip
+     1083           vss-include-info8 skip
+     1084           "Ошибка при вызове процедуры partslib-update-by-factord" skip
+     1085           "Объект" p-obj-type p-obj-code skip
+     1086           "Артикул" p-artic p-prod-type p-prod-code skip
+     1087           "p-fact-order" p-fact-order skip
+     1088           "v-max-fact-order" v-max-fact-order skip
+     1089           view-as alert-box error .
+     1090         undo, return error .
+     1091       end.
+     1092     end.
+     1093   end procedure.
+     1094   procedure partslib-update-by-factord :
+     1095     define input parameter p-obj-type           like ub.parts.obj-type  no-undo .
+     1096     define input parameter p-obj-code           like ub.parts.obj-code  no-undo .
+     1097     define input parameter p-artic              like ub.parts.artic     no-undo .
+     1098     define input parameter p-prod-type          like ub.parts.prod-type no-undo .
+     1099     define input parameter p-prod-code          like ub.parts.prod-code no-undo .
+     1100     define input parameter p-start-fact-order   as decimal   no-undo .
+     1101     define input parameter p-end-fact-order     as decimal   no-undo .
+     1102     define input parameter p-lock-gds-obj       as logical   no-undo .
+     1103     define variable vss-description as character no-undo init "partslib-init-temp-parts-by-factord: определение партий свободной зоны на любую дату".
+     1104     define buffer buf_gds-obj  for ub.gds-obj .
+     1105     define buffer buf_doc-line for ub.doc-line .
+     1106     define variable v-total-parts-qnty as decimal   no-undo .
+     1107     define variable v-goods-gds-goods  as logical   no-undo .
+     1108     define variable v-goods-twounit    as logical   no-undo .
+     1109     do
+     1110     on error undo, return error
+     1111     :
+     1112       if p-start-fact-order > p-end-fact-order
+     1113       then do:
+     1114         message
+     1115           vss-workfile vss-revision vss-description skip
+     1116           vss-include-info8 skip
+     1117           "Ошибка задания входных параметров" skip
+     1118           "Начало интервала превышает конец интервала" skip
+     1119           "Объект" p-obj-type p-obj-code skip
+     1120           "Артикул" p-artic p-prod-type p-prod-code skip
+     1121           "p-start-fact-order" p-start-fact-order skip
+     1122           "p-end-fact-order"   p-end-fact-order skip
+     1123           view-as alert-box error .
+     1124         undo, return error .
+     1125       end.
+     1126       if p-lock-gds-obj = true
+     1127       then do:
+     1128         do transaction
+     1129         on error undo, return error
+     1130         :
+     1131   define variable vss-include-info11 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1132   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsobjcr in g#library
+     1133     (input  p-obj-type
+     1134     ,input  p-obj-code
+     1135     ,input  p-artic
+     1136     ,input  p-prod-type
+     1137     ,input  p-prod-code
+     1138     ,buffer buf_gds-obj
+     1139     ) no-error .
+     1140           if error-status :error
+     1141           then do:
+     1142             message
+     1143               vss-workfile vss-revision vss-description skip
+     1144               vss-include-info8 skip
+     1145               "Невозможно найти gds-obj" skip
+     1146               error-status :get-message(1) skip
+     1147               return-value skip
+     1148               view-as alert-box error .
+     1149             undo, return error .
+     1150           end.
+     1151           find current buf_gds-obj exclusive-lock .
+     1152         end.
+     1153       end.
+     1154   define variable vss-include-info12 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1155   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsat in g#library
+     1156     (input  p-artic
+     1157     ,input  p-prod-type
+     1158     ,input  p-prod-code
+     1159     ,input  'gds-goods=request':u
+     1160     ,output v-goods-gds-goods
+     1161     ) no-error .
+     1162       if error-status :error
+     1163       then do:
+     1164         message
+     1165           vss-workfile vss-revision vss-description skip
+     1166           vss-include-info8 skip
+     1167           "Ошибка при определении атрибута товара" skip
+     1168           "Артикул" p-artic p-prod-type p-prod-code skip
+     1169           "gds-goods=request" skip
+     1170           error-status :get-message(1) skip
+     1171           return-value skip
+     1172           view-as alert-box error .
+     1173         undo, return error return-value .
+     1174       end.
+     1175   define variable vss-include-info13 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1176   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsat in g#library
+     1177     (input  p-artic
+     1178     ,input  p-prod-type
+     1179     ,input  p-prod-code
+     1180     ,input  'twounit=request':u
+     1181     ,output v-goods-twounit
+     1182     ) no-error .
+     1183       if error-status :error
+     1184       then do:
+     1185         message
+     1186           vss-workfile vss-revision vss-description skip
+     1187           vss-include-info8 skip
+     1188           "Ошибка при определении атрибута товара" skip
+     1189           "Артикул" p-artic p-prod-type p-prod-code skip
+     1190           "twounit=request" skip
+     1191           error-status :get-message(1) skip
+     1192           return-value skip
+     1193           view-as alert-box error .
+     1194         undo, return error return-value .
+     1195       end.
+     1196       for each buf_doc-line no-lock
+     1197         where buf_doc-line.obj-type   = p-obj-type
+     1198           and buf_doc-line.obj-code   = p-obj-code
+     1199           and buf_doc-line.artic      = p-artic
+     1200           and buf_doc-line.prod-type  = p-prod-type
+     1201           and buf_doc-line.prod-code  = p-prod-code
+     1202           and buf_doc-line.status_    = 'факт':U
+     1203           and buf_doc-line.fact-order > p-start-fact-order
+     1204           and buf_doc-line.fact-order <= p-end-fact-order
+     1205       on error undo, return error
+     1206       :
+     1207         run partslib-process-document in this-procedure
+     1208           (input  buf_doc-line.doc-code
+     1209           ,input  p-obj-type
+     1210           ,input  p-obj-code
+     1211           ,input  p-artic
+     1212           ,input  p-prod-type
+     1213           ,input  p-prod-code
+     1214           ,input  v-goods-gds-goods
+     1215           ,input  v-goods-twounit
+     1216           ,output v-total-parts-qnty
+     1217           ) no-error .
+     1218         if error-status :error
+     1219         then do:
+     1220           message
+     1221             vss-workfile vss-revision vss-description skip
+     1222             vss-include-info8 skip
+     1223             "Ошибка при вызове процедуры partslib-process-document" skip
+     1224             "Документ" buf_doc-line.doc-code skip
+     1225             "Объект" p-obj-type p-obj-code skip
+     1226             "Артикул" p-artic p-prod-type p-prod-code skip
+     1227             "p-start-fact-order" p-start-fact-order skip
+     1228             "p-end-fact-order" p-end-fact-order skip
+     1229             error-status :get-message(1) skip
+     1230             return-value skip
+     1231             view-as alert-box error .
+     1232           undo, return error return-value .
+     1233         end.
+     1234       end.
+     1235     end.
+     1236   end procedure.
+     1237   procedure partslib-process-document :
+     1238     define input  parameter p-doc-code         as character no-undo .
+     1239     define input  parameter p-obj-type         as character no-undo .
+     1240     define input  parameter p-obj-code         as integer   no-undo .
+     1241     define input  parameter p-artic            as character no-undo .
+     1242     define input  parameter p-prod-type        as character no-undo .
+     1243     define input  parameter p-prod-code        as integer   no-undo .
+     1244     define input  parameter p-goods-gds-goods  as logical   no-undo .
+     1245     define input  parameter p-goods-twounit    as logical   no-undo .
+     1246     define output parameter p-total-parts-qnty as decimal   no-undo .
+     1247     define variable v-parts-sign as integer   no-undo .
+     1248     define buffer buf_trn-doc    for ub.trn-doc .
+     1249     define buffer buf_doc-line   for ub.doc-line .
+     1250     define buffer buf_parts      for ub.parts .
+     1251     define buffer buf_temp-parts for temp-parts .
+     1252     do
+     1253     on error undo, return error return-value
+     1254     :
+     1255       find first buf_trn-doc no-lock
+     1256         where buf_trn-doc.doc-code = p-doc-code
+     1257         no-error .
+     1258       if not available buf_trn-doc
+     1259       then do:
+     1260         undo, return error substitute("Ошибка при поиске документа. Документ &1"
+     1261                                      ,p-doc-code
+     1262                                      ) .
+     1263       end.
+     1264       case buf_trn-doc.doc-type
+     1265       :
+     1266         when 'при':U or
+     1267         when 'возврат':U or
+     1268         when 'инв':U
+     1269         then do:
+     1270           assign
+     1271             v-parts-sign = -1
+     1272           .
+     1273         end.
+     1274         when 'рас':U or
+     1275         when 'спи':U
+     1276         then do:
+     1277           assign
+     1278             v-parts-sign = 1
+     1279           .
+     1280         end.
+     1281         otherwise do:
+     1282           undo, return error substitute("Неизвестный тип документа &1"
+     1283                                       ,buf_trn-doc.doc-type
+     1284                                       ) .
+     1285         end.
+     1286       end.
+     1287       find first buf_doc-line no-lock
+     1288         where buf_doc-line.doc-code  = p-doc-code
+     1289           and buf_doc-line.artic     = p-artic
+     1290           and buf_doc-line.prod-type = p-prod-type
+     1291           and buf_doc-line.prod-code = p-prod-code
+     1292         no-error .
+     1293       if not available buf_doc-line
+     1294       then do:
+     1295         undo, return error substitute("Ошибка при поиске строки документа. Документ &1. Артикул &2 &3 &4"
+     1296                                      ,p-doc-code
+     1297                                      ,artic
+     1298                                      ,prod-type
+     1299                                      ,prod-code
+     1300                                      ) .
+     1301       end.
+     1302       assign
+     1303         p-total-parts-qnty = 0
+     1304       .
+     1305       if p-goods-gds-goods = true
+     1306       then do:
+     1307         for each buf_parts no-lock
+     1308           where buf_parts.out-code  = p-doc-code
+     1309             and buf_parts.obj-type  = p-obj-type
+     1310             and buf_parts.obj-code  = p-obj-code
+     1311             and buf_parts.artic     = p-artic
+     1312             and buf_parts.prod-type = p-prod-type
+     1313             and buf_parts.prod-code = p-prod-code
+     1314         on error undo, return error
+     1315         :
+     1316           run partslib-create-temp-parts in this-procedure
+     1317             (buffer buf_parts
+     1318             ,buffer buf_temp-parts
+     1319             ,input  p-goods-twounit
+     1320             ) .
+     1321           assign
+     1322             p-total-parts-qnty        = p-total-parts-qnty
+     1323                                       + v-parts-sign * buf_parts.fact-qnty
+     1324             buf_temp-parts.qnty       = buf_temp-parts.qnty
+     1325                                       + v-parts-sign * buf_parts.fact-qnty
+     1326             buf_temp-parts.fact-qnty  = buf_temp-parts.fact-qnty
+     1327                                       + v-parts-sign * buf_parts.fact-qnty
+     1328             buf_temp-parts.cli-qnty   = buf_temp-parts.cli-qnty
+     1329                                       + v-parts-sign * buf_parts.cli-qnty
+     1330           .
+     1331           if buf_temp-parts.qnty = 0
+     1332           then do:
+     1333             delete buf_temp-parts .
+     1334           end.
+     1335         end.
+     1336       end.
+     1337       else do:
+     1338         assign
+     1339           p-total-parts-qnty = p-total-parts-qnty
+     1340                              + v-parts-sign * buf_doc-line.fact-qnty
+     1341         .
+     1342       end.
+     1343     end.
+     1344   end procedure.
+     1345   procedure partslib-init-temp-parts-by-date :
+     1346     define input parameter p-obj-type        like ub.parts.obj-type  no-undo .
+     1347     define input parameter p-obj-code        like ub.parts.obj-code  no-undo .
+     1348     define input parameter p-artic           like ub.parts.artic     no-undo .
+     1349     define input parameter p-prod-type       like ub.parts.prod-type no-undo .
+     1350     define input parameter p-prod-code       like ub.parts.prod-code no-undo .
+     1351     define input parameter p-fact-date       as date      no-undo .
+     1352     define variable vss-description as character no-undo init "partslib-init-temp-parts-by-date: определение партий свободной зоны на любую дату".
+     1353     do
+     1354     on error undo, return error
+     1355     :
+     1356       define variable v-fact-order                as decimal   no-undo .
+     1357       define variable v-shift-end-fact-order      as decimal   no-undo .
+     1358       define variable v-day-end-fact-order        as decimal   no-undo .
+     1359       run factord in this-procedure
+     1360         (input  p-fact-date
+     1361         ,input  1
+     1362         ,input  1
+     1363         ,input  ?
+     1364         ,input  0
+     1365         ,input  false
+     1366         ,output v-fact-order
+     1367         ,output v-shift-end-fact-order
+     1368         ,output v-day-end-fact-order
+     1369         ) no-error .
+     1370       if error-status :error
+     1371       then do:
+     1372         message
+     1373           vss-workfile vss-revision vss-description skip
+     1374           vss-include-info8 skip
+     1375           "Ошибка при определении момента времени, на который требуется остаток" skip
+     1376           "Объект" p-obj-type p-obj-code skip
+     1377           "Артикул" p-artic p-prod-type p-prod-code skip
+     1378           "Дата" p-fact-date skip
+     1379           view-as alert-box error .
+     1380         undo, return error .
+     1381       end.
+     1382       run partslib-init-temp-parts-by-factord in this-procedure
+     1383         (input p-obj-type
+     1384         ,input p-obj-code
+     1385         ,input p-artic
+     1386         ,input p-prod-type
+     1387         ,input p-prod-code
+     1388         ,input v-day-end-fact-order
+     1389         ,input false
+     1390         ) no-error .
+     1391       if error-status :error
+     1392       then do:
+     1393         message
+     1394           vss-workfile vss-revision vss-description skip
+     1395           vss-include-info8 skip
+     1396           "Ошибка при вызове метода partslib-init-temp-parts-by-factord" skip
+     1397           "Объект" p-obj-type p-obj-code skip
+     1398           "Артикул" p-artic p-prod-type p-prod-code skip
+     1399           "Дата" p-fact-date skip
+     1400           view-as alert-box error .
+     1401         undo, return error .
+     1402       end.
+     1403     end.
+     1404   end procedure.
+     1405   procedure partslib-calc-cost :
+     1406     define output parameter p-fact-qnty      as decimal   no-undo .
+     1407     define output parameter p-vat-pc         as decimal   no-undo .
+     1408     define output parameter p-slt-pc         as decimal   no-undo .
+     1409     define output parameter p-sum-base       as decimal   no-undo .
+     1410     define output parameter p-sum-rubl       as decimal   no-undo .
+     1411     define output parameter p-vat-base       as decimal   no-undo .
+     1412     define output parameter p-vat-rubl       as decimal   no-undo .
+     1413     define output parameter p-slt-base       as decimal   no-undo .
+     1414     define output parameter p-slt-rubl       as decimal   no-undo .
+     1415     define output parameter p-road-tax-base  as decimal   no-undo .
+     1416     define output parameter p-road-tax-rubl  as decimal   no-undo .
+     1417     define output parameter p-transport-base as decimal   no-undo .
+     1418     define output parameter p-transport-rubl as decimal   no-undo .
+     1419     define output parameter p-other-base     as decimal   no-undo .
+     1420     define output parameter p-other-rubl     as decimal   no-undo .
+     1421     define output parameter p-excise-base    as decimal   no-undo .
+     1422     define output parameter p-excise-rubl    as decimal   no-undo .
+     1423     define variable vss-description as character no-undo init "partslib-calc-cost: расчет сумм в учетных ценах".
+     1424     do
+     1425     on error undo, return error return-value
+     1426     :
+     1427       define buffer buf_temp-parts for temp-parts .
+     1428       define buffer   in-vatp-trn-doc  for ub.trn-doc .
+     1429       define buffer   in-vatp-parts    for ub.parts   .
+     1430       define buffer   in-vatp-doc      for ub.trn-doc .
+     1431       define buffer   in-vatp-goods    for ub.goods   .
+     1432       define buffer   in-vatp-sysconf  for ub.sysconf .
+     1433       define buffer   in-vatp_doc-attr for ub.doc-attr.
+     1434       define variable in-vatp-have-vat-slt       as   logical initial yes    no-undo.
+     1435       define variable vat-pc-loc                 like ub.doc-line.vat-pc     no-undo.
+     1436       define variable varinvprb                  as   character              no-undo.
+     1437       define variable slt-pc-loc                 like ub.doc-line.slt-pc     no-undo.
+     1438       define variable cli-base-rate              as   decimal                no-undo.
+     1439       define variable price-rubl-with-tax-loc    like ub.doc-line.price-rubl no-undo.
+     1440       define variable price-base-with-tax-loc    like ub.doc-line.price-base no-undo.
+     1441       define variable price-cli-with-tax-loc     like ub.doc-line.price-cli  no-undo.
+     1442       define variable price-rubl-without-tax-loc like ub.doc-line.price-rubl no-undo.
+     1443       define variable price-base-without-tax-loc like ub.doc-line.price-base no-undo.
+     1444       define variable price-cli-without-tax-loc  like ub.doc-line.price-base no-undo.
+     1445       define variable vat-base-loc               like ub.doc-line.price-base no-undo.
+     1446       define variable vat-rubl-loc               like ub.doc-line.price-rubl no-undo.
+     1447       define variable vat-cli-loc                like ub.doc-line.price-rubl no-undo.
+     1448       define variable slt-base-loc               like ub.doc-line.price-base no-undo.
+     1449       define variable slt-rubl-loc               like ub.doc-line.price-rubl no-undo.
+     1450       define variable slt-cli-loc                like ub.doc-line.price-rubl no-undo.
+     1451       define variable road-tax-base-loc          like ub.doc-line.road-tax   no-undo.
+     1452       define variable road-tax-rubl-loc          like ub.doc-line.road-tax   no-undo.
+     1453       define variable road-tax-cli-loc           like ub.doc-line.road-tax   no-undo.
+     1454       define variable transport-base-loc         like ub.doc-line.price-base no-undo.
+     1455       define variable transport-rubl-loc         like ub.doc-line.price-rubl no-undo.
+     1456       define variable transport-cli-loc          like ub.doc-line.price-rubl no-undo.
+     1457       define variable other-base-loc             like ub.doc-line.price-base no-undo.
+     1458       define variable other-rubl-loc             like ub.doc-line.price-rubl no-undo.
+     1459       define variable other-cli-loc              like ub.doc-line.price-rubl no-undo.
+     1460       define variable exch-rate-cli-loc          like ub.trn-doc.exch-rate   no-undo.
+     1461       define variable varinvatp-envd             as   character              no-undo.
+     1462       define variable varinvatp-type             as   character              no-undo.
+     1463       for each buf_temp-parts
+     1464       on error undo, return error
+     1465       :
+     1466   assign
+     1467     price-rubl-with-tax-loc = buf_temp-parts.price-rubl
+     1468     price-base-with-tax-loc = buf_temp-parts.price-base
+     1469   .
+     1470   define variable vss-include-info14 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+     1471   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+     1472     (output varinvprb
+     1473     )  .
+     1474     if buf_temp-parts.out-code = 'free-zone':U     or
+     1475        buf_temp-parts.out-code = 'out-zone':U   or
+     1476        buf_temp-parts.doc-type = 'акт':U then do:
+     1477       assign
+     1478         in-vatp-have-vat-slt = yes.
+     1479     end.
+     1480     else do:
+     1481       find first in-vatp_doc-attr no-lock
+     1482         where in-vatp_doc-attr.doc-code  = buf_temp-parts.out-code
+     1483           and in-vatp_doc-attr.attr-code = 'envd':U
+     1484         no-error .
+     1485       if not available in-vatp_doc-attr then do:
+     1486         assign
+     1487           in-vatp-have-vat-slt = yes.
+     1488       end.
+     1489       else do:
+     1490            in-vatp-have-vat-slt = no.
+     1491       end.
+     1492     end.
+     1493     assign
+     1494      price-cli-with-tax-loc = buf_temp-parts.price-cli
+     1495      cli-base-rate          = buf_temp-parts.cli-base-rate.
+     1496     ASSIGN   road-tax-base-loc  = (if buf_temp-parts.road-tax-base  = ? then 0 else buf_temp-parts.road-tax-base)
+     1497              road-tax-rubl-loc  = (if buf_temp-parts.road-tax-rubl  = ? then 0 else buf_temp-parts.road-tax-rubl).
+     1498     ASSIGN  transport-base-loc = (if buf_temp-parts.transport-base = ? then 0 else buf_temp-parts.transport-base)
+     1499             transport-rubl-loc = (if buf_temp-parts.transport-rubl = ? then 0 else buf_temp-parts.transport-rubl)
+     1500             other-base-loc     = (if buf_temp-parts.other-base     = ? then 0 else buf_temp-parts.other-base)
+     1501             other-rubl-loc     = (if buf_temp-parts.other-rubl     = ? then 0 else buf_temp-parts.other-rubl)
+     1502             vat-pc-loc         = (if buf_temp-parts.vat-pc         = ? then 0 else buf_temp-parts.vat-pc)
+     1503             slt-pc-loc         = (if buf_temp-parts.slt-pc         = ? then 0 else buf_temp-parts.slt-pc).
+     1504             ASSIGN   slt-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-base-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-base-with-tax-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+     1505       ASSIGN   slt-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc)))                           * slt-pc-loc / (100 + slt-pc-loc))                        vat-rubl-loc    = (if in-vatp-have-vat-slt = no then 0 else (price-rubl-with-tax-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))) * (1 - slt-pc-loc / (100 + slt-pc-loc)) * vat-pc-loc / (100 + vat-pc-loc)).
+     1506     assign
+     1507       exch-rate-cli-loc = (buf_temp-parts.price-rubl - transport-rubl-loc - other-rubl-loc - road-tax-rubl-loc - (if buf_temp-parts.vat-type <> 'в т. ч.':U then vat-rubl-loc else 0) - (if buf_temp-parts.slt-type <> 'в т. ч.':U then slt-rubl-loc else 0)) / buf_temp-parts.price-cli .
+     1508     assign
+     1509       slt-cli-loc        = slt-rubl-loc       / exch-rate-cli-loc
+     1510       vat-cli-loc        = vat-rubl-loc       / exch-rate-cli-loc
+     1511       road-tax-cli-loc   = road-tax-rubl-loc  / exch-rate-cli-loc
+     1512       transport-cli-loc  = 0
+     1513       other-cli-loc      = 0
+     1514     .
+     1515   ASSIGN
+     1516             price-base-without-tax-loc = price-base-with-tax-loc - vat-base-loc - slt-base-loc - ((if road-tax-base-loc  = ? then 0 else road-tax-base-loc) + (if transport-base-loc = ? then 0 else transport-base-loc) + (if other-base-loc = ? then 0 else other-base-loc))
+     1517       price-rubl-without-tax-loc = price-rubl-with-tax-loc - vat-rubl-loc - slt-rubl-loc - ((if road-tax-rubl-loc  = ? then 0 else road-tax-rubl-loc) + (if transport-rubl-loc = ? then 0 else transport-rubl-loc) + (if other-rubl-loc = ? then 0 else other-rubl-loc))
+     1518   .
+     1519         assign
+     1520           p-fact-qnty      = p-fact-qnty      + buf_temp-parts.fact-qnty
+     1521           p-vat-pc         = p-vat-pc         + vat-pc-loc
+     1522           p-slt-pc         = p-slt-pc         + slt-pc-loc
+     1523           p-sum-base       = p-sum-base       + price-base-with-tax-loc * buf_temp-parts.fact-qnty
+     1524           p-sum-rubl       = p-sum-rubl       + price-rubl-with-tax-loc * buf_temp-parts.fact-qnty
+     1525           p-vat-base       = p-vat-base       + vat-base-loc            * buf_temp-parts.fact-qnty
+     1526           p-vat-rubl       = p-vat-rubl       + vat-rubl-loc            * buf_temp-parts.fact-qnty
+     1527           p-slt-base       = p-slt-base       + slt-base-loc            * buf_temp-parts.fact-qnty
+     1528           p-slt-rubl       = p-slt-rubl       + slt-rubl-loc            * buf_temp-parts.fact-qnty
+     1529           p-road-tax-base  = p-road-tax-base  + road-tax-base-loc       * buf_temp-parts.fact-qnty
+     1530           p-road-tax-rubl  = p-road-tax-rubl  + road-tax-rubl-loc       * buf_temp-parts.fact-qnty
+     1531           p-transport-base = p-transport-base + transport-base-loc      * buf_temp-parts.fact-qnty
+     1532           p-transport-rubl = p-transport-rubl + transport-rubl-loc      * buf_temp-parts.fact-qnty
+     1533           p-other-base     = p-other-base     + other-base-loc          * buf_temp-parts.fact-qnty
+     1534           p-other-rubl     = p-other-rubl     + other-rubl-loc          * buf_temp-parts.fact-qnty
+     1535           p-excise-base    = p-excise-base    + 0
+     1536           p-excise-rubl    = p-excise-rubl    + 0
+     1537         .
+     1538       end.
+     1539       if p-fact-qnty      = ?
+     1540       or p-sum-base       = ?
+     1541       or p-sum-rubl       = ?
+     1542       or p-vat-base       = ?
+     1543       or p-vat-rubl       = ?
+     1544       or p-slt-base       = ?
+     1545       or p-slt-rubl       = ?
+     1546       or p-road-tax-base  = ?
+     1547       or p-road-tax-rubl  = ?
+     1548       or p-transport-base = ?
+     1549       or p-transport-rubl = ?
+     1550       or p-other-base     = ?
+     1551       or p-other-rubl     = ?
+     1552       or p-excise-base    = ?
+     1553       or p-excise-rubl    = ?
+     1554       then do:
+     1555         message
+     1556           vss-workfile vss-revision vss-description skip
+     1557           vss-include-info8 skip
+     1558           "Программа in-vatp.i вернула неопределенные значения" skip
+     1559           "p-fact-qnty"      p-fact-qnty      skip
+     1560           "p-sum-base"       p-sum-base       skip
+     1561           "p-sum-rubl"       p-sum-rubl       skip
+     1562           "p-vat-base"       p-vat-base       skip
+     1563           "p-vat-rubl"       p-vat-rubl       skip
+     1564           "p-slt-base"       p-slt-base       skip
+     1565           "p-slt-rubl"       p-slt-rubl       skip
+     1566           "p-road-tax-base"  p-road-tax-base  skip
+     1567           "p-road-tax-rubl"  p-road-tax-rubl  skip
+     1568           "p-transport-base" p-transport-base skip
+     1569           "p-transport-rubl" p-transport-rubl skip
+     1570           "p-other-base"     p-other-base     skip
+     1571           "p-other-rubl"     p-other-rubl     skip
+     1572           "p-excise-base"    p-excise-base    skip
+     1573           "p-excise-rubl"    p-excise-rubl    skip
+     1574           view-as alert-box error .
+     1575         undo, return error .
+     1576       end.
+     1577     end.
+     1578   end procedure.
+     1579   procedure fbrrest-get-free-qnty :
+     1580   do
+     1581   on error undo, return error
+     1582   :
+     1583   define input parameter p-obj-type       as character            no-undo.
+     1584   define input parameter p-obj-code       as integer              no-undo.
+     1585   define input parameter p-gds-code       as integer              no-undo.
+     1586   define input parameter p-autofbr        as logical              no-undo.
+     1587   define output parameter p-avail-qnty    as decimal              no-undo.
+     1588       define variable v-req-qnty  like ub.fbr-line.fact-qnty no-undo.
+     1589       define variable v-free-qnty as decimal       no-undo.
+     1590       define buffer buf_goods         for ub.goods.
+     1591       define buffer buf_gds-obj       for ub.gds-obj.
+     1592       define buffer buf_temp-parts    for temp-parts.
+     1593       find first buf_goods no-lock
+     1594            where buf_goods.gds-code = p-gds-code
+     1595       .
+     1596       assign
+     1597           p-avail-qnty = 0
+     1598       .
+     1599       run partslib-init-temp-parts in this-procedure (
+     1600             input p-obj-type
+     1601           , input p-obj-code
+     1602           , input buf_goods.artic
+     1603           , input buf_goods.prod-type
+     1604           , input buf_goods.prod-code
+     1605       ).
+     1606       assign
+     1607           v-free-qnty = 0
+     1608       .
+     1609       for each buf_temp-parts
+     1610       on error undo, return error
+     1611       :
+     1612           if buf_temp-parts.qnty > 0
+     1613           then do:
+     1614               assign
+     1615                   v-free-qnty = v-free-qnty + buf_temp-parts.free-qnty
+     1616               .
+     1617           end.
+     1618       end.
+     1619       assign
+     1620           p-avail-qnty = ( if v-free-qnty > 0 then v-free-qnty else 0 )
+     1621       .
+     1622   end.
+     1623   end procedure.
+     1624   procedure fbrrest-get-catering-object :
+     1625   do
+     1626   on error undo, return error
+     1627   :
+     1628   define input parameter p-obj-code            as integer      no-undo.
+     1629   define output parameter p-catering-obj-type  as character    no-undo.
+     1630   define output parameter p-catering-obj-code  as integer      no-undo.
+     1631       define buffer buf_shop              for ub.shop.
+     1632       find first buf_shop no-lock
+     1633            where buf_shop.obj-code = p-obj-code
+     1634       .
+     1635       assign
+     1636           p-catering-obj-type = buf_shop.kitchen-store-type
+     1637           p-catering-obj-code = buf_shop.kitchen-store-code
+     1638       .
+     1639   end.
+     1640   end procedure.
+     1641   define variable vss-include-info15 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1642   define new global shared variable g#trdcalib as handle no-undo.
+     1643   define variable v-cntxt-db-num as integer no-undo .
+     1644   define variable v-cntxt-userid as character no-undo .
+     1645       define variable v-trn-doc-code          as character    no-undo.
+     1646       define variable v-trn-doc-wrkr          as integer      no-undo.
+     1647       define variable v-trn-doc-boss          as integer      no-undo.
+     1648       define variable v-trn-doc-agnt          as integer      no-undo.
+     1649       define variable v-today                 as date         no-undo.
+     1650       define variable v-time                  as integer      no-undo.
+     1651       define variable v-host-code             as integer      no-undo.
+     1652       define variable v-base-code             as integer      no-undo.
+     1653       define variable v-host-name             as character    no-undo.
+     1654       define variable v-down-pay              as integer      no-undo.
+     1655       define variable v-sum-base              as decimal      no-undo.
+     1656       define variable v-sum-rubl              as decimal      no-undo.
+     1657       define variable v-sum-vat-base          as decimal      no-undo.
+     1658       define variable v-sum-vat-rubl          as decimal      no-undo.
+     1659       define variable v-goods-is-not-office   as logical      no-undo.
+     1660       define variable v-restaurant-free-qnty  as decimal      no-undo.
+     1661       define variable v-need-qnty             as decimal      no-undo.
+     1662       define variable v-rb-is-base            as logical      no-undo.
+     1663       define buffer buf_goods             for goods.
+     1664       define buffer buf_doc-fbr-gds       for doc-fbr-gds.
+     1665       define buffer buf_curr-accnt        for curr-accnt.
+     1666       define buffer buf_trn-doc           for trn-doc.
+     1667       define buffer buf_sale_trn-doc      for trn-doc.
+     1668       define buffer buf_income_trn-doc    for trn-doc.
+     1669       define buffer buf_sale-doc          for ub.sale-doc.
+     1670   do
+     1671   for buf_goods
+     1672     , buf_doc-fbr-gds
+     1673     , buf_curr-accnt
+     1674     , buf_trn-doc
+     1675     , buf_sale_trn-doc
+     1676     , buf_income_trn-doc
+     1677     , buf_sale-doc
+     1678   on error undo, return error
+     1679   :
+     1680       run get-db-num in parparentproc ( output v-cntxt-db-num).
+     1681       run get-userid in parparentproc ( output v-cntxt-userid).
+     1682       if p-kitchen-type = p-res-type
+     1683       and p-kitchen-code = p-res-code
+     1684       then do:
+     1685           undo, return .
+     1686       end.
+     1687   define variable vss-include-info16 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1688   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run rbisbase in g#library
+     1689     (output v-rb-is-base
+     1690     )  .
+     1691       run doc-code in this-procedure (
+     1692             input "main"
+     1693           , input p-kitchen-type
+     1694           , input p-kitchen-code
+     1695           , input ""
+     1696           , output v-trn-doc-code
+     1697       ).
+     1698   define variable vss-include-info17 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1699   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+     1700     (input  p-kitchen-type
+     1701     ,input  p-kitchen-code
+     1702     ,output v-host-code
+     1703     )  .
+     1704   define variable vss-include-info18 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1705   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curobjdt in g#library
+     1706     (input  p-kitchen-type
+     1707     ,input  p-kitchen-code
+     1708     ,output v-today
+     1709     )  .
+     1710   define variable vss-include-info19 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1711   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostname in g#library
+     1712     (input  p-kitchen-type
+     1713     ,input  p-kitchen-code
+     1714     ,output v-host-code
+     1715     ,output v-host-name
+     1716     )  .
+     1717   define variable vss-include-info20 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1718   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run basecode in g#library
+     1719     (input  v-host-code
+     1720     ,output v-base-code
+     1721     )  .
+     1722       find last buf_curr-accnt no-lock
+     1723           where buf_curr-accnt.curr-code = v-base-code
+     1724             and buf_curr-accnt.exch-date <= v-today
+     1725       use-index pi no-error.
+     1726       if not available buf_curr-accnt
+     1727       then do:
+     1728           message
+     1729               "На дату" v-today "неизвестен курс базовой валюты."
+     1730           view-as alert-box error.
+     1731           undo, return error.
+     1732       end.
+     1733   define variable vss-include-info21 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1734   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objdnpay in g#library
+     1735     (input  p-kitchen-type
+     1736     ,input  p-kitchen-code
+     1737     ,output v-down-pay
+     1738     )  .
+     1739   if (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:   run str/lib-trn.p persistent no-error .   if error-status :error or (valid-handle(ibs.th.gbl.gbl-hndllib:g#lib-trn) <> true) then do:     message       "Error starting lib-trn.p" skip       ibs.th.gbl.gbl-hndllib:g#lib-trn skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :type skip       ibs.th.gbl.gbl-hndllib:g#lib-trn :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-trn_crtrndoc in g#lib-trn
+     1740   (input ?
+     1741   ,input ?
+     1742   ,input buf_curr-accnt.exch-rate
+     1743   ,input buf_curr-accnt.exch-scale
+     1744   ,input p-res-code
+     1745   ,input p-res-type
+     1746   ,input v-host-name
+     1747   ,input v-cntxt-db-num
+     1748   ,input v-cntxt-userid
+     1749   ,input 'процент':U
+     1750   ,input v-trn-doc-code
+     1751   ,input v-today
+     1752   ,input 'рас':U
+     1753   ,input no
+     1754   ,input v-host-code
+     1755   ,input yes
+     1756   ,input p-kitchen-code
+     1757   ,input p-kitchen-type
+     1758   ,input no
+     1759   ,input v-down-pay
+     1760   ,input ' '
+     1761   ,input no
+     1762   ,input 'без':U
+     1763   ,input 'накл':U
+     1764   ,input 'в т. ч.':U
+     1765   ,input 'ev':U
+     1766   ,input 1
+     1767   ) no-error
+     1768   .
+     1769       if error-status:error
+     1770       then do:
+     1771           message
+     1772               "Ошибка при создании складского документа."
+     1773           view-as alert-box error.
+     1774           undo, return error.
+     1775       end.
+     1776       find first buf_trn-doc exclusive-lock
+     1777            where buf_trn-doc.doc-code = v-trn-doc-code
+     1778       .
+     1779       assign
+     1780           buf_trn-doc.print-rubl  = ( if v-rb-is-base = yes then no else yes )
+     1781           buf_trn-doc.exch-rate   = 1
+     1782           buf_trn-doc.exch-scale  = 1
+     1783           buf_trn-doc.exch-code   = 0
+     1784           buf_trn-doc.exch-date   = v-today
+     1785           buf_trn-doc.out-code    = p-sale-doc-code
+     1786       .
+     1787       find first buf_sale_trn-doc no-lock
+     1788            where buf_sale_trn-doc.doc-code = p-sale-doc-code
+     1789       no-error.
+     1790       if available buf_sale_trn-doc
+     1791       then do:
+     1792           assign
+     1793               buf_trn-doc.agnt        = buf_sale_trn-doc.agnt
+     1794               buf_trn-doc.boss        = buf_sale_trn-doc.boss
+     1795               buf_trn-doc.wrkr        = buf_sale_trn-doc.wrkr
+     1796           .
+     1797       end.
+     1798   if valid-handle( g#trdcalib ) <> yes then do:       run str/trdcalib.p persistent no-error.       if error-status :error or valid-handle( g#trdcalib ) <> yes then do:         message "Error starting trdcalib.p"    skip( 0 )                 g#trdcalib                     skip( 0 )                 g#trdcalib   :type             skip( 0 )                 g#trdcalib   :file-name        skip( 0 )                 error-status :get-message( 1 ) skip( 0 )                 return-value                   skip( 0 )         view-as alert-box error.         stop.       end.      end.     run trdcalib_tdat-wrt in g#trdcalib ( input buf_trn-doc.doc-code ,
+     1799                          input 'fbrauto':U ,
+     1800                          input 'yes':U ) no-error .
+     1801       if error-status :error
+     1802       then do:
+     1803           message
+     1804                    vss-workfile vss-revision vss-description
+     1805               skip(1)
+     1806               skip "Не удалось записать флаг автопроизводства"
+     1807               skip "в атрибут документа"
+     1808               skip return-value
+     1809               skip trim(error-status :get-message(1))
+     1810                    trim(error-status :get-message(2))
+     1811                    trim(error-status :get-message(3))
+     1812           view-as alert-box warning.
+     1813       end.
+     1814       define variable v-need-moving    as logical      no-undo.
+     1815       assign
+     1816           v-need-moving = no
+     1817       .
+     1818       create-lines:
+     1819       for each buf_sale-doc where
+     1820                buf_sale-doc.inkas-code = p-sale-doc-code
+     1821            and buf_sale-doc.fbrsale = yes,
+     1822           each buf_doc-fbr-gds no-lock
+     1823          where buf_doc-fbr-gds.obj-type     = p-res-type
+     1824            and buf_doc-fbr-gds.obj-code     = p-res-code
+     1825            and buf_doc-fbr-gds.fbr-obj-type = p-kitchen-type
+     1826            and buf_doc-fbr-gds.fbr-obj-code = p-kitchen-code
+     1827            and buf_doc-fbr-gds.out-code     = buf_sale-doc.doc-code
+     1828       on error undo, return error
+     1829       :
+     1830           if p-kitchen-rest = yes
+     1831           then do:
+     1832               run fbrrest-get-free-qnty in this-procedure (
+     1833                     input p-res-type
+     1834                   , input p-res-code
+     1835                   , input buf_doc-fbr-gds.gds-code
+     1836                   , input no
+     1837                   , output v-restaurant-free-qnty
+     1838               ).
+     1839           end.
+     1840           else do:
+     1841               assign
+     1842                   v-restaurant-free-qnty  = 0
+     1843               .
+     1844           end.
+     1845           assign
+     1846               v-need-qnty = buf_doc-fbr-gds.fact-qnty - v-restaurant-free-qnty
+     1847           .
+     1848           if v-need-qnty <= 0
+     1849           then do:
+     1850               undo create-lines, next create-lines.
+     1851           end.
+     1852           find first buf_goods no-lock
+     1853                where buf_goods.gds-code = buf_doc-fbr-gds.gds-code
+     1854           .
+     1855   define variable vss-include-info22 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1856   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsat in g#library
+     1857     (input  buf_goods.artic
+     1858     ,input  buf_goods.prod-type
+     1859     ,input  buf_goods.prod-code
+     1860     ,input  'gds-goods=request':u
+     1861     ,output v-goods-is-not-office
+     1862     )  .
+     1863           if v-goods-is-not-office = yes
+     1864           then do:
+     1865               run create-doc-line in this-procedure (
+     1866                     input buf_trn-doc.doc-code
+     1867                   , input buf_doc-fbr-gds.gds-code
+     1868                   , input v-need-qnty
+     1869                   , output v-sum-base
+     1870                   , output v-sum-rubl
+     1871                   , output v-sum-vat-base
+     1872                   , output v-sum-vat-rubl
+     1873               ).
+     1874               if v-sum-base       = ?
+     1875               or v-sum-rubl       = ?
+     1876               or v-sum-vat-base   = ?
+     1877               or v-sum-vat-rubl   = ?
+     1878               or v-sum-base       = 0
+     1879               or v-sum-rubl       = 0
+     1880               then do:
+     1881                   message
+     1882                       skip "Не удалось определить учетную цену"
+     1883                       skip "товара на объекте."
+     1884                       skip (1)
+     1885                       skip "Товар: " buf_goods.artic buf_goods.gds-name
+     1886                       skip "Объект (кухня): " buf_trn-doc.obj-type buf_trn-doc.obj-code
+     1887                       skip "Сумма в руб"    v-sum-rubl
+     1888                       skip "Сумма НДС"       v-sum-vat-rubl
+     1889                   view-as alert-box error.
+     1890                   undo, return error .
+     1891               end.
+     1892               assign
+     1893                   v-need-moving = yes
+     1894               .
+     1895           end.
+     1896       end.
+     1897       if v-need-moving = no
+     1898       then do:
+     1899           delete buf_trn-doc.
+     1900       end.
+     1901       else do:
+     1902           define variable v-was-gds-moving    as logical        no-undo.
+     1903           run str/trn-stat.p  (
+     1904                 input parparentproc
+     1905               , input this-procedure
+     1906               , input '<закрытие документа>':U
+     1907               , input buf_trn-doc.doc-code
+     1908               , input no
+     1909               , input v-cntxt-db-num
+     1910               , input no
+     1911               , input 0
+     1912               , input 0
+     1913               , input ""
+     1914               , input yes
+     1915               , output v-was-gds-moving
+     1916               , output table temp_gds-list
+     1917           ) no-error.
+     1918           if error-status :error
+     1919           then do:
+     1920               message
+     1921                       vss-workfile vss-revision vss-description
+     1922                   skip "Ошибка при закрытии документа внутреннего перемещения."
+     1923                   skip(1)
+     1924                   skip "Объект:" buf_trn-doc.obj-type buf_trn-doc.obj-code
+     1925                   skip "Документ номер:" buf_trn-doc.doc-code
+     1926                   skip return-value
+     1927                   skip trim(error-status :get-message(1))
+     1928                       trim(error-status :get-message(2))
+     1929                       trim(error-status :get-message(3))
+     1930               view-as alert-box error.
+     1931               undo, return error .
+     1932           end.
+     1933           run str/trn-stat.p  (
+     1934               input parparentproc
+     1935               , input this-procedure
+     1936               , input '<закрытие документа>':U
+     1937               , input buf_trn-doc.doc-code
+     1938               , input no
+     1939               , input v-cntxt-db-num
+     1940               , input no
+     1941               , input 0
+     1942               , input 0
+     1943               , input ""
+     1944               , input yes
+     1945               , output v-was-gds-moving
+     1946               , output table temp_gds-list
+     1947           ) no-error.
+     1948           if error-status :error
+     1949           then do:
+     1950               message
+     1951                       vss-workfile vss-revision vss-description
+     1952                   skip "Ошибка при закрытии документа внутреннего перемещения."
+     1953                   skip(1)
+     1954                   skip "Объект:" buf_trn-doc.obj-type buf_trn-doc.obj-code
+     1955                   skip "Документ номер:" buf_trn-doc.doc-code
+     1956                   skip return-value
+     1957                   skip trim(error-status :get-message(1))
+     1958                       trim(error-status :get-message(2))
+     1959                       trim(error-status :get-message(3))
+     1960               view-as alert-box error.
+     1961               undo, return error .
+     1962           end.
+     1963           run str/trn-stat.p  (
+     1964               input parparentproc
+     1965               , input this-procedure
+     1966               , input '<закрытие документа>':U
+     1967               , input buf_trn-doc.doc-code
+     1968               , input no
+     1969               , input v-cntxt-db-num
+     1970               , input no
+     1971               , input 0
+     1972               , input 0
+     1973               , input ""
+     1974               , input yes
+     1975               , output v-was-gds-moving
+     1976               , output table temp_gds-list
+     1977           ) no-error.
+     1978           if error-status :error
+     1979           then do:
+     1980               message
+     1981                       vss-workfile vss-revision vss-description
+     1982                   skip "Ошибка при закрытии документа внутреннего перемещения."
+     1983                   skip(1)
+     1984                   skip "Объект:" buf_trn-doc.obj-type buf_trn-doc.obj-code
+     1985                   skip "Документ номер:" buf_trn-doc.doc-code
+     1986                   skip return-value
+     1987                   skip trim(error-status :get-message(1))
+     1988                       trim(error-status :get-message(2))
+     1989                       trim(error-status :get-message(3))
+     1990               view-as alert-box error.
+     1991               undo, return error .
+     1992           end.
+     1993           assign
+     1994               v-trn-doc-code = buf_trn-doc.doc-code
+     1995               v-trn-doc-boss = buf_trn-doc.boss
+     1996               v-trn-doc-agnt = buf_trn-doc.agnt
+     1997               v-trn-doc-wrkr = buf_trn-doc.wrkr
+     1998           .
+     1999           release buf_trn-doc.
+     2000           find first buf_income_trn-doc no-lock
+     2001               where buf_income_trn-doc.out-code = v-trn-doc-code
+     2002           .
+     2003           run str/trn-stat.p  (
+     2004               input parparentproc
+     2005               , input this-procedure
+     2006               , input '<закрытие документа>':U
+     2007               , input buf_income_trn-doc.doc-code
+     2008               , input no
+     2009               , input v-cntxt-db-num
+     2010               , input no
+     2011               , input 0
+     2012               , input 0
+     2013               , input ""
+     2014               , input yes
+     2015               , output v-was-gds-moving
+     2016               , output table temp_gds-list
+     2017           ) no-error.
+     2018           if error-status :error
+     2019           then do:
+     2020               message
+     2021                       vss-workfile vss-revision vss-description
+     2022                   skip "Ошибка при закрытии документа внутреннего перемещения."
+     2023                   skip(1)
+     2024                   skip "Объект:" buf_income_trn-doc.obj-type buf_income_trn-doc.obj-code
+     2025                   skip "Документ номер:" buf_income_trn-doc.doc-code
+     2026                   skip return-value
+     2027                   skip trim(error-status :get-message(1))
+     2028                       trim(error-status :get-message(2))
+     2029                       trim(error-status :get-message(3))
+     2030               view-as alert-box error.
+     2031               undo, return error .
+     2032           end.
+     2033           find first buf_income_trn-doc exclusive-lock
+     2034                where buf_income_trn-doc.out-code = v-trn-doc-code
+     2035           .
+     2036           assign
+     2037               buf_income_trn-doc.boss = v-trn-doc-boss
+     2038               buf_income_trn-doc.agnt = v-trn-doc-agnt
+     2039               buf_income_trn-doc.wrkr = v-trn-doc-wrkr
+     2040           .
+     2041       end.
+     2042   end.
+     2043   procedure create-doc-line :
+     2044   do
+     2045   on error undo, return error
+     2046   :
+     2047   define input parameter p-doc-code       as character    no-undo.
+     2048   define input parameter p-gds-code       as integer      no-undo.
+     2049   define input parameter p-qnty           as decimal      no-undo.
+     2050   define output parameter p-sum-base      as decimal      no-undo .
+     2051   define output parameter p-sum-rubl      as decimal      no-undo .
+     2052   define output parameter p-sum-vat-base  as decimal      no-undo .
+     2053   define output parameter p-sum-vat-rubl  as decimal      no-undo .
+     2054       define variable v-required-qnty     as decimal        no-undo.
+     2055       define variable v-reserved-qnty     as decimal        no-undo.
+     2056       define variable v-today             as date           no-undo.
+     2057       define variable v-time              as integer        no-undo.
+     2058       define variable v-sum-base          as decimal        no-undo.
+     2059       define variable v-sum-rubl          as decimal        no-undo.
+     2060       define variable v-vat-base          as decimal        no-undo.
+     2061       define variable v-vat-rubl          as decimal        no-undo.
+     2062       define variable v-vat-pc            as decimal        no-undo.
+     2063       define variable v-host-code         as integer        no-undo.
+     2064       define buffer buf_trn-doc       for trn-doc.
+     2065       define buffer buf_doc-line      for doc-line.
+     2066       define buffer buf_goods         for goods.
+     2067       define buffer buf_gds-dtl       for gds-dtl.
+     2068       define buffer buf_gds-prt       for gds-prt.
+     2069       find first buf_trn-doc no-lock
+     2070            where buf_trn-doc.doc-code = p-doc-code
+     2071       .
+     2072       find first buf_goods no-lock
+     2073            where buf_goods.gds-code = p-gds-code
+     2074       .
+     2075       create buf_doc-line.
+     2076       assign
+     2077           buf_doc-line.artic         = buf_goods.artic
+     2078           buf_doc-line.prod-type     = buf_goods.prod-type
+     2079           buf_doc-line.prod-code     = buf_goods.prod-code
+     2080           buf_doc-line.obj-type      = buf_trn-doc.obj-type
+     2081           buf_doc-line.obj-code      = buf_trn-doc.obj-code
+     2082           buf_doc-line.doc-code      = buf_trn-doc.doc-code
+     2083           buf_doc-line.prt-ok        = yes
+     2084           buf_doc-line.prt-root      = buf_goods.prt-root
+     2085           buf_doc-line.status_       = buf_trn-doc.status_
+     2086           buf_doc-line.doc-qnty      = 0
+     2087           buf_doc-line.cli-base-rate = 1
+     2088           v-required-qnty            = round( p-qnty, 3 )
+     2089           v-reserved-qnty            = 0
+     2090       .
+     2091       run fbrrsrv-rsrv-goods in this-procedure (
+     2092             input parparentproc
+     2093           , input recid( buf_goods )
+     2094           , input recid( buf_doc-line )
+     2095           , input v-required-qnty
+     2096           , input no
+     2097           , input 0
+     2098           , input yes
+     2099           , input p-income-trn-doc-code
+     2100           , output v-reserved-qnty
+     2101       ) no-error.
+     2102       if error-status :error
+     2103       then do:
+     2104           if error-status :get-message(1) <> ""
+     2105           or return-value <> "user-interrupt":U
+     2106           then do:
+     2107               message
+     2108               vss-workfile vss-revision vss-description
+     2109               skip "Ошибка резервирования товара."
+     2110               skip return-value
+     2111               skip trim(error-status :get-message(1))
+     2112                   trim(error-status :get-message(2))
+     2113                   trim(error-status :get-message(3))
+     2114               view-as alert-box error.
+     2115           end.
+     2116           undo, return error return-value.
+     2117       end.
+     2118       if v-required-qnty <> v-reserved-qnty
+     2119       then do:
+     2120           message
+     2121           "Невозможно зарезервировать товар."
+     2122           skip(1)
+     2123           skip "Товар:" buf_goods.artic buf_goods.gds-name
+     2124           skip "Объект:" buf_trn-doc.obj-type buf_trn-doc.obj-code
+     2125           skip "Количество:" v-required-qnty
+     2126           skip "Доступно количество:" v-reserved-qnty
+     2127           view-as alert-box error.
+     2128           undo, return error .
+     2129       end.
+     2130       run str/fbrcost.p (
+     2131             input recid( buf_doc-line )
+     2132           , input -1
+     2133           , input v-required-qnty
+     2134           , output v-sum-base
+     2135           , output v-sum-rubl
+     2136           , output v-vat-base
+     2137           , output v-vat-rubl
+     2138           , output v-vat-pc
+     2139         ) .
+     2140       run cur-time in this-procedure (
+     2141             output v-today
+     2142           , output v-time
+     2143       ).
+     2144   define variable vss-include-info23 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2145   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+     2146     (input  buf_trn-doc.obj-type
+     2147     ,input  buf_trn-doc.obj-code
+     2148     ,output v-host-code
+     2149     )  .
+     2150   define variable vss-include-info24 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2151   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run pftxvalg in g#library
+     2152     (input  buf_goods.gds-code
+     2153     ,input  '1':U
+     2154     ,input  ?
+     2155     ,input  v-host-code
+     2156     ,input  buf_trn-doc.obj-type
+     2157     ,input  buf_trn-doc.obj-code
+     2158     ,output v-vat-pc
+     2159     )  .
+     2160       find first buf_gds-prt no-lock
+     2161            where buf_gds-prt.upper-code = buf_goods.prt-root
+     2162       .
+     2163       find first buf_gds-dtl exclusive-lock
+     2164            where buf_gds-dtl.doc-code  = buf_trn-doc.doc-code
+     2165              and buf_gds-dtl.artic     = buf_goods.artic
+     2166              and buf_gds-dtl.prod-type = buf_goods.prod-type
+     2167              and buf_gds-dtl.prod-code = buf_goods.prod-code
+     2168              and buf_gds-dtl.prt-code  = buf_gds-prt.node-code
+     2169       .
+     2170       assign
+     2171           buf_doc-line.doc-qnty   = v-reserved-qnty
+     2172           buf_doc-line.fact-qnty  = v-reserved-qnty
+     2173           buf_gds-dtl.doc-qnty    = v-reserved-qnty
+     2174           buf_gds-dtl.fact-qnty   = v-reserved-qnty
+     2175           p-sum-base              = v-sum-base - v-vat-base
+     2176           p-sum-rubl              = v-sum-rubl - v-vat-rubl
+     2177           p-sum-vat-base          = v-vat-base
+     2178           p-sum-vat-rubl          = v-vat-rubl
+     2179       .
+     2180       assign
+     2181           buf_doc-line.price-cli  = v-sum-rubl / v-reserved-qnty
+     2182           buf_doc-line.price-base = v-sum-base / v-reserved-qnty
+     2183           buf_doc-line.price-rubl = v-sum-rubl / v-reserved-qnty
+     2184           buf_doc-line.VAT-pc     = v-vat-pc
+     2185       .
+     2186   end.
+     2187   end procedure.

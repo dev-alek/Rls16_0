@@ -1,0 +1,1253 @@
+        1   using ibs.th.skt.*.
+        2   using ibs.th.skt.Commands.*.
+        3   using ibs.th.skt.ControlledClients.*.
+        4   using ibs.th.skt.Adapters.*.
+        5   block-level on error undo, throw.
+        6   class ibs.th.skt.Commands.TSDCommand inherits ICommandProc:
+        7     define override public property vss-revision    as character no-undo init "$Revision:$":U get .
+        8     define override public property vss-author      as character no-undo init "$Author:$":U get.
+        9     define override public property vss-date        as character no-undo init "$Date:$":U get.
+       10     define override public property vss-workfile    as character no-undo init "$Workfile:$":U get.
+       11     define override public property vss-archive     as character no-undo init "$Archive:$":U get.
+       12     define override public property vss-description as character no-undo init "Обработка запросов в сокет по ТСД" get.
+       13      define variable is-ProcArch64 as logical  no-undo init no.
+       14   define temp-table TempTrnDoc no-undo
+       15     field line-num     as integer
+       16     field ext-doc-code as character
+       17     field doc-date     as date
+       18     field ext-doc-type as character
+       19     field cli-type     as character
+       20     field cli-code     as integer
+       21     field obj-type     as character
+       22     field obj-code     as integer
+       23     field ps           as character
+       24     field Status_      as character
+       25     field Flags_       as integer
+       26     index pi line-num ext-doc-code .
+       27   define temp-table TempDocLine no-undo
+       28     field line-num     as integer
+       29     field gds-code     as integer
+       30     field doc-qnty     as decimal
+       31     field fact-qnty    as decimal
+       32     field price-rubl   as decimal
+       33     field RowSum       as decimal
+       34     field vat-pc       as decimal
+       35     field b-code       as character
+       36     field is-tsd-qnty  as logical   init no
+       37     field aclMarksList as character
+       38     field PartIDTH     as character
+       39     field Flags_       as integer
+       40     field NotDict      as logical
+       41     index pi
+       42     line-num
+       43     gds-code
+       44     .
+       45   define temp-table TempDocLineIsTSD like TempDocLine.
+       46   define temp-table TempDocLineTSD no-undo
+       47     field gds-code     as integer
+       48     field doc-qnty     as decimal
+       49     field fact-qnty    as decimal
+       50     field artic        as character
+       51     field prod-code    as integer
+       52     field prod-type    as character
+       53     field Flags_error  as logical
+       54     field mark-type    as character
+       55     field mark         as character
+       56     field mark-parent  as character
+       57     index pi
+       58     artic
+       59     prod-code
+       60     prod-type
+       61     mark
+       62     .
+       63   define temp-table TempMarkLine no-undo
+       64     field DocName    as character
+       65     field MarkCode   as character
+       66     field PartIDTH   as character
+       67     field Sts        as character
+       68     field MarkParent as character
+       69     field QntyBox    as character
+       70     index pi
+       71     DocName
+       72     MarkCode
+       73     .
+       74     define temp-table TempTSDSetting no-undo
+       75     field sn   as character
+       76     field obj-code  as integer
+       77     field obj-type as character
+       78     field version_ as character
+       79     field lastDate as datetime
+       80     index pi
+       81     sn
+       82     .
+       83     define temp-table TempTrnLineMT no-undo
+       84     field lineid    as integer
+       85     field docname   as character
+       86     field pos       as integer
+       87     field goodsid   as integer
+       88     field goodsname as character
+       89     field UnitBC    as character
+       90     field BC        as character
+       91     field Price_    as character
+       92     field DocQnty   as character
+       93     field FactQnty  as character
+       94     field AlcCode   as character
+       95     field PartIDTH  as character
+       96     field NotDict   as logical
+       97   index pi docname lineid.
+       98   define temp-table TempMarkLineMT no-undo
+       99     field LineId   as integer
+      100     field DocName  as character
+      101     field MarkCode as character
+      102     field PartIDTH as character
+      103     field Sts      as character
+      104     field MarkParent as character
+      105   index pi DocName MarkCode.
+      106   define temp-table TempTrnDocMT no-undo
+      107     field DocName    as character
+      108     field DocType    as character
+      109     field Complete_  as logical
+      110     field Status_    as character
+      111     field ClientID   as integer
+      112     field ClientType as character
+      113     field ObjectID   as integer
+      114     field ObjectType as character
+      115     field UserID_    as character
+      116     field UserName   as character
+      117     field FactSum    as decimal
+      118     field StartDate  as character
+      119     field Flags_     as integer
+      120   index pi DocName.
+      121         define variable mdelFile as character no-undo init "DBInit.exe System.Data.SQLite.dll".
+      122     define variable mdelFilezp as character no-undo init "DBInit.exe,System.Data.SQLite.dll".
+      123     method private void deletefileAfter(resp as class IResponse, idir as char):
+      124     end.
+      125     define public property ErrStatus as logical no-undo
+      126       get.
+      127       private set.
+      128     define public property TsdMes as longchar no-undo
+      129       get.
+      130       private set.
+      131     define private variable tsd         as class     TSD no-undo.
+      132     define private variable fileSend         as class     FileSend no-undo.
+      133     define private variable i           as integer   no-undo.
+      134     define private variable userId_     as character no-undo.
+      135     define private variable sn          as character no-undo.
+      136     define private variable hndlSocket  as handle    no-undo.
+      137     define private variable millisec    as integer   no-undo.
+      138     define variable HTTPError as longchar no-undo.
+      139     define variable myPID as int64 no-undo.
+      140     define variable myCompUser as character no-undo.
+      141     define variable myflagsDoc     as class flagsdoc     no-undo.
+      142     constructor public TSDCommand (iFileSend as class fileSend):
+      143       super ().
+      144       myflagsDoc = new flagsdoc ().
+      145       DelDontWorkProc().
+      146       define variable myCompName as character no-undo.
+      147       run utl/getpid.p (output myPID,
+      148                         output myCompName,
+      149                         output myCompUser).
+      150       fileSend = iFileSend.
+      151       define variable tempStr       as char     no-undo.
+      152       HTTPError = substitute("HTTP/1.1 500 Internal Server Error&1Server: 4GL&1Content-Type: text/html&1ETag: &3&4&2",
+      153                            chr(13) + chr(10),
+      154                            chr(13) + chr(10) + chr(13) + chr(10) ,
+      155                            "&1",
+      156                            "&2").
+      157       os-command silent value( 'set processor_Architecture >procarch') .
+      158       if search ("procarch") = ?
+      159       then do:
+      160         logWrite:WriteFileToLog ( "Не найден файл с данными PROCESSOR_ARCHITECTURE, проверьте настройки propath - должен быть указан путь рабочий директории").
+      161         ErrStatus = true.
+      162         return.
+      163       end.
+      164       input from value (search('procarch')) no-convert.
+      165       import tempStr.
+      166       if not index ("PROCESSOR_ARCHITEW6432=AMD64", tempStr) = 0
+      167         then assign is-ProcArch64 = true.
+      168       input close.
+      169       tsd = new tsd().
+      170     end constructor.
+      171     define variable mEmptyConstr as logical no-undo.
+      172     constructor public TSDCommand ():
+      173         this-object(new fileSend()).
+      174         mEmptyConstr = yes.
+      175     end.
+      176     method private void startStep(msg as char):
+      177       logWrite:WriteDebugLog(msg).
+      178     end.
+      179     method private void endStep(msg as char):
+      180        logWrite:WriteDebugLog(msg).
+      181     end.
+      182     method public character copyDbInit(idir as char, input vProt as character ):
+      183        if vProt > ""
+      184        then do:
+      185           define variable vfileDbInit as character no-undo.
+      186           vfileDbInit = "exe/DBInit_" + replace (vProt,".","_") +  ".exe".
+      187           if (search(vfileDbInit)) eq ?
+      188           then do:
+      189              return error "Не найден файл " + vfileDbInit + " для версии протокола " + vProt.
+      190           end.
+      191        end.
+      192        else do:
+      193           vfileDbInit = "exe/DBInit_0.exe".
+      194        end.
+      195        os-copy value(search(vfileDbInit)) value (idir + "\DBInit.exe").
+      196        logWrite:WriteDebugLog("Используем " + vfileDbInit).
+      197        if is-ProcArch64
+      198        then do:
+      199           os-copy value(search("exe/x64/System.Data.SQLite.dll")) value (idir + "\System.Data.SQLite.dll").
+      200        end.
+      201        else do:
+      202           os-copy value(search("exe/x86/System.Data.SQLite.dll")) value (idir + "\System.Data.SQLite.dll").
+      203        end.
+      204        return search(idir + "\DBInit.exe").
+      205     end.
+      206     method public void Execute_( input req as IRequest, resp as class IResponse, list-par as char ):
+      207       DelOldDir().
+      208       ErrStatus = false.
+      209       define variable mbuffer       as memptr   no-undo.
+      210       define variable mbuffer1      as memptr   no-undo.
+      211       define variable tempLongCh    as longchar no-undo.
+      212       define variable glog          as logical  no-undo.
+      213       define variable vMesForTsd as character no-undo.
+      214        do on error undo, leave:
+      215          define variable vOk as logical no-undo.
+      216          define variable vdir as character no-undo.
+      217          vdir = crDir().
+      218          resp:ParamWait:setParam("WorkDir",vdir).
+      219          deleteFileAfter(resp,vdir).
+      220          os-delete value (search (vdir + "\MT_documentsSend.txt")) no-error.
+      221          os-delete value (search (vdir + "\MT_lineSend.txt")) no-error.
+      222          os-delete value (search (vdir + "\MT_MarkLinesSend.txt")) no-error.
+      223          os-delete value (search (vdir + "\MT_documentsSend.json")) no-error.
+      224          startStep('Начало выгрузка из базы ТСД').
+      225          define variable vobjtype as character no-undo.
+      226          logWrite:LogStr = "".
+      227          if    get-size(req:ContentBuff) eq 0
+      228             or get-size(req:ContentBuff) eq ?
+      229          then
+      230             os-delete value (search (vdir + "\documents_tsd.s3db")).
+      231          else
+      232             copy-lob
+      233                from  object req:ContentBuff
+      234                to file vdir + "\documents.s3db"
+      235                no-convert
+      236             no-error .
+      237          if session:debug-alert
+      238          then do:
+      239             os-delete value (search (vdir + "\documents_tsd.s3db")) no-error.
+      240             if    get-size(req:ContentBuff) ne 0
+      241               and get-size(req:ContentBuff) ne ?
+      242             then
+      243             copy-lob
+      244                from  object req:ContentBuff
+      245                to file vdir + "\documents_tsd.s3db"
+      246                no-convert
+      247             no-error .
+      248          end.
+      249          vobjtype = entry (1, list-par, "?").
+      250          if vobjtype eq "" or vobjtype eq ?
+      251          then do:
+      252            vMesForTsd = "Не задан тип объекта".
+      253            logWrite:WriteFileToLog ( vMesForTsd).
+      254            return.
+      255          end.
+      256          else if vobjtype eq "shop"
+      257          then
+      258             vobjtype = 'маг':U.
+      259          else if vobjtype eq "stock"
+      260          then
+      261             vobjtype = 'скл':U.
+      262          else if vobjtype eq "cmp"
+      263          then
+      264             vobjtype = 'орг':U.
+      265          tsd:ObjCode = integer (entry (2, list-par, "?")) no-error.
+      266          if error-status:error
+      267          then do:
+      268            vMesForTsd  = "Не задан код объекта".
+      269            logWrite:WriteFileToLog ( vMesForTsd).
+      270            return.
+      271          end.
+      272          assign
+      273          tsd:ObjType = vobjtype
+      274          tsd:ReqType = entry (3, list-par, "?")
+      275          tsd:CurrDecSeparator = entry (4, list-par, "?")
+      276          tsd:IsMarkOn = if entry (5, list-par, "?") = "true" then true else false
+      277          no-error.
+      278          define variable vProt as character no-undo.
+      279          vProt = req:HeadHTTP:getValue("TSD-protocol").
+      280          define variable vDbinit as character no-undo.
+      281          vDbinit = copyDbInit(vdir ,vProt) no-error.
+      282          if error-status:error
+      283          then do:
+      284             vMesForTsd = return-value.
+      285             return.
+      286          end.
+      287          define variable vpid as integer no-undo.
+      288          vpid = runProc(vdir ,vDbinit + ' ExpDoc 30 31 >DBInitExpDoc.txt').
+      289          resp:condition = resp:STSlist:WriteStatusAndWait:NameProp.
+      290          resp:ParamWait:setParam("pid",string(vpid)).
+      291          resp:ParamWait:setParam("status","Step1").
+      292          vOk = true.
+      293          finally:
+      294            if (vOk ne true)
+      295            then do:
+      296               if (vMesForTsd > "")
+      297               then do:
+      298                  writeSockError (req:HndlSocket, vMesForTsd).
+      299               end.
+      300               ErrStatus = true.
+      301            end.
+      302          end finally.
+      303       end.
+      304     end method.
+      305     method private character  waitWriteFile(ifileName as character):
+      306          define variable vi as integer no-undo.
+      307          define variable vsize as int64 no-undo.
+      308          block-size:
+      309          do vi = 1 to 50:
+      310            file-info:file-name = ifileName.
+      311            vsize = file-info:file-size.
+      312            run gbl/pause.p( 1000).
+      313            if     vsize ne ?
+      314               and vsize eq file-info:file-size
+      315            then
+      316               leave block-size.
+      317         end.
+      318          if vsize eq ? or vsize eq 0
+      319          then do:
+      320             logWrite:WriteFileToLog ( substitute ("Не найден файл &1 базы данных, для отсылки на TSD, проверьте настройки propath - должен быть указан путь рабочий директории",ifileName)).
+      321             ErrStatus = true.
+      322             return ?.
+      323          end.
+      324          assign
+      325            file-info:file-name = ifileName
+      326          .
+      327          return file-info:file-name.
+      328     end.
+      329     method override public void ContinueExecution( input req as IRequest, input resp as IResponse ):
+      330       DelOldDir().
+      331       ErrStatus = false.
+      332       define variable tempLongCh    as longchar no-undo.
+      333       define variable mbuffer       as memptr   no-undo.
+      334       define variable mbuffer1      as memptr   no-undo.
+      335       define variable glog          as logical  no-undo.
+      336       hndlsocket = req:HndlSocket.
+      337       define variable vPid as integer no-undo.
+      338       vpid = int64(resp:ParamWait:getParamValue("pid")).
+      339       if vpid ne ? and IsProcessRunning(vpid) > 0
+      340       then
+      341          return.
+      342       define variable vdir as character no-undo.
+      343       vdir = resp:ParamWait:getParamValue("WorkDir").
+      344       define variable vStatus as character no-undo.
+      345       vStatus = resp:ParamWait:getParamValue("status").
+      346       if vStatus eq "dictionaries"
+      347       then do:
+      348          logWrite:WriteFileToLog(vdir + "\DBInitDict.txt","IBM866").
+      349          define variable vFile as character no-undo.
+      350          vfile = waitWriteFile(vdir + "\dictionaries_new.s3db").
+      351          if vfile ne ?
+      352            then
+      353            filesend:sendfile(resp, vfile).
+      354         else do:
+      355            writeSockError (req:HndlSocket, substitute("&1 &2", "При обмене возникли ошибки.",logWrite:LogStr)).
+      356            resp:condition = resp:STSlist:ReciveCommand:NameProp.
+      357         end.
+      358       end.
+      359       else if vStatus eq "step1"
+      360       then do transaction:
+      361          vpid = ?.
+      362          if not hndlSocket:connected()
+      363          then do:
+      364             resp:condition = resp:STSlist:WriteResponse:NameProp.
+      365             return.
+      366          end.
+      367          define variable vProt as character no-undo.
+      368          vProt = req:HeadHTTP:getValue("TSD-protocol").
+      369          logWrite:WriteFileToLog(vdir + "\DBInitExpDoc.txt","IBM866").
+      370          run gbl/pause.p( 1000).
+      371          endStep('Завершена выгрузка из базы ТСД').
+      372          startStep('Начало загрузки документов.').
+      373          if (vProt = "1.0" or vProt = "2.0" or vProt eq "")
+      374          then do:
+      375             if not parseCSV(vdir)
+      376             then do:
+      377                resp:condition = resp:STSlist:ReciveCommand:NameProp.
+      378                return.
+      379             end.
+      380          end.
+      381          else do:
+      382             if not tsd:parseCSV(vdir)
+      383             then do:
+      384                resp:condition = resp:STSlist:ReciveCommand:NameProp.
+      385                return.
+      386             end.
+      387          end.
+      388          endStep('Завершена загрузки документов.').
+      389          startStep('Начало выгрузки накладных.').
+      390          tsd:clear().
+      391          tsd:getWB().
+      392          endStep('Завершена выгрузка накладных').
+      393          startStep('Начало выгрузки ЭДО.').
+      394          tsd:getUTDDoc(req:HeadHTTP:getValue("TSD-protocol")).
+      395          endStep('Завершена выгрузка ЭДО').
+      396          if (vProt = "1.0" or vProt = "2.0" or vProt eq "")
+      397          then do:
+      398             tsd:docPrint(vdir).
+      399             tsd:docLinePrint(vdir).
+      400             tsd:docLineMarkPrint(vdir).
+      401          end.
+      402          else do:
+      403             tsd:docPrint("json","utf-8").
+      404             tsd:writeResult(vdir + "\MT_documents.json","utf-8").
+      405          end.
+      406          startStep('Начало загрузки документов в ТСД.').
+      407          os-delete value(vdir + "\documents_new.s3db").
+      408          if not hndlSocket:connected()
+      409          then do:
+      410             resp:condition = resp:STSlist:WriteResponse:NameProp.
+      411             return.
+      412          end.
+      413          vpid = runProc(vdir, vdir + '\DBInit.exe Doc 30 31 >DBInitDoc.txt'
+      414          + chr(10) + 'rename documents.s3db documents_new.s3db'
+      415          + chr(10) + "del /q " +  mdelFile).
+      416          catch exAppErrors as class Progress.Lang.AppError :
+      417               undo ,throw exAppErrors.
+      418            end catch .
+      419            catch exProErrors as class Progress.Lang.ProError :
+      420               undo ,throw exProErrors.
+      421            end catch .
+      422            catch exAnyErrors as class Progress.Lang.Error:
+      423               undo ,throw exAnyErrors.
+      424            end catch .
+      425          finally:
+      426             resp:condition = resp:STSlist:WriteStatusAndWait:NameProp.
+      427             resp:ParamWait:setParam("pid",string(vpid)).
+      428             resp:ParamWait:setParam("status","Step2").
+      429          end.
+      430       end.
+      431       else if vStatus eq "step2"
+      432       then do on error undo, leave:
+      433         if vpid = ?
+      434         then do:
+      435            resp:condition = resp:STSlist:WriteResponse:NameProp.
+      436            return.
+      437         end.
+      438         logWrite:WriteFileToLog(vdir + "\DBInitDoc.txt").
+      439         endStep('Завершена загрузка документов в ТСД.').
+      440         if not hndlSocket:connected()
+      441          then do:
+      442             resp:condition = resp:STSlist:WriteResponse:NameProp.
+      443             return.
+      444          end.
+      445         resp:condition = resp:STSlist:ReciveCommand:NameProp.
+      446         vfile = waitWriteFile(vdir + "\documents_new.s3db").
+      447         if vfile ne ?
+      448            then
+      449            filesend:sendfile(resp, vfile).
+      450         else do:
+      451            writeSockError (req:HndlSocket, substitute("&1 &2", "При обмене возникли ошибки.",logWrite:LogStr)).
+      452            resp:condition = resp:STSlist:ReciveCommand:NameProp.
+      453         end.
+      454       end.
+      455     end.
+      456     method private int64 dumpDistric(idir as char, iprotocol as char):
+      457        define variable tempStr       as char     no-undo.
+      458        define variable vMesForTsd as character no-undo.
+      459         os-delete value(searchfile(idir + "\dictionaries.s3db")).
+      460         os-delete value(searchfile(idir + "\dictionaries_new.s3db")).
+      461         startStep("Начало конвертации справочника.").
+      462         define variable vDbinit as character no-undo.
+      463         vDbinit = copyDbInit(idir,iprotocol) no-error.
+      464         if error-status:error
+      465         then do:
+      466            logWrite:LogStr = return-value.
+      467            ErrStatus = true.
+      468            return error .
+      469         end.
+      470         return runProc(idir, vDbinit + ' Dict 30 31 >DBInitDict.txt'
+      471         + chr(10) + 'rename dictionaries.s3db dictionaries_new.s3db'
+      472         + chr(10) + "del /q " +  mdelFile) .
+      473      end.
+      474       define variable mType    as character no-undo.
+      475       define variable mVersion as character no-undo.
+      476       define variable mObjType as character no-undo .
+      477       define variable mObjCode as character no-undo .
+      478       define variable mSN      as character no-undo .
+      479     method public override void Execute_( input req as IRequest, resp as class IResponse ):
+      480     DelOldDir().
+      481     ErrStatus = false.
+      482     do transaction:
+      483       define variable contLength as integer   no-undo.
+      484       define variable strLog     as character no-undo.
+      485       define variable str        as character no-undo.
+      486       define buffer buf_bar-code  for ub.bar-code.
+      487       define buffer buf_prod-bc   for ub.prod-bc.
+      488       define buffer buf_place     for ub.place.
+      489       define buffer bfTempDocLine for TempDocLine.
+      490       if req:HeadHTTP:queryAdr eq "tsd/doc"
+      491       then do:
+      492          Execute_ (req,resp,req:HeadHTTP:userAgent).
+      493          return.
+      494       end.
+      495       define variable hRoot       as handle    no-undo.
+      496       define variable hDoc        as handle    no-undo.
+      497       create x-document hDoc.
+      498       hDoc:encoding = "utf-8".
+      499       hDoc:load("longchar",req:Content,no).
+      500       tsd:CP = hDoc:encoding.
+      501       if hDoc:encoding <> "windows-" + session:charset then
+      502       do:
+      503         req:convertContentInCharset(hDoc:encoding).
+      504         delete object hDoc.
+      505         create x-document hDoc.
+      506         hDoc:load("longchar",req:Content,no).
+      507       end.
+      508       hDoc:encoding = if session:charset begins "12" then "windows-" + session:charset else session:charset.
+      509       create x-noderef  hRoot.
+      510       hDoc:get-document-element(hRoot) .
+      511       assign
+      512         tsd:ObjCode = integer (substring (hRoot:get-attribute("to"), 4))
+      513       no-error.
+      514       if error-status:error
+      515       then do:
+      516          writeSockError(req:HndlSocket,substitute ("Код магазина '&1' должен быть числом ",substring (hRoot:get-attribute("to"), 4))).
+      517          return.
+      518       end.
+      519       assign
+      520         tsd:ObjType = substring (hRoot:get-attribute("to"), 1, 3)
+      521         tsd:ReqType = hRoot:get-attribute("item")
+      522         tsd:ResType = hRoot:get-attribute("responseType")
+      523         tsd:CurrDecSeparator = hRoot:get-attribute("currDecSeparator")
+      524         tsd:IsMarkOn = if hRoot:get-attribute("MarksReg") = "true" then true else false
+      525         .
+      526         if tsd:ResType eq "xml"
+      527         then do:
+      528            resp:Content-Type = "text/xml; charset=" + tsd:CP.
+      529         end.
+      530         else if tsd:ResType eq "json"
+      531         then
+      532          resp:Content-Type = "application/json; charset=" + tsd:CP.
+      533       hndlsocket = req:HndlSocket.
+      534       case tsd:ReqType :
+      535           when "SETTINGS" then
+      536           do:
+      537             parseXML(hRoot).
+      538             tsd:Check_().
+      539             tsd:ResType = "xml".
+      540             resp:Content-Type = "text/csv".
+      541           end.
+      542           when "getSETTINGS" then
+      543           do:
+      544             parseXML(hRoot).
+      545             tsd:getSETTINGS().
+      546             tsd:ResType = "xml".
+      547             resp:Content-Type = "text/xml; charset=" + tsd:CP.
+      548           end.
+      549           when "getListVersions" then
+      550           do:
+      551             parseXML(hRoot).
+      552             tsd:getListVersions().
+      553             tsd:ResType = "xml".
+      554             resp:Content-Type = "text/xml; charset=" + tsd:CP.
+      555           end.
+      556         when "getVersion" then
+      557           do:
+      558             parseXML(hRoot).
+      559             define variable vfile as character no-undo.
+      560             vfile = tsd:getFileVersion(mType, mVersion).
+      561             if vfile ne ?
+      562             then do:
+      563                logWrite:WriteFileToLog (substitute ("Подготавливаем файл &1 к отправке ",vfile)).
+      564                filesend:sendfile(resp, vfile).
+      565                return.
+      566             end.
+      567             else do:
+      568                tsd:SomeStr = tsd:getStatusXml(false, substitute ("Нет файла для устройства '&1' и версии '&2'", mType, mVersion)).
+      569                tsd:ResType = "xml".
+      570                resp:Content-Type = "text/xml" + (if tsd:cp ne "windows-1251" then "; charset=" + tsd:CP else "").
+      571             end.
+      572           end.
+      573           when "PrintTicket" then
+      574           do:
+      575             for each ub.Code exclusive-lock where ub.Code.parent = "TiketPrint":
+      576                 delete ub.Code .
+      577             end.
+      578             tsdmes = "".
+      579             if parseXML(hRoot)
+      580             then do:
+      581               tsd:SomeStr = tsd:getStatusXml(true,"" ).
+      582           end.
+      583           else do:
+      584                tsdmes = substring (tsdmes, 2 ).
+      585                tsd:SomeStr = tsd:getStatusXml (false, tsdmes).
+      586             end.
+      587             tsd:ResType = "xml".
+      588             resp:Content-Type = "text/xml; charset=" + tsd:CP.
+      589           end.
+      590         when "TH_ALL" then
+      591           do:
+      592             define variable vProtocol as character no-undo.
+      593             vProtocol = req:HeadHTTP:getValue("TSD-protocol").
+      594             if (vProtocol ne "1.0" and vProtocol ne "2.0" and vProtocol ne "")
+      595             then do:
+      596                tsd:ResType = "json".
+      597             end.
+      598             define variable vdir as character no-undo.
+      599             vdir = crDir().
+      600             resp:ParamWait:setParam("WorkDir",vdir).
+      601             deleteFileAfter(resp,vdir).
+      602             tsd:usersClear().
+      603             startStep('Начало кеширования справочника пользователей.').
+      604             tsd:WriteUsers(vdir).
+      605             endStep('Завершено кеширование справочника пользователей.').
+      606             startStep('Начало кеширования справочника объектов.').
+      607             tsd:objectsClear().
+      608             tsd:WriteObjects(vdir).
+      609             endStep('Завершено кеширование справочника объектов.').
+      610             startStep('Начало кеширования справочника контрагентов.').
+      611             tsd:WriteClients(vdir).
+      612             endStep('Завершено кеширование справочника контрагентов.').
+      613             startStep('Начало кеширования справочника товаров и штрих-кодов.').
+      614             tsd:getGoodsAndBarcodes(req:HeadHTTP:getValue("TSD-protocol"),vdir).
+      615             endStep('Завершено кеширование справочника товаров и штрих-кодов.').
+      616             str = 'dictionaries'.
+      617             define variable vpid as integer no-undo.
+      618             vpid = dumpDistric(vdir,req:HeadHTTP:getValue("TSD-protocol")).
+      619             resp:condition = resp:STSlist:WriteStatusAndWait:NameProp.
+      620             resp:ParamWait:setParam("pid",string(vpid)).
+      621             resp:ParamWait:setParam("status",str).
+      622           end.
+      623         when "TH_WB" then
+      624           do:
+      625             tsd:docClear().
+      626             startStep('Начало кеширования документов.').
+      627             tsd:GetWB().
+      628             tsd:getUTDDoc(req:HeadHTTP:getValue("TSD-protocol")).
+      629             endStep('Завершено кеширование документов.').
+      630             tsd:docWrite().
+      631           end.
+      632         when "TH_users" then
+      633           do:
+      634             tsd:usersClear().
+      635             tsd:GetUsers ().
+      636             tsd:UsersPrint(tsd:ResType).
+      637           end.
+      638         when "TH_objects" then
+      639           do:
+      640             tsd:objectsClear().
+      641             tsd:getObjects().
+      642             tsd:ObjectsPrint(tsd:ResType).
+      643           end.
+      644         when "TH_clients" then
+      645           do:
+      646             tsd:ClientsClear ().
+      647             tsd:getClients().
+      648             tsd:ClientsPrint(tsd:ResType).
+      649           end.
+      650         when "TH_goods" then
+      651           do:
+      652             tsd:GoodsClear().
+      653             tsd:getGoods().
+      654             tsd:GoodsPrint(tsd:ResType).
+      655           end.
+      656         when "TH_barcodes" then
+      657           do:
+      658             tsd:BarcodesClear().
+      659             tsd:getBarcodes(req:HeadHTTP:getValue("TSD-protocol")).
+      660             tsd:BarcodesPrint(tsd:ResType, req:HeadHTTP:getValue("TSD-protocol")).
+      661           end.
+      662        when "TH_goodsAndBarcodes" then
+      663           do:
+      664             tsd:GoodsAndBarcodesClear().
+      665             tsd:getGoodsAndBarcodes(yes, yes, req:HeadHTTP:getValue("TSD-protocol")).
+      666             tsd:GoodsAndBarcodesPrint(tsd:ResType,?, req:HeadHTTP:getValue("TSD-protocol")).
+      667           end.
+      668         when "WAYBILL" then
+      669           do:
+      670             parseXML(hRoot).
+      671             for each TempDocLine no-lock where not TempDocLine.b-code matches ("*" + string (TempDocLine.gds-code) + "*"):
+      672               find first bfTempDocLine where bfTempDocLine.gds-code = TempDocLine.gds-code and bfTempDocLine.b-code matches ( "*" + string (bfTempDocLine.gds-code) + "*")  no-error.
+      673               find buf_bar-code where
+      674                 buf_bar-code.gds-code = TempDocLine.gds-code and TempDocLine.b-code matches ("*" + string(buf_bar-code.b-code)+ "*") no-error.
+      675               if not available buf_bar-code then do:
+      676                 find first buf_prod-bc where buf_prod-bc.b-str = TempDocLine.b-code no-error.
+      677                 if available buf_prod-bc
+      678                 then do:
+      679                   find first buf_bar-code where buf_bar-code.b-code = buf_prod-bc.b-code and buf_bar-code.gds-code = TempDocLine.gds-code no-error.
+      680                 end.
+      681                 if not available buf_bar-code then do:
+      682                   logWrite:LogStr = 'Отправлен ответ на запрос типа "WAYBILL".' + chr(10) + "Не известный штрих-код:" + TempDocLine.b-code.
+      683                   logWrite:WriteFileToLog( "Не известный штрих-код:" + TempDocLine.b-code).
+      684                   writeSockError(HndlSocket, "Не известный штрих-код:" + TempDocLine.b-code).
+      685                 end.
+      686               end.
+      687               if not available bfTempDocLine
+      688               then do:
+      689                 create bfTempDocLine.
+      690                 assign
+      691                   bfTempDocLine.gds-code = TempDocLine.gds-code
+      692                   bfTempDocLine.b-code = string (TempDocLine.gds-code)
+      693                 .
+      694               end.
+      695               assign
+      696                 bfTempDocLine.doc-qnty  = bfTempDocLine.doc-qnty + TempDocLine.doc-qnty * buf_bar-code.cli-base-rate
+      697                 bfTempDocLine.fact-qnty = bfTempDocLine.fact-qnty + TempDocLine.fact-qnty * buf_bar-code.cli-base-rate
+      698                 bfTempDocLine.RowSum    = bfTempDocLine.RowSum + TempDocLine.RowSum
+      699                 .
+      700               delete TempDocLine.
+      701             end.
+      702             for each TempDocLine no-lock:
+      703               assign
+      704                 TempDocLine.price-rubl = TempDocLine.RowSum / TempDocLine.fact-qnty.
+      705                 .
+      706             end.
+      707             if tsd:ImpWB(table TempTrnDoc, table TempDocLine, table TempMarkLine, userId_)
+      708               then ErrStatus = false.
+      709               else ErrStatus = true.
+      710           end.
+      711         when "INVENTORY" then
+      712           do:
+      713             parseXML(hRoot).
+      714             if tsd:ImpInventory (table TempTrnDoc, table TempDocLine, userId_)
+      715               then ErrStatus = false.
+      716               else ErrStatus = true.
+      717           end.
+      718         otherwise
+      719         do:
+      720           tsd:WriteUnknown().
+      721           tsd:ResType = "xml".
+      722           resp:Content-Type = "text/xml; charset=" + tsd:CP.
+      723         end.
+      724       end.
+      725       case tsd:ReqType :
+      726         when "SETTINGS" then
+      727           do:
+      728             logWrite:WriteFileToLog ( 'Отправлен ответ на запрос типа "SETTINGS".' + chr(10) + logWrite:LogStr).
+      729           end.
+      730         when "TH_ALL" then
+      731           do:
+      732             logWrite:WriteFileToLog ('Обработан запрос типа "TH_ALL".' + chr(10) + logWrite:LogStr).
+      733           end.
+      734         when "TH_WB" then
+      735           do:
+      736             logWrite:WriteFileToLog ('Отправлен ответ на запрос типа "TH_WB".' + chr(10) + logWrite:LogStr).
+      737           end.
+      738         when "WAYBILL" then
+      739           do:
+      740             logWrite:WriteFileToLog ( 'Отправлен ответ на запрос типа "WAYBILL".' + chr(10) + logWrite:LogStr).
+      741           end.
+      742         when "INVENTORY" then
+      743           do:
+      744             logWrite:WriteFileToLog ( 'Отправлен ответ на запрос типа "INVENTORY".' + chr(10) + logWrite:LogStr).
+      745           end.
+      746       end case.
+      747       if not hndlsocket:connected()
+      748          then do:
+      749             resp:condition = resp:STSlist:WriteResponse:NameProp.
+      750             return.
+      751          end.
+      752       mSN = req:HeadHTTP:getValue("TSD-serial").
+      753       mVersion = req:HeadHTTP:getValue("TSD-version").
+      754       if mSN <> "" and mSN ne ? then do:
+      755       find first ub.Code exclusive-lock where ub.Code.code = mSN and ub.Code.parent = "TSDversion" no-error .
+      756       if not available (ub.Code) then do:
+      757           create ub.Code .
+      758           assign
+      759           ub.Code.code = mSN
+      760           ub.Code.parent = "TSDversion"
+      761           ub.Code.nwsubd = yes
+      762           .
+      763       end.
+      764       if mVersion <> "" then ub.Code.misc1 = mVersion .
+      765       if mObjCode <> "" then ub.Code.misc2 = mObjCode .
+      766       if mObjType <> "" then ub.Code.misc3 = mObjType .
+      767       ub.Code.misc4 = string(now,"99/99/9999 HH:MM:SS") .
+      768       end.
+      769       if ErrStatus then
+      770       do:
+      771         writeSock(resp,"").
+      772         if ErrStatus = true then undo.
+      773       end.
+      774       else do:
+      775         if     resp:condition ne resp:STSlist:WriteStatusAndWait:NameProp
+      776            and resp:condition ne resp:STSlist:WaitResult:NameProp
+      777         then do:
+      778         if tsd:ResType eq "xml" or tsd:ResType eq "json"
+      779         then do:
+      780            resp:condition = resp:STSlist:WriteResponse:NameProp.
+      781            resp:ConvertPage = tsd:CP.
+      782            resp:setContent(tsd:SomeStr,true).
+      783         end.
+      784         else do:
+      785            writeSock(resp,tsd:SomeStr).
+      786            if ErrStatus = true then undo.
+      787         end.
+      788         end.
+      789       end.
+      790       finally:
+      791           delete object hDoc no-error.
+      792           delete object hRoot no-error.
+      793       end.
+      794     end .
+      795     end method.
+      796     method private logical parseCSV( idir as char ):
+      797       define variable lResult    as logical   no-undo.
+      798       define variable cFactQnty  as character no-undo.
+      799       define variable cDocQnty   as character no-undo.
+      800       define variable cPriceRubl as character no-undo.
+      801       define variable RowSum     as decimal   no-undo.
+      802       define variable iDbNum     as integer   no-undo.
+      803       define variable docType    as character no-undo.
+      804       define variable vFilename  as character no-undo.
+      805       myflagsDoc:unSetAllFlags().
+      806       iDbNum = tsd:GetDbNum().
+      807       empty temp-table TempTrnDocMT.
+      808       empty temp-table TempTrnLineMT.
+      809       empty temp-table TempMarkLineMT.
+      810       vFilename = idir + "\MT_documentsSend.txt".
+      811       if SearchFile(vFilename) ne ?
+      812       then do:
+      813          input from value(SearchFile(vFilename)) convert source "UTF-8".
+      814          repeat:
+      815            create TempTrnDocMT.
+      816            import TempTrnDocMT no-error.
+      817          end.
+      818          input close.
+      819       end.
+      820       vFilename = idir + "\MT_lineSend.txt".
+      821       if SearchFile(vFilename) ne ?
+      822       then do:
+      823          input from value(SearchFile(vFilename)) convert source "UTF-8".
+      824          repeat:
+      825            create TempTrnLineMT.
+      826            import TempTrnLineMT no-error.
+      827            if TempTrnLineMT.goodsid = 0 then TempTrnLineMT.NotDict = true .
+      828            else TempTrnLineMT.NotDict = false .
+      829          end.
+      830          input close.
+      831       end.
+      832       vFilename = idir + "\MT_MarkLinesSend.txt".
+      833       if SearchFile(vFilename) ne ?
+      834       then do:
+      835          input from value(SearchFile(vFilename)) convert source "UTF-8".
+      836          repeat:
+      837            create TempMarkLineMT.
+      838            import TempMarkLineMT no-error.
+      839          end.
+      840          input close.
+      841       end.
+      842       for each TempTrnDocMT where TempTrnDocMT.Complete_ = true:
+      843         logWrite:WriteDebugLog("Загружаем документ " + TempTrnDocMT.DocName).
+      844         empty temp-table TempTrnDoc.
+      845         empty temp-table TempDocLine.
+      846         empty temp-table TempMarkLine.
+      847         case TempTrnDocMT.DocType:
+      848           when "ExtSalesWB" then do:
+      849             docType = 'ee':U.
+      850           end.
+      851           when "IntSalesWB" then do:
+      852             docType = 'ev':U.
+      853           end.
+      854           when "ExtPurchWB" then do:
+      855             docType = 'ie':U.
+      856           end.
+      857           when "IntPurchWB" then do:
+      858             docType = 'iv':U.
+      859           end.
+      860           when "Inv" then do:
+      861             docType = 'vt':U.
+      862           end.
+      863           when "Introduce" then do:
+      864             docType = "UTD_Introduce".
+      865           end.
+      866           when "UTD" then do:
+      867             docType = "UTD_DOC".
+      868           end.
+      869           when "InvMarks" then do:
+      870             docType = "invmark".
+      871           end.
+      872           when "MarksInv" then do:
+      873             docType = "MarksInv".
+      874           end.
+      875           when "InvIntroduce" then do:
+      876             docType = "InvIntroduce".
+      877           end.
+      878         end case.
+      879         userId_ = TempTrnDocMT.UserID_.
+      880         find first ub.user-login where ub.user-login.db-num = iDbNum and ub.user-login.user-id = userId_ no-lock no-error.
+      881         create TempTrnDoc.
+      882         assign
+      883           TempTrnDoc.line-num     = 1
+      884           TempTrnDoc.doc-date     = today
+      885           TempTrnDoc.ext-doc-code = TempTrnDocMT.DocName
+      886           TempTrnDoc.ext-doc-type = docType
+      887           TempTrnDoc.cli-type     = TempTrnDocMT.ClientType
+      888           TempTrnDoc.cli-code     = integer(TempTrnDocMT.ClientID)
+      889           TempTrnDoc.obj-type     = TempTrnDocMT.ObjectType
+      890           TempTrnDoc.obj-code     = TempTrnDocMT.ObjectID
+      891           TempTrnDoc.ps           = if available (ub.user-login) then "" else " Пользователь: " + TempTrnDocMT.UserName
+      892           TempTrnDoc.Status_      = TempTrnDocMT.Status_
+      893           TempTrnDoc.Flags_       = TempTrnDocMT.Flags_
+      894           .
+      895         myflagsDoc:setFlagsToInt(TempTrnDocMT.Flags_).
+      896         define variable cFactQntyDec as decimal no-undo .
+      897         define variable cPriceRublDec as decimal no-undo .
+      898         for each TempTrnLineMT where TempTrnLineMT.docname = TempTrnDocMT.DocName:
+      899             cDocQnty   = replace (TempTrnLineMT.DocQnty, ",", ".") .
+      900             cFactQnty  = replace (TempTrnLineMT.FactQnty, ",", ".") .
+      901             cPriceRubl = replace (TempTrnLineMT.Price_, ",", ".") .
+      902             cFactQntyDec = decimal(cFactQnty) no-error.
+      903             if error-status:error then
+      904             assign
+      905             cFactQnty = "0" .
+      906             cPriceRublDec = decimal (cPriceRubl)no-error.
+      907             if error-status:error then
+      908             cPriceRubl = "0" .
+      909             RowSum    =  decimal (cFactQnty) * decimal (cPriceRubl) .
+      910           if myflagsDoc:isDocMarkOn and (docType = 'ie':U or docType = 'iv':U)
+      911           then do:
+      912             find first TempDocLine no-lock
+      913               where TempDocLine.gds-code = integer (TempTrnLineMT.goodsid)
+      914                 and TempDocLine.b-code = (TempTrnLineMT.BC) no-error.
+      915             if not available (TempDocLine)
+      916             then do:
+      917               create TempDocLine.
+      918               assign
+      919                 TempDocLine.line-num     = integer (TempTrnLineMT.pos)
+      920                 TempDocLine.gds-code     = integer (TempTrnLineMT.goodsid)
+      921                 TempDocLine.b-code       = string (TempTrnLineMT.BC)
+      922                 TempDocLine.fact-qnty    = decimal(cFactQnty)
+      923                 TempDocLine.doc-qnty     = decimal(cDocQnty)
+      924                 TempDocLine.price-rubl   = ?
+      925                 TempDocLine.RowSum       = ?
+      926                 TempDocLine.PartIDTH     = TempTrnLineMT.PartIDTH
+      927                 TempDocLine.NotDict      = TempTrnLineMT.goodsid eq 0
+      928                 .
+      929             end.
+      930             else do:
+      931               assign
+      932                 TempDocLine.fact-qnty    = TempDocLine.fact-qnty + decimal(cFactQnty)
+      933                 TempDocLine.PartIDTH     = TempDocLine.PartIDTH + chr(4) + TempTrnLineMT.PartIDTH
+      934               .
+      935             end.
+      936           end.
+      937           else do:
+      938             create TempDocLine.
+      939             assign
+      940               TempDocLine.line-num     = integer (TempTrnLineMT.pos)
+      941               TempDocLine.gds-code     = integer (TempTrnLineMT.goodsid)
+      942               TempDocLine.b-code       = string (TempTrnLineMT.BC)
+      943               TempDocLine.fact-qnty    = decimal(cFactQnty)
+      944               TempDocLine.doc-qnty     = decimal(cDocQnty)
+      945               TempDocLine.price-rubl   = decimal(cPriceRubl)
+      946               TempDocLine.RowSum       = RowSum
+      947               TempDocLine.PartIDTH = string (TempTrnLineMT.PartIDTH)
+      948               TempDocLine.NotDict      = TempTrnLineMT.goodsid eq 0
+      949               .
+      950           end.
+      951         end.
+      952         for each TempMarkLineMT
+      953         where TempMarkLineMT.DocName = TempTrnDoc.ext-doc-code
+      954             :
+      955           create TempMarkLine.
+      956           assign
+      957             TempMarkLine.DocName     =  TempMarkLineMT.DocName
+      958             TempMarkLine.PartIDTH    =  TempMarkLineMT.PartIDTH
+      959             TempMarkLine.MarkCode    =  TempMarkLineMT.MarkCode
+      960             TempMarkLine.Sts         =  TempMarkLineMT.Sts
+      961             TempMarkLine.MarkParent  =  TempMarkLineMT.MarkParent
+      962             .
+      963         end.
+      964         tsd:updatedocument(doctype, table TempTrnDoc, table TempDocLine, table TempMarkLine, userId_).
+      965         logWrite:WriteDebugLog("Загружен документ " + TempTrnDocMT.DocName).
+      966       end.
+      967       return true.
+      968     end.
+      969     method private logical parseXML(hRoot as handle  ):
+      970       define variable lResult    as logical   no-undo init yes.
+      971       define variable cFactQnty  as character no-undo.
+      972       define variable cDocQnty   as character no-undo.
+      973       define variable cPriceRubl as character no-undo.
+      974       define variable cRowSum    as character no-undo.
+      975       define variable iDbNum     as integer   no-undo.
+      976       define variable docType    as character no-undo.
+      977       define variable hRow        as handle    no-undo.
+      978       mSN = ?.
+      979       tsd:SN = ?.
+      980       mVersion = ?.
+      981       mobjtype = ?.
+      982       mobjcode = ?.
+      983       create x-noderef  hRow.
+      984       do i = 1 to hRoot:num-children:
+      985         hRoot:get-child(hRow,i).
+      986         case hRow:name:
+      987           when "header" then
+      988             do:
+      989               iDbNum = tsd:GetDbNum().
+      990               case hRow:get-attribute("DocType"):
+      991                 when "ExtSalesWB" then do:
+      992                   docType = 'ee':U.
+      993                 end.
+      994                 when "IntSalesWB" then do:
+      995                   docType = 'ev':U.
+      996                 end.
+      997                 when "ExtPurchWB" then do:
+      998                   docType = 'ie':U.
+      999                 end.
+     1000                 when "IntPurchWB" then do:
+     1001                   docType = 'iv':U.
+     1002                 end.
+     1003                 when "Inv" then do:
+     1004                   docType = 'vt':U.
+     1005                 end.
+     1006               end case.
+     1007               create TempTrnDoc.
+     1008               assign
+     1009                 TempTrnDoc.line-num     = 1
+     1010                 TempTrnDoc.doc-date     = today
+     1011                 TempTrnDoc.ext-doc-code = hRow:get-attribute("DocName")
+     1012                 TempTrnDoc.ext-doc-type = docType
+     1013                 TempTrnDoc.cli-type     = hRow:get-attribute("ClientType")
+     1014                 TempTrnDoc.cli-code     = integer(hRow:get-attribute("ClientID"))
+     1015                 TempTrnDoc.obj-type     = hRow:get-attribute("ObjectType")
+     1016                 TempTrnDoc.obj-code     = integer (hRow:get-attribute("ObjectID"))
+     1017                 TempTrnDoc.ps           = if available (ub.user-login) then "" else " Пользователь: " + hRow:get-attribute("UserName")
+     1018                 TempTrnDoc.Status_      = hRow:get-attribute("Status")
+     1019                 .
+     1020               find first ub.user-login where ub.user-login.db-num = iDbNum and ub.user-login.user-id = userId_ no-lock no-error.
+     1021               userId_ = hRow:get-attribute("UserID").
+     1022             end.
+     1023           when "line" then
+     1024             do:
+     1025               assign
+     1026                 cDocQnty   = replace (hRow:get-attribute("DocQnty"), ",", ".")
+     1027                 cFactQnty  = replace (hRow:get-attribute("FactQnty"), ",", ".")
+     1028                 cPriceRubl = replace (hRow:get-attribute("Price"), ",", ".")
+     1029                 cRowSum    = replace (hRow:get-attribute("RowSum"), ",", ".")
+     1030                 .
+     1031               if (docType = 'ie':U or docType = 'iv':U)
+     1032               and not TempTrnDoc.Status_ = "НОВ"
+     1033               then do:
+     1034                 find first TempDocLine no-lock where TempDocLine.gds-code = integer (hRow:get-attribute("GoodsID")) and TempDocLine.b-code = (hRow:get-attribute("BC")) no-error.
+     1035                 if not available (TempDocLine)
+     1036                 then do:
+     1037                   create TempDocLine.
+     1038                   assign
+     1039                     TempDocLine.line-num     = integer (hRow:get-attribute("Pos"))
+     1040                     TempDocLine.gds-code     = integer (hRow:get-attribute("GoodsID"))
+     1041                     TempDocLine.b-code       = string (hRow:get-attribute("BC"))
+     1042                     TempDocLine.fact-qnty    = decimal(cFactQnty)
+     1043                     TempDocLine.doc-qnty     = decimal(cDocQnty)
+     1044                     TempDocLine.price-rubl   = ?
+     1045                     TempDocLine.RowSum       = ?
+     1046                     .
+     1047                 end.
+     1048                 else do:
+     1049                   assign
+     1050                     TempDocLine.fact-qnty    = TempDocLine.fact-qnty + decimal(cFactQnty)
+     1051                   .
+     1052                  end.
+     1053               end.
+     1054               else do:
+     1055                 create TempDocLine.
+     1056                 assign
+     1057                   TempDocLine.line-num     = integer (hRow:get-attribute("Pos"))
+     1058                   TempDocLine.gds-code     = integer (hRow:get-attribute("GoodsID"))
+     1059                   TempDocLine.b-code       = string (hRow:get-attribute("BC"))
+     1060                   TempDocLine.fact-qnty    = decimal(cFactQnty)
+     1061                   TempDocLine.doc-qnty     = decimal(cDocQnty)
+     1062                   TempDocLine.price-rubl   = decimal(cPriceRubl)
+     1063                   TempDocLine.RowSum       = decimal(cRowSum)
+     1064                   TempDocLine.PartIDTH = string (hRow:get-attribute("PartIDTH"))
+     1065                   .
+     1066               end.
+     1067             end.
+     1068           when "tiketGood" then
+     1069             do:
+     1070                integer (hRow:get-attribute("GoodsID")) no-error.
+     1071                if error-status:error
+     1072                then do:
+     1073                   TsdMes = tsdMes + "," + substitute ("Код товара '&1' Должен быть числом",hRow:get-attribute("GoodsID")) no-error.
+     1074                   lResult = false.
+     1075                end.
+     1076                else do:
+     1077                   define variable vmes as character no-undo.
+     1078                   vmes = tsd:addPrintBc(integer (hRow:get-attribute("GoodsID")), decimal(hRow:get-attribute("quantity"))).
+     1079                   if vmes ne ? and vmes ne ""
+     1080                   then do:
+     1081                      TsdMes = tsdMes + "," + vmes no-error.
+     1082                      lResult = false.
+     1083                   end.
+     1084                end.
+     1085           end.
+     1086           when "MarkLines" then
+     1087             do:
+     1088               create TempMarkLine.
+     1089               assign
+     1090                 TempMarkLine.DocName     = hRow:get-attribute("DocName")
+     1091                 TempMarkLine.PartIDTH    = hRow:get-attribute("PartIDTH")
+     1092                 TempMarkLine.MarkCode    = hRow:get-attribute("MarkCode")
+     1093                 TempMarkLine.Sts         = hRow:get-attribute("Sts")
+     1094                 .
+     1095             end.
+     1096            when "device" then
+     1097             do:
+     1098               mType    = hRow:get-attribute("type").
+     1099               mVersion = hRow:get-attribute("version").
+     1100             end.
+     1101           when "OBJ" then
+     1102             do:
+     1103               mObjType = hRow:get-attribute("obj_type").
+     1104               mObjCode = hRow:get-attribute("obj_code").
+     1105             end.
+     1106         end case.
+     1107       end.
+     1108       return lResult.
+     1109       finally:
+     1110              delete object  hRow no-error.
+     1111       end.
+     1112     end method.
+     1113     method private logical writeSockError (HndlSocket as handle, textMes as longchar):
+     1114       define variable glog     as logical  no-undo.
+     1115       define variable v-cont-length as integer no-undo.
+     1116       define variable VOK as longchar no-undo.
+     1117       define variable VrespOK as memptr no-undo.
+     1118       VOK = substitute (HTTPError, textMes).
+     1119       copy-lob
+     1120         from object VOK
+     1121         to object VrespOK
+     1122         convert target codepage "UTF-8".
+     1123       .
+     1124       if not hndlSocket:connected()
+     1125       then do:
+     1126          LogWrite:WriteFileToLog("Клиент отключился.").
+     1127          return false.
+     1128       end.
+     1129       logWrite:WriteDebugLog("Отправляем ответ:").
+     1130       logWrite:WriteDebugLog(VOK).
+     1131       glog = hndlsocket:write(VrespOK,1,get-size(VrespOK)).
+     1132       if    not glog
+     1133          or hndlsocket:bytes-written ne get-size(VrespOK)
+     1134       then do:
+     1135          set-size(VrespOK) = 0.
+     1136          logWrite:WriteDebugLog("Произошла ошибка при отправке.").
+     1137          LogWrite:LogStr = LogWrite:LogStr + " " + "Ошибка при отправке сообщения удаленному клиенту.".
+     1138          return false.
+     1139       end.
+     1140       set-size(VrespOK) = 0.
+     1141       logWrite:WriteDebugLog("Ответ отправлен.").
+     1142       return true.
+     1143     end method.
+     1144     method private logical writeSock (resp as class IResponse, arg as longchar):
+     1145       resp:setContent(arg).
+     1146       resp:Content-Type= "text/csv".
+     1147       resp:condition = resp:STSlist:WriteResponse:NameProp.
+     1148     end method.
+     1149           destructor public TSDCommand ( ):
+     1150         delete object tsd no-error.
+     1151         if mEmptyConstr
+     1152         then
+     1153            delete object filesend no-error.
+     1154      end destructor.
+     1155      method private character  crDir():
+     1156         define variable vdir as character no-undo.
+     1157         vdir = crDir(substitute("&1_&2" , "tsd",iso-date (today))).
+     1158         return crDir( substitute("&1\&2_&3_&4" , vdir,myCompUser, string(mypid), string(random(1,9999999)))).
+     1159      end.
+     1160      method private character  crDir(idir as char):
+     1161         define variable vi as integer no-undo.
+     1162            block-cr:
+     1163         do vi = 1 to 10:
+     1164            if objExists( idir,"D") ne ?
+     1165            then
+     1166               next block-cr.
+     1167            os-create-dir VALUE(idir).
+     1168            idir = objExists( idir,"D").
+     1169            if idir ne ?
+     1170            then
+     1171               leave block-cr.
+     1172         end.
+     1173         return idir.
+     1174      end.
+     1175      define stream sReadDir.
+     1176      define variable mDateEmpty as date no-undo.
+     1177      method public logical  DelOldDir  ():
+     1178         if today - 1 > mDateEmpty
+     1179         then
+     1180            DelDontWorkProc  ().
+     1181      end.
+     1182      method public logical  DelDontWorkProc  ():
+     1183         mDateEmpty = today.
+     1184         define variable vPureName as character no-undo.
+     1185         define variable vFileType as character no-undo.
+     1186         define variable vFullPath as character no-undo.
+     1187         define variable vFile     as character no-undo.
+     1188         define variable vPid      as integer no-undo.
+     1189         input STREAM sReadDir FROM os-dir(".").
+     1190         repeat:
+     1191            import stream sReadDir vPureName vFullPath vFileType.
+     1192            if     vFileType =  "d"
+     1193               and vPureName begins  "tsd_"
+     1194               and vPureName < substitute("&1_&2" , "tsd",iso-date (today))
+     1195            then do:
+     1196               os-delete value(vFullPath) recursive.
+     1197            end.
+     1198         end.
+     1199         input STREAM sReadDir close.
+     1200      end.
+     1201   method public character objExists
+     1202   (input  ifolder as character,
+     1203    input  iType   as character  ):
+     1204       define variable vFileType as character no-undo init "D,F".
+     1205       define variable vi        as integer no-undo.
+     1206       define variable vtype as character no-undo.
+     1207       if iType ne ?
+     1208       then
+     1209          vFileType = iType.
+     1210       do vi = 1 to num-entries(vFileType):
+     1211          file-information:file-name = ".\" + right-trim(replace(ifolder,"/","\"),"\").
+     1212          vtype = file-information:file-type.
+     1213          if entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+     1214             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+     1215             index(vtype , entry(vi,vFileType )) > 0
+     1216          then return file-information:full-pathname .
+     1217          file-information:file-name = right-trim(replace(ifolder,"/","\"),"\").
+     1218          vtype = file-information:file-type.
+     1219          if file-information:file-name <> "" and
+     1220             entry(num-entries(file-information:file-name, "\"), file-information:file-name, "\")
+     1221             = entry(num-entries(file-information:full-pathname, "\"), file-information:full-pathname ,"\") and
+     1222             index( vtype, entry(vi,vFileType )) > 0
+     1223          then return file-information:full-pathname .
+     1224       end.
+     1225       return ? .
+     1226   end.
+     1227   method public character SearchFile
+     1228   (input  ifile as character):
+     1229      return objExists(ifile,?).
+     1230   end.
+     1231   method public character SearchPFile
+     1232   (input inFile as char):
+     1233        define variable oFile       as character no-undo.
+     1234        define variable vFileSearch as character no-undo.
+     1235        define variable vNumEntry   as integer no-undo.
+     1236        if inFile = "" then return ?.
+     1237        vNumEntry = num-entries(inFile,".").
+     1238        vFileSearch = inFile.
+     1239        if    vNumEntry > 0
+     1240           and (   entry(vNumEntry,inFile,".") eq "p"
+     1241                or entry(vNumEntry,inFile,".") eq "w")
+     1242        then do:
+     1243           entry(vNumEntry,vFileSearch, ".") = "r".
+     1244           oFile = search(vFileSearch ).
+     1245           if oFile eq ?
+     1246           then
+     1247              oFile = search(inFile).
+     1248        end.
+     1249        else
+     1250           oFile = search(vFileSearch).
+     1251        return oFile.
+     1252     end.
+     1253   end class.

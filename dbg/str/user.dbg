@@ -1,0 +1,3818 @@
+        1   define variable vss-revision    as character no-undo init "$Revision$":U .
+        2   define variable vss-author      as character no-undo init "$Author$":U .
+        3   define variable vss-date        as character no-undo init "$Date$":U .
+        4   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        5   define variable vss-archive     as character no-undo init "$Archive$":U .
+        6   define variable vss-description as character no-undo init "Пользователь системы".
+        7   define new global shared variable g#language as character no-undo .
+        8   if g#language <> '' and g#language <> 'rus':U then do:
+        9     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       10   end.
+       11   define new global shared variable g#library  as handle no-undo .
+       12   define new global shared variable g#library2 as handle no-undo .
+       13   define   shared variable g#auto as logical no-undo.
+       14   define   shared variable g#news as logical no-undo.
+       15   define   shared variable g#oxml as logical no-undo.
+       16   define   shared variable g#esys as logical no-undo.
+       17   define   shared variable g#news-source-db as integer no-undo.
+       18   define   shared variable g#esys-source-esys as integer no-undo.
+       19   define   shared variable g#db-num as integer   no-undo .
+       20   define   shared variable g#userid as character no-undo .
+       21   define   shared variable g#passwd as character no-undo .
+       22   define temp-table UserDbAdm
+       23   field db-num as integer
+       24   field db-adm as logical
+       25   field db-usr as logical
+       26   field db-block as logical
+       27   index pi is unique db-num
+       28   index adm db-adm db-usr
+       29   .
+       30   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       31   procedure cur-time :
+       32      define output parameter p-today as date      no-undo .
+       33      define output parameter p-time  as integer   no-undo .
+       34     do
+       35     on error undo, return error
+       36     :
+       37       define variable v-date1 as date      no-undo .
+       38       define variable v-date2 as date      no-undo .
+       39       define variable v-time  as integer   no-undo .
+       40       assign
+       41         v-date1 = today
+       42         v-time  = time
+       43         v-date2 = today
+       44       .
+       45       if v-date1 <> v-date2
+       46       then do:
+       47         assign
+       48           v-date1 = today
+       49           v-time  = v-time
+       50         .
+       51       end.
+       52       assign
+       53         p-today = v-date1
+       54         p-time  = v-time
+       55       .
+       56     end.
+       57   end.
+       58   function cur-time-date returns character
+       59   :
+       60     return string(today, '99/99/9999':U) .
+       61   end.
+       62   function cur-time-mjd returns decimal
+       63   :
+       64     define variable v-date as date      no-undo .
+       65     define variable v-time as integer   no-undo .
+       66     run cur-time in this-procedure
+       67       (output v-date
+       68       ,output v-time
+       69       ) .
+       70     return integer(v-date) - 2400002 + (v-time / 86400) .
+       71   end.
+       72   function cur-time-get-ending-index returns integer
+       73   (input p-number as integer
+       74   )
+       75   :
+       76     if p-number < 0
+       77     or p-number = ?
+       78     then do:
+       79       return 1 .
+       80     end.
+       81     define variable v-rest as integer   no-undo .
+       82     assign
+       83       p-number = p-number modulo 100
+       84     .
+       85     if p-number < 20
+       86     then do:
+       87       assign
+       88         v-rest = p-number
+       89       .
+       90     end.
+       91     else do:
+       92       assign
+       93         v-rest = p-number modulo 10
+       94       .
+       95     end.
+       96     case v-rest :
+       97       when 1
+       98       then do:
+       99         return 2 .
+      100       end.
+      101       when 2 or
+      102       when 3 or
+      103       when 4
+      104       then do:
+      105         return 3 .
+      106       end.
+      107       otherwise do:
+      108         return 1 .
+      109       end.
+      110     end case .
+      111   end.
+      112   procedure cur-time-mjd-to-date :
+      113      define input  parameter i-mjd-diff as decimal no-undo.
+      114      define output parameter o-Date     as date    no-undo.
+      115      define output parameter o-Time     as integer no-undo.
+      116      define variable v-day-number as integer   no-undo .
+      117      if    i-mjd-diff < 0
+      118         or i-mjd-diff = ?
+      119      then do:
+      120         return "?" .
+      121      end.
+      122      assign
+      123         v-day-number = truncate(i-mjd-diff,0).
+      124         o-Date = date(v-day-number + 2400002).
+      125         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      126     .
+      127   end.
+      128   function cur-time-mjd-to-string returns character
+      129   (input p-mjd-diff as decimal
+      130   )
+      131   :
+      132     define variable v-day-number as integer   no-undo .
+      133     define variable v-seconds    as integer   no-undo .
+      134     define variable v-hour       as integer   no-undo .
+      135     define variable v-min        as integer   no-undo .
+      136     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      137     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      138     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      139     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      140     if p-mjd-diff < 0
+      141     or p-mjd-diff = ?
+      142     then do:
+      143       return "?" .
+      144     end.
+      145     assign
+      146       v-day-number = integer(truncate(p-mjd-diff,0))
+      147       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      148     .
+      149     if v-seconds > 86400
+      150     then do:
+      151       assign
+      152         v-seconds = 86400 - 1
+      153       .
+      154     end.
+      155     if v-seconds < 0
+      156     then do:
+      157       assign
+      158         v-seconds = 0
+      159       .
+      160     end.
+      161     assign
+      162       v-hour = truncate(v-seconds / 3600, 0)
+      163     .
+      164     assign
+      165       v-seconds = v-seconds modulo 3600
+      166     .
+      167     assign
+      168       v-min = truncate(v-seconds / 60, 0)
+      169     .
+      170     assign
+      171       v-seconds = v-seconds modulo 60
+      172     .
+      173     return
+      174         (if v-day-number <> 0
+      175           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      176           else ""
+      177         )
+      178       + (if v-day-number <> 0 or v-hour <> 0
+      179           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      180           else ""
+      181         )
+      182       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      183           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      184           else ""
+      185         )
+      186       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      187       .
+      188   end.
+      189   function cur-time-string returns character
+      190   :
+      191     define variable v-date as date      no-undo .
+      192     define variable v-time as integer   no-undo .
+      193     run cur-time in this-procedure
+      194       (output v-date
+      195       ,output v-time
+      196       ) .
+      197     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      198   end.
+      199   function cur-time-string-sec returns character
+      200   :
+      201     define variable v-date as date      no-undo .
+      202     define variable v-time as integer   no-undo .
+      203     run cur-time in this-procedure
+      204       (output v-date
+      205       ,output v-time
+      206       ) .
+      207     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      208   end.
+      209   function cur-time-custom  returns character
+      210   (input p-prefix as character
+      211   ,input p-date-format as character
+      212   ,input p-delimiter as character
+      213   ,input p-time-format as character
+      214   ,input p-suffix as character
+      215   )
+      216   :
+      217     define variable v-date as date      no-undo .
+      218     define variable v-time as integer   no-undo .
+      219     run cur-time in this-procedure
+      220       (output v-date
+      221       ,output v-time
+      222       ) .
+      223     return
+      224       p-prefix
+      225       + string(v-date, p-date-format)
+      226       + p-delimiter
+      227       + string(v-time, p-time-format)
+      228       + p-suffix
+      229       .
+      230   end.
+      231   function cur-time-print  returns character
+      232   :
+      233     define variable v-date as date      no-undo .
+      234     define variable v-time as integer   no-undo .
+      235     run cur-time in this-procedure
+      236       (output v-date
+      237       ,output v-time
+      238       ) .
+      239     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      240   end.
+      241   function cur-time-datetime returns datetime
+      242   :
+      243     define variable v-char as character no-undo .
+      244     define variable v-datetime as datetime no-undo .
+      245     v-char = cur-time-string().
+      246     v-datetime = datetime(v-char).
+      247     return  v-datetime.
+      248   end.
+      249   function cur-time-string-msec returns character
+      250   :
+      251     define variable v-date as datetime  no-undo .
+      252     v-date = now.
+      253     return string(v-date) .
+      254   end.
+      255   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      256   procedure sys-time_get-sys :
+      257     define output parameter p-year         as integer   no-undo .
+      258     define output parameter p-month        as integer   no-undo .
+      259     define output parameter p-day          as integer   no-undo .
+      260     define output parameter p-hour         as integer   no-undo .
+      261     define output parameter p-minute       as integer   no-undo .
+      262     define output parameter p-second       as integer   no-undo .
+      263     define output parameter p-milliseconds as integer   no-undo .
+      264     define variable v-system-time-structure as memptr    no-undo.
+      265     do
+      266     on error undo, return error return-value
+      267     :
+      268       assign
+      269         set-size(v-system-time-structure) = 16
+      270       .
+      271       run GetSystemTime
+      272         (input  get-pointer-value(v-system-time-structure)
+      273         ) .
+      274       assign
+      275         p-year         = get-short(v-system-time-structure,  1)
+      276         p-month        = get-short(v-system-time-structure,  3)
+      277         p-day          = get-short(v-system-time-structure,  7)
+      278         p-hour         = get-short(v-system-time-structure,  9)
+      279         p-minute       = get-short(v-system-time-structure, 11)
+      280         p-second       = get-short(v-system-time-structure, 13)
+      281         p-milliseconds = get-short(v-system-time-structure, 15)
+      282       .
+      283       assign
+      284         set-size(v-system-time-structure) = 0
+      285       .
+      286     end.
+      287   end procedure.
+      288   procedure sys-time_get-comp-user-name :
+      289     define output parameter p-computer-name as character no-undo .
+      290     define output parameter p-user-name     as character no-undo .
+      291     define output parameter p-process-pid   as integer   no-undo .
+      292     define variable v-return-value  as integer   no-undo .
+      293     define variable v-buffer-length as integer   no-undo .
+      294     define variable v-buffer-memptr as memptr    no-undo .
+      295     do
+      296     on error undo, return error return-value
+      297     :
+      298       assign
+      299         v-buffer-length = 1024
+      300         set-size(v-buffer-memptr) = v-buffer-length + 4
+      301       .
+      302       assign
+      303         put-long(v-buffer-memptr, 1) = v-buffer-length
+      304       .
+      305       run GetComputerNameA
+      306         (input  get-pointer-value(v-buffer-memptr) + 4
+      307         ,input  get-pointer-value(v-buffer-memptr)
+      308         ,output v-return-value
+      309         ) .
+      310       if v-return-value <> 0
+      311       then do:
+      312         assign
+      313           p-computer-name = get-string(v-buffer-memptr, 5)
+      314         .
+      315       end.
+      316       assign
+      317         put-long(v-buffer-memptr, 1) = v-buffer-length
+      318       .
+      319       run GetUserNameA
+      320         (input  get-pointer-value(v-buffer-memptr) + 4
+      321         ,input  get-pointer-value(v-buffer-memptr)
+      322         ,output v-return-value
+      323         ) .
+      324       if v-return-value <> 0
+      325       then do:
+      326         assign
+      327           p-user-name = get-string(v-buffer-memptr, 5)
+      328         .
+      329       end.
+      330       run GetCurrentProcessId
+      331         (output p-process-pid
+      332         ) .
+      333       assign
+      334         set-size(v-buffer-memptr) = 0
+      335       .
+      336     end.
+      337   end procedure.
+      338   procedure sys-time_get-http :
+      339     define output parameter p-http-time as character no-undo .
+      340     define variable v-year         as integer   no-undo .
+      341     define variable v-month        as integer   no-undo .
+      342     define variable v-day-of-week  as integer   no-undo .
+      343     define variable v-day          as integer   no-undo .
+      344     define variable v-hour         as integer   no-undo .
+      345     define variable v-minute       as integer   no-undo .
+      346     define variable v-second       as integer   no-undo .
+      347     define variable v-milliseconds as integer   no-undo .
+      348     do
+      349     on error undo, return error return-value
+      350     :
+      351       run sys-time_get-sys in this-procedure
+      352         (output v-year
+      353         ,output v-month
+      354         ,output v-day
+      355         ,output v-hour
+      356         ,output v-minute
+      357         ,output v-second
+      358         ,output v-milliseconds
+      359         ) .
+      360       assign
+      361         v-day-of-week = weekday(date(v-month, v-day, v-year))
+      362         p-http-time = entry(v-day-of-week, 'Sun,Mon,Tue,Wed,Thu,Fri,Sat')
+      363                     + ', ':u
+      364                     + string(v-day, '99':u)
+      365                     + ' ':u
+      366                     + entry(v-month, 'Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec':u)
+      367                     + ' ':u
+      368                     + string(v-year, '9999':u)
+      369                     + ' ':u
+      370                     + string(v-hour, '99':u)
+      371                     + ':':u
+      372                     + string(v-minute, '99':u)
+      373                     + ':':u
+      374                     + string(v-second, '99':u)
+      375                     + ' ':u
+      376                     + 'GMT':u
+      377       .
+      378     end.
+      379   end procedure.
+      380   procedure sys-time_set-sys :
+      381     define input  parameter p-year         as integer   no-undo .
+      382     define input  parameter p-month        as integer   no-undo .
+      383     define input  parameter p-day          as integer   no-undo .
+      384     define input  parameter p-hour         as integer   no-undo .
+      385     define input  parameter p-minute       as integer   no-undo .
+      386     define input  parameter p-second       as integer   no-undo .
+      387     define input  parameter p-milliseconds as integer   no-undo .
+      388     define variable v-system-time-structure as memptr    no-undo.
+      389     define variable v-return-value as integer   no-undo .
+      390     define variable v-day-of-week  as integer   no-undo .
+      391     do
+      392     on error undo, return error return-value
+      393     :
+      394       assign
+      395         v-day-of-week = weekday(date(p-month, p-day, p-year))
+      396       .
+      397       assign
+      398         set-size(v-system-time-structure) = 16
+      399       .
+      400       assign
+      401         put-short(v-system-time-structure,  1) = p-year
+      402         put-short(v-system-time-structure,  3) = p-month
+      403         put-short(v-system-time-structure,  5) = v-day-of-week
+      404         put-short(v-system-time-structure,  7) = p-day
+      405         put-short(v-system-time-structure,  9) = p-hour
+      406         put-short(v-system-time-structure, 11) = p-minute
+      407         put-short(v-system-time-structure, 13) = p-second
+      408         put-short(v-system-time-structure, 15) = p-milliseconds
+      409       .
+      410       run SetSystemTime
+      411         (input  get-pointer-value(v-system-time-structure)
+      412         ,output v-return-value
+      413         ) .
+      414       assign
+      415         set-size(v-system-time-structure) = 0
+      416       .
+      417       if v-return-value = 0
+      418       then do:
+      419         undo, return error "sys-time_set-sys: Ошибка при установке даты" .
+      420       end.
+      421     end.
+      422   end procedure.
+      423   procedure sys-time_sys-to-mjd :
+      424     define input  parameter p-year         as integer   no-undo .
+      425     define input  parameter p-month        as integer   no-undo .
+      426     define input  parameter p-day          as integer   no-undo .
+      427     define input  parameter p-hour         as integer   no-undo .
+      428     define input  parameter p-minute       as integer   no-undo .
+      429     define input  parameter p-second       as integer   no-undo .
+      430     define input  parameter p-milliseconds as integer   no-undo .
+      431     define output parameter p-mjd          as decimal   no-undo .
+      432     define variable v-year-correction as decimal   no-undo .
+      433     define variable v-shift-year as decimal   no-undo .
+      434     do
+      435     on error undo, return error return-value
+      436     :
+      437       assign
+      438         v-year-correction = truncate((decimal(p-month) - 14.0) / 12, 0)
+      439         v-shift-year      = decimal(p-year) + v-year-correction
+      440         p-mjd = truncate( (1461.0 * (v-shift-year + 4800.0 ) ) / 4, 0)
+      441               + truncate( (367.0 * (decimal(p-month) - 2.0 - v-year-correction * 12) ) / 12, 0)
+      442               - truncate( (3 * truncate((v-shift-year + 4900 ) / 100,0) ) / 4, 0)
+      443               + decimal(p-day) - 2432076.0
+      444               + p-hour / 24.0
+      445               + p-minute / 1440.0
+      446               + p-second / 86400.0
+      447               + p-milliseconds / 86400000.0
+      448       .
+      449     end.
+      450   end procedure.
+      451   procedure sys-time_sys-to-loc :
+      452     define input  parameter p-sys-year         as integer   no-undo .
+      453     define input  parameter p-sys-month        as integer   no-undo .
+      454     define input  parameter p-sys-day          as integer   no-undo .
+      455     define input  parameter p-sys-hour         as integer   no-undo .
+      456     define input  parameter p-sys-minute       as integer   no-undo .
+      457     define input  parameter p-sys-second       as integer   no-undo .
+      458     define input  parameter p-sys-milliseconds as integer   no-undo .
+      459     define output parameter p-loc-year         as integer   no-undo .
+      460     define output parameter p-loc-month        as integer   no-undo .
+      461     define output parameter p-loc-day          as integer   no-undo .
+      462     define output parameter p-loc-hour         as integer   no-undo .
+      463     define output parameter p-loc-minute       as integer   no-undo .
+      464     define output parameter p-loc-second       as integer   no-undo .
+      465     define output parameter p-loc-milliseconds as integer   no-undo .
+      466     define variable v-system-time-structure as memptr    no-undo.
+      467     define variable v-return-value          as integer   no-undo .
+      468     define variable v-sys-day-of-week       as integer   no-undo .
+      469     do
+      470     on error undo, return error return-value
+      471     :
+      472       assign
+      473         v-sys-day-of-week = weekday(date(p-sys-month, p-sys-day, p-sys-year))
+      474       .
+      475       assign
+      476         set-size(v-system-time-structure) = 32
+      477       .
+      478       assign
+      479         put-short(v-system-time-structure,  1) = p-sys-year
+      480         put-short(v-system-time-structure,  3) = p-sys-month
+      481         put-short(v-system-time-structure,  5) = v-sys-day-of-week
+      482         put-short(v-system-time-structure,  7) = p-sys-day
+      483         put-short(v-system-time-structure,  9) = p-sys-hour
+      484         put-short(v-system-time-structure, 11) = p-sys-minute
+      485         put-short(v-system-time-structure, 13) = p-sys-second
+      486         put-short(v-system-time-structure, 15) = p-sys-milliseconds
+      487       .
+      488       run SystemTimeToTzSpecificLocalTime
+      489         (input  0
+      490         ,input  get-pointer-value(v-system-time-structure)
+      491         ,input  get-pointer-value(v-system-time-structure) + 16
+      492         ,output v-return-value
+      493         ) .
+      494       assign
+      495         p-loc-year         = get-short(v-system-time-structure,  1 + 16)
+      496         p-loc-month        = get-short(v-system-time-structure,  3 + 16)
+      497         p-loc-day          = get-short(v-system-time-structure,  7 + 16)
+      498         p-loc-hour         = get-short(v-system-time-structure,  9 + 16)
+      499         p-loc-minute       = get-short(v-system-time-structure, 11 + 16)
+      500         p-loc-second       = get-short(v-system-time-structure, 13 + 16)
+      501         p-loc-milliseconds = get-short(v-system-time-structure, 15 + 16)
+      502       .
+      503       assign
+      504         set-size(v-system-time-structure) = 0
+      505       .
+      506       if v-return-value = 0
+      507       then do:
+      508         undo, return error "sys-time_set-sys: Ошибка при установке даты" .
+      509       end.
+      510     end.
+      511   end procedure.
+      512   procedure sys-time_mjd-to-sys :
+      513     define input  parameter p-mjd          as decimal   no-undo .
+      514     define output parameter p-year         as integer   no-undo .
+      515     define output parameter p-month        as integer   no-undo .
+      516     define output parameter p-day          as integer   no-undo .
+      517     define output parameter p-hour         as integer   no-undo .
+      518     define output parameter p-minute       as integer   no-undo .
+      519     define output parameter p-second       as integer   no-undo .
+      520     define output parameter p-milliseconds as integer   no-undo .
+      521     define variable v-year-correction as decimal   no-undo .
+      522     define variable v-shift-year      as decimal   no-undo .
+      523     define variable v-conv-date     as date      no-undo .
+      524     define variable v-int-part      as integer   no-undo .
+      525     define variable v-fraction-part as decimal   no-undo .
+      526     do
+      527     on error undo, return error return-value
+      528     :
+      529       assign
+      530         v-int-part      = integer(truncate(p-mjd, 0))
+      531         v-fraction-part = p-mjd - v-int-part
+      532         v-conv-date     = date(11, 17, 1858) + v-int-part
+      533         p-year          = year(v-conv-date)
+      534         p-month         = month(v-conv-date)
+      535         p-day           = day(v-conv-date)
+      536         v-fraction-part = v-fraction-part * 24.0
+      537         p-hour          = integer(truncate(v-fraction-part, 0))
+      538         v-fraction-part = (v-fraction-part - p-hour) * 60.0
+      539         p-minute        = integer(truncate(v-fraction-part, 0))
+      540         v-fraction-part = (v-fraction-part - p-minute) * 60.0
+      541         p-second        = integer(truncate(v-fraction-part, 0))
+      542         v-fraction-part = (v-fraction-part - p-second) * 1000.0
+      543         p-milliseconds  = integer(v-fraction-part)
+      544       .
+      545     end.
+      546   end procedure.
+      547   procedure sys-time_mjd-to-loc :
+      548     define input  parameter p-mjd              as decimal   no-undo .
+      549     define output parameter p-loc-year         as integer   no-undo .
+      550     define output parameter p-loc-month        as integer   no-undo .
+      551     define output parameter p-loc-day          as integer   no-undo .
+      552     define output parameter p-loc-hour         as integer   no-undo .
+      553     define output parameter p-loc-minute       as integer   no-undo .
+      554     define output parameter p-loc-second       as integer   no-undo .
+      555     define output parameter p-loc-milliseconds as integer   no-undo .
+      556     define variable v-sys-year         as integer   no-undo .
+      557     define variable v-sys-month        as integer   no-undo .
+      558     define variable v-sys-day          as integer   no-undo .
+      559     define variable v-sys-hour         as integer   no-undo .
+      560     define variable v-sys-minute       as integer   no-undo .
+      561     define variable v-sys-second       as integer   no-undo .
+      562     define variable v-sys-milliseconds as integer   no-undo .
+      563     do
+      564     on error undo, return error return-value
+      565     :
+      566       run sys-time_mjd-to-sys
+      567         (input  p-mjd
+      568         ,output v-sys-year
+      569         ,output v-sys-month
+      570         ,output v-sys-day
+      571         ,output v-sys-hour
+      572         ,output v-sys-minute
+      573         ,output v-sys-second
+      574         ,output v-sys-milliseconds
+      575         ) .
+      576       run sys-time_sys-to-loc
+      577         (input  v-sys-year
+      578         ,input  v-sys-month
+      579         ,input  v-sys-day
+      580         ,input  v-sys-hour
+      581         ,input  v-sys-minute
+      582         ,input  v-sys-second
+      583         ,input  v-sys-milliseconds
+      584         ,output p-loc-year
+      585         ,output p-loc-month
+      586         ,output p-loc-day
+      587         ,output p-loc-hour
+      588         ,output p-loc-minute
+      589         ,output p-loc-second
+      590         ,output p-loc-milliseconds
+      591         ) .
+      592     end.
+      593   end procedure.
+      594   function sys-time_get-mjd-func returns decimal
+      595   :
+      596     define variable v-year         as integer   no-undo .
+      597     define variable v-month        as integer   no-undo .
+      598     define variable v-day          as integer   no-undo .
+      599     define variable v-hour         as integer   no-undo .
+      600     define variable v-minute       as integer   no-undo .
+      601     define variable v-second       as integer   no-undo .
+      602     define variable v-milliseconds as integer   no-undo .
+      603     define variable v-mjd          as decimal   no-undo .
+      604     run sys-time_get-sys in this-procedure
+      605       (output v-year
+      606       ,output v-month
+      607       ,output v-day
+      608       ,output v-hour
+      609       ,output v-minute
+      610       ,output v-second
+      611       ,output v-milliseconds
+      612       ) .
+      613     run sys-time_sys-to-mjd in this-procedure
+      614       (input  v-year
+      615       ,input  v-month
+      616       ,input  v-day
+      617       ,input  v-hour
+      618       ,input  v-minute
+      619       ,input  v-second
+      620       ,input  v-milliseconds
+      621       ,output v-mjd
+      622       ) .
+      623     return v-mjd .
+      624   end function .
+      625   function sys-time_get-sys-str-func returns character
+      626   :
+      627     define variable v-utc-time as character no-undo .
+      628     define variable v-year         as integer   no-undo .
+      629     define variable v-month        as integer   no-undo .
+      630     define variable v-day          as integer   no-undo .
+      631     define variable v-hour         as integer   no-undo .
+      632     define variable v-minute       as integer   no-undo .
+      633     define variable v-second       as integer   no-undo .
+      634     define variable v-milliseconds as integer   no-undo .
+      635     run sys-time_get-sys in this-procedure
+      636       (output v-year
+      637       ,output v-month
+      638       ,output v-day
+      639       ,output v-hour
+      640       ,output v-minute
+      641       ,output v-second
+      642       ,output v-milliseconds
+      643       ) .
+      644     assign
+      645       v-utc-time  = 'UTC ':u
+      646                   + string(v-year,         '9999':u)
+      647                   + '/':u
+      648                   + string(v-month,        '99':u)
+      649                   + '/':u
+      650                   + string(v-day,          '99':u)
+      651                   + ' ':u
+      652                   + string(v-hour,         '99':u)
+      653                   + ':':u
+      654                   + string(v-minute,       '99':u)
+      655                   + ':':u
+      656                   + string(v-second,       '99':u)
+      657                   + ' ':u
+      658                   + string(v-milliseconds, '999':u)
+      659     .
+      660     return v-utc-time.
+      661   end function .
+      662   function sys-time_mjd-to-loc-str-func returns character
+      663     (v-sys-mjd as decimal)
+      664   :
+      665     define variable v-loc-str          as character no-undo .
+      666     define variable v-loc-year         as integer   no-undo .
+      667     define variable v-loc-month        as integer   no-undo .
+      668     define variable v-loc-day          as integer   no-undo .
+      669     define variable v-loc-hour         as integer   no-undo .
+      670     define variable v-loc-minute       as integer   no-undo .
+      671     define variable v-loc-second       as integer   no-undo .
+      672     define variable v-loc-milliseconds as integer   no-undo .
+      673     run sys-time_mjd-to-loc in this-procedure
+      674       (input  v-sys-mjd
+      675       ,output v-loc-year
+      676       ,output v-loc-month
+      677       ,output v-loc-day
+      678       ,output v-loc-hour
+      679       ,output v-loc-minute
+      680       ,output v-loc-second
+      681       ,output v-loc-milliseconds
+      682       ) .
+      683     assign
+      684       v-loc-str = substitute('&1/&2/&3 &4:&5'
+      685                             ,string(v-loc-day,    '99':U)
+      686                             ,string(v-loc-month,  '99':U)
+      687                             ,string(v-loc-year,   '9999':U)
+      688                             ,string(v-loc-hour,   '99':U)
+      689                             ,string(v-loc-minute, '99':U)
+      690                             )
+      691     .
+      692     return v-loc-str .
+      693   end function .
+      694   PROCEDURE GetSystemTime EXTERNAL "kernel32.dll"
+      695   :
+      696     DEFINE INPUT  PARAMETER lpSystemTime AS LONG .
+      697   END PROCEDURE.
+      698   PROCEDURE SetSystemTime EXTERNAL "kernel32.dll"
+      699   :
+      700     DEFINE INPUT  PARAMETER lpSystemTime AS LONG .
+      701     DEFINE RETURN PARAMETER ReturnValue  AS LONG .
+      702   END PROCEDURE.
+      703   PROCEDURE GetTimeZoneInformation EXTERNAL "kernel32.dll"
+      704   :
+      705     DEFINE INPUT  PARAMETER lpTimeZoneInformation AS LONG .
+      706     DEFINE RETURN PARAMETER ReturnValue           AS LONG .
+      707   END PROCEDURE.
+      708   PROCEDURE SystemTimeToTzSpecificLocalTime EXTERNAL "kernel32.dll"
+      709   :
+      710     DEFINE INPUT  PARAMETER lpTimeZone      AS LONG .
+      711     DEFINE INPUT  PARAMETER lpUniversalTime AS LONG .
+      712     DEFINE INPUT  PARAMETER lpLocalTime     AS LONG .
+      713     DEFINE RETURN PARAMETER ReturnValue     AS LONG .
+      714   END PROCEDURE.
+      715   PROCEDURE GetUserNameA EXTERNAL "advapi32.dll"
+      716   :
+      717     DEFINE INPUT  PARAMETER lpBuffer    AS LONG .
+      718     DEFINE INPUT  PARAMETER lpnSize     AS LONG .
+      719     DEFINE RETURN PARAMETER ReturnValue AS LONG .
+      720   END PROCEDURE.
+      721   PROCEDURE GetComputerNameA EXTERNAL "kernel32.dll"
+      722   :
+      723     DEFINE INPUT  PARAMETER lpBuffer    AS LONG .
+      724     DEFINE INPUT  PARAMETER lpnSize     AS LONG .
+      725     DEFINE RETURN PARAMETER ReturnValue AS LONG .
+      726   END PROCEDURE.
+      727   PROCEDURE GetCurrentProcessId EXTERNAL "kernel32.dll"
+      728   :
+      729     DEFINE RETURN PARAMETER RetVal          AS LONG.
+      730   END PROCEDURE.
+      731   function get-user-login returns character
+      732     ( p-user-id as character ) :
+      733     define variable v-user-login as character no-undo .
+      734     run procedure-get-user-login in this-procedure (
+      735         input p-user-id
+      736       , output v-user-login
+      737     ) .
+      738     return v-user-login .
+      739   end function.
+      740   procedure procedure-get-user-login :
+      741   define input  parameter p-user-id    as character no-undo .
+      742   define output parameter p-user-login as character no-undo .
+      743       define buffer buf_user-login for ub.user-login .
+      744   do
+      745   for buf_user-login
+      746   on error undo, return error return-value
+      747   :
+      748       assign
+      749           p-user-login = "":U
+      750       .
+      751       for each buf_user-login no-lock
+      752          where buf_user-login.user-id = p-user-id
+      753       by buf_user-login.db-num
+      754       :
+      755           assign
+      756               p-user-login = substitute( "&1&2&3"
+      757                                   , p-user-login
+      758                                   , ( if p-user-login = "":U then "":U else ",":U )
+      759                                   , buf_user-login.db-num )
+      760           .
+      761       end.
+      762   end.
+      763   end procedure.
+      764   procedure SetAttrUserId:
+      765      define input  parameter iDb-num      as integer   no-undo.
+      766      define input  parameter iUserId      as character no-undo.
+      767      define input  parameter iAttrCode    as character no-undo.
+      768      define input  parameter iAttrValue   as character no-undo.
+      769      define buffer user-login-attr  for ub.user-login-attr .
+      770      find first user-login-attr where user-login-attr.db-num    eq idb-num
+      771                                   and user-login-attr.user-id   eq iuserid
+      772                                   and user-login-attr.attr-code eq iAttrCode
+      773      exclusive-lock no-error.
+      774      if     not available user-login-attr
+      775         and iAttrValue ne ?
+      776      then do:
+      777         create user-login-attr.
+      778         assign
+      779            user-login-attr.db-num     = idb-num
+      780            user-login-attr.user-id    = iuserid
+      781            user-login-attr.attr-code  = iAttrCode
+      782         .
+      783      end.
+      784      if iAttrValue eq ?
+      785      then do:
+      786         if available ub.user-login-attr
+      787         then
+      788            delete ub.user-login-attr.
+      789      end.
+      790      else
+      791         user-login-attr.attr-value = iAttrValue.
+      792   end procedure.
+      793   function GetAttrUserId returns character (
+      794      input iDb-num      as integer  ,
+      795      input iUserId      as character,
+      796      input iAttrCode    as character):
+      797      define buffer user-login-attr  for ub.user-login-attr .
+      798      find first user-login-attr where user-login-attr.db-num    eq idb-num
+      799                                   and user-login-attr.user-id   eq iuserid
+      800                                   and user-login-attr.attr-code eq iAttrCode
+      801      no-lock no-error.
+      802      return if not available ub.user-login-attr then ? else ub.user-login-attr.attr-value.
+      803   end function.
+      804   procedure getAccountSetting :
+      805      define input  parameter i-user-id  as character no-undo.
+      806      define output parameter o-adm-Ubd  as logical no-undo init ?.
+      807      define output parameter v-adm-GBD  as logical no-undo.
+      808      define output parameter o-superAdm as logical no-undo.
+      809      define input-output parameter table for UserDbAdm .
+      810      define variable v-adm-Ubd-int as integer no-undo.
+      811      define buffer user-login for ub.user-login.
+      812      define buffer db         for ub.db.
+      813      define buffer user-account-attr for ub.user-account-attr.
+      814      find first user-login where user-login.db-num  eq 0
+      815                              and user-login.user-id eq i-user-id
+      816      no-lock no-error.
+      817      if available user-login
+      818      then
+      819         v-adm-gbd = user-login.user-administrator.
+      820      else
+      821         v-adm-gbd = ?.
+      822      for each userDbAdm:
+      823         delete userDbAdm.
+      824      end.
+      825      block-db:
+      826      for each db where db.db-num ne 0 no-lock:
+      827         if G#db-num ne 0
+      828            and G#db-num ne db.db-num
+      829         then
+      830            next block-db.
+      831         create UserDbAdm.
+      832         UserDbAdm.db-num = ub.db.db-num.
+      833         find first user-login where user-login.db-num  eq db.db-num
+      834                                 and user-login.user-id eq i-user-id
+      835         no-lock no-error.
+      836         if not available user-login
+      837         then
+      838            v-adm-Ubd-int = 2.
+      839         else if user-login.status_ eq 1
+      840         then do:
+      841            v-adm-Ubd-int = 2.
+      842             UserDbAdm.db-block = yes.
+      843             UserDbAdm.db-usr   = yes.
+      844         end.
+      845         else if user-login.user-administrator
+      846         then do:
+      847            UserDbAdm.db-adm = yes.
+      848            UserDbAdm.db-usr = yes.
+      849            if v-adm-Ubd-int eq 0
+      850            then
+      851               v-adm-Ubd-int = 1.
+      852            else if v-adm-Ubd-int eq 3
+      853            then do:
+      854               v-adm-Ubd-int = 2.
+      855            end.
+      856         end.
+      857         else do:
+      858            if available ub.user-login
+      859            then
+      860               UserDbAdm.db-usr = yes.
+      861            if v-adm-Ubd-int eq 0
+      862            then
+      863               v-adm-Ubd-int = 3.
+      864            else if v-adm-Ubd-int eq 1
+      865            then do:
+      866               v-adm-Ubd-int = 2.
+      867            end.
+      868         end.
+      869      end.
+      870      if  v-adm-Ubd-int eq 1
+      871      then
+      872         o-adm-Ubd = true.
+      873      else if v-adm-Ubd-int eq 3
+      874      then
+      875         o-adm-Ubd = false.
+      876      find first user-account-attr where user-account-attr.user-id  eq i-user-id
+      877                                     and user-account-attr.attr-code  eq "superADm"
+      878      no-lock no-error.
+      879      o-superAdm =  available user-account-attr and logical (user-account-attr.attr-value ) no-error.
+      880   end.
+      881   function check_alphanumeric returns character (
+      882   input ipwd as character ,
+      883   input itype as character ):
+      884      define variable vCharEng as character no-undo
+      885      init "abcdefghijklmnopqrstuvwxyz".
+      886      define variable vCharRus as character no-undo
+      887      init "йцукенгшщзхъфывапролджэячсмитьбюёЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЯЧСМИТЬБЮЁЭ".
+      888      define variable vi as integer no-undo.
+      889      define variable vdigitFl as logical no-undo.
+      890      define variable vCharEngFl as logical no-undo.
+      891      define variable vCharRusFl as logical no-undo.
+      892      define variable vCharSpeFl as logical no-undo.
+      893      define variable vTextNew as character no-undo.
+      894      define variable vTextOld as character no-undo.
+      895      vTextNew = ipwd.
+      896      vTextOld = vTextNew.
+      897      do vi = 0 to 9:
+      898         vTextNew = replace(vTextNew,string (vi),"").
+      899      end.
+      900      if length(vTextOld) ne length(vTextNew)
+      901      then
+      902         vdigitFL = yes.
+      903      vTextOld = vTextNew.
+      904      do vi = 1 to length(vCharEng):
+      905         vTextNew = replace(vtextNew,substring(vCharEng,vi,1),"").
+      906      end.
+      907      if length(vTextOld) ne length(vTextNew)
+      908      then
+      909         vCharEngFl = yes.
+      910      vTextOld = vTextNew.
+      911      do vi = 1 to length(vCharRus):
+      912         vTextNew = replace(vtextNew,substring(vCharRus,vi,1),"").
+      913      end.
+      914      if length(vTextOld) ne length(vTextNew)
+      915      then
+      916         vCharEngFl = yes.
+      917      if length(vTextNew) > 0
+      918      then
+      919         vCharSpeFl = yes.
+      920      define variable vReturn as character no-undo.
+      921      assign
+      922         vReturn = vReturn + ", " + "не содержит цифр"           when lookup ("digit",   itype) > 0 and not vdigitFl
+      923         vReturn = vReturn + ", " + "не содержит латинских букв" when lookup ("CharEng", itype) > 0 and not vCharEngFl
+      924         vReturn = vReturn + ", " + "не содержит русских букв"   when lookup ("CharRus", itype) > 0 and not vCharRusFl
+      925         vReturn = vReturn + ", " + "не содержит спец символов"  when lookup ("CharSpe", itype) > 0 and not vCharSpeFl
+      926         vReturn = vReturn + ", " + "не содержит символов"       when lookup ("Char",    itype) > 0 and not (vCharEngFl or vCharRusFl or vCharSpeFl)
+      927      .
+      928      vReturn = substring (vReturn,3) no-error.
+      929      return vReturn.
+      930   end.
+      931   procedure SaveLastPWD:
+      932      define input  parameter iDb-num as integer   no-undo.
+      933      define input  parameter iUserId as character no-undo.
+      934      define input  parameter IPWD    as character no-undo.
+      935      define buffer user-login-attr  for ub.user-login-attr .
+      936      find first user-login-attr where user-login-attr.db-num    eq idb-num
+      937                                   and user-login-attr.user-id   eq iuserid
+      938                                   and user-login-attr.attr-code eq "LastPWD"
+      939      exclusive-lock no-error.
+      940      if not available user-login-attr
+      941      then do:
+      942         create user-login-attr.
+      943         assign
+      944            user-login-attr.db-num     = idb-num
+      945            user-login-attr.user-id    = iuserid
+      946            user-login-attr.attr-code  = "LastPWD"
+      947            user-login-attr.attr-value = ipwd
+      948         .
+      949      end.
+      950      else do:
+      951         user-login-attr.attr-value = user-login.user-password-encoded + chr(5) + user-login-attr.attr-value .
+      952         if num-entries (user-login-attr.attr-value , chr(5)) > 50
+      953         then
+      954            user-login-attr.attr-value = substring (user-login-attr.attr-value,1,r-index(user-login-attr.attr-value, chr(5)) - 1).
+      955      end.
+      956   end procedure.
+      957   function  CheckLastPWD returns character  (
+      958      input  iDb-num    as integer  ,
+      959      input  iUserId    as character,
+      960      input  IPWD       as character,
+      961      input  Iadm       as logical ) :
+      962      define buffer user-login       for ub.user-login .
+      963      define buffer user-login-attr  for ub.user-login-attr .
+      964      define variable vError as character  no-undo.
+      965      define variable v-obyznumbukv as logical no-undo .
+      966      define variable v-minparol as integer no-undo .
+      967      define variable v-tth as handle no-undo .
+      968      define variable VadmSuff as character no-undo.
+      969      define variable v-param-type as character no-undo .
+      970      define variable v-value-character as character no-undo .
+      971      define variable v-value-date as date no-undo .
+      972      define variable v-value-decimal as decimal no-undo .
+      973      define variable v-value-integer as integer no-undo .
+      974      define variable v-value-logical as logical no-undo .
+      975      find first user-login where user-login.db-num    eq idb-num
+      976                              and user-login.user-id   eq iUserId
+      977      no-lock no-error.
+      978      if Iadm
+      979      then
+      980         VadmSuff = 'Adm':U.
+      981      run adm/shattri.p (
+      982           input "get":U
+      983           ,input  '':U
+      984           ,input  0
+      985           ,input  'staff':U
+      986           ,input  'minparol':U + VadmSuff
+      987           ,output v-value-character
+      988           ,output v-value-date
+      989           ,output v-value-decimal
+      990           ,output v-minparol
+      991           ,output v-value-logical
+      992           ,output v-param-type
+      993           ,input-output table-handle v-tth
+      994           )  .
+      995       if v-minparol <> 0  then do:
+      996          if length(ipwd) < v-minparol
+      997           then do:
+      998              vError = substitute ("Длина поля должна быть не менее &1" , v-minparol).
+      999           end.
+     1000       end.
+     1001       run adm/shattri.p (
+     1002           input "get":U
+     1003           ,input  '':U
+     1004           ,input  0
+     1005           ,input  'staff':U
+     1006           ,input  'obyznumbukv':U + VadmSuff
+     1007           ,output v-value-character
+     1008           ,output v-value-date
+     1009           ,output v-value-decimal
+     1010           ,output v-value-integer
+     1011           ,output v-obyznumbukv
+     1012           ,output v-param-type
+     1013           ,input-output table-handle v-tth
+     1014           )  .
+     1015      if v-obyznumbukv = true
+     1016      then do:
+     1017         if check_alphanumeric(ipwd,"Digit,Char") ne ""
+     1018         then do:
+     1019            vError = vError + (if vError eq "" then "" else ", " )
+     1020                   + "В пароле должны содержаться буквы и цифры".
+     1021         end.
+     1022      end.
+     1023      define variable v-encode-value as character no-undo.
+     1024      define variable v-Lastpaswd    as integer no-undo.
+     1025      run adm/pswd-enc.p
+     1026         (input  encode(ipwd)
+     1027         ,output v-encode-value
+     1028         ).
+     1029      v-encode-value = encode(v-encode-value).
+     1030      run adm/shattri.p (
+     1031           input "get":U
+     1032           ,input  '':U
+     1033           ,input  0
+     1034           ,input  'staff':U
+     1035           ,input  'LastPaswd':U + VadmSuff
+     1036           ,output v-value-character
+     1037           ,output v-value-date
+     1038           ,output v-value-decimal
+     1039           ,output v-Lastpaswd
+     1040           ,output v-value-logical
+     1041           ,output v-param-type
+     1042           ,input-output table-handle v-tth
+     1043           )  .
+     1044      if v-Lastpaswd ne 0
+     1045      then do:
+     1046         define variable vLastPwd as character no-undo.
+     1047         vLastPwd = GetAttrUserId(iDb-num, iUserId, "LastPWD").
+     1048         if vLastPwd ne ?
+     1049         then do:
+     1050            define variable Vi as integer no-undo.
+     1051            vi = lookup (v-encode-value,vLastPwd,chr(5)).
+     1052            if     vi ne 0
+     1053               and vi le v-Lastpaswd
+     1054            then
+     1055               vError = vError + (if vError eq "" then "" else ", " )
+     1056                      + substitute ("пароль не должен совпадать с последими &1 паролями",v-Lastpaswd).
+     1057         end.
+     1058      end.
+     1059      delete object v-tth.
+     1060      return vError.
+     1061   end function.
+     1062   procedure availOneAdm:
+     1063      define input-output parameter table for UserDbAdm.
+     1064      define output parameter oAdm as logical no-undo.
+     1065      find first UserDbAdm where UserDbAdm.db-adm no-lock no-error.
+     1066      oadm = available UserDbAdm.
+     1067   end.
+     1068   procedure update-user-login:
+     1069      define input  parameter i-db-num     as integer          no-undo.
+     1070      define input  parameter i-user-id    as character        no-undo.
+     1071      define input  parameter i-user-login as character no-undo.
+     1072      define input  parameter i-max-discnt as decimal no-undo.
+     1073      define input  parameter i-quest-print as logical no-undo.
+     1074      define input  parameter i-encoded-pass as character no-undo.
+     1075      define input  parameter i-nextcon as logical no-undo.
+     1076      define input  parameter i-user-administrator as logical no-undo.
+     1077      define input  parameter i-Manual     as logical no-undo.
+     1078      define input  parameter i-adm-gbd as logical no-undo.
+     1079      define input  parameter i-adm-ubd as logical no-undo.
+     1080      define input-output parameter table for UserDbAdm.
+     1081      define buffer buf_user-login        for user-login.
+     1082      do
+     1083   for buf_user-login
+     1084   on error undo, return error
+     1085   :
+     1086           if     i-Manual
+     1087              and G#db-num eq 0
+     1088           then do:
+     1089              if     i-adm-gbd ne ?
+     1090              then do:
+     1091                 do transaction
+     1092                 on error undo, return error return-value
+     1093                 :
+     1094                     find first buf_user-login where buf_user-login.db-num             eq 0
+     1095                                                 and buf_user-login.user-login         eq i-user-login
+     1096                                                 and buf_user-login.status_            eq 0
+     1097                                                 and buf_user-login.user-id            ne i-user-id
+     1098                     no-lock no-error.
+     1099                     if available buf_user-login
+     1100                     then
+     1101                        undo, return error "Уже есть такой логин в ГБД".
+     1102                     find first buf_user-login where buf_user-login.db-num             = 0
+     1103                                                 and buf_user-login.user-id            = i-user-id
+     1104                     exclusive-lock no-error.
+     1105                     if not available buf_user-login
+     1106                     then do:
+     1107                        create buf_user-login .
+     1108                        assign
+     1109                            buf_user-login.db-num             = 0
+     1110                            buf_user-login.user-id            = i-user-id
+     1111                            buf_user-login.status_            = 0
+     1112                        .
+     1113                     end.
+     1114                     assign
+     1115                         buf_user-login.user-login         = i-user-login
+     1116                         buf_user-login.user-administrator = i-adm-gbd
+     1117                         buf_user-login.max-discnt         = i-max-discnt
+     1118                         buf_user-login.quest-print        = i-quest-print
+     1119                         buf_user-login.user-password-encoded = i-encoded-pass
+     1120                     .
+     1121                     if i-nextcon ne ?
+     1122                     then do:
+     1123                        run SetAttrUserId(buf_user-login.db-num, buf_user-login.user-id, "ChangPwdNextConect", string(i-nextcon )).
+     1124                     end.
+     1125                     run addobj(buf_user-login.db-num,buf_user-login.user-id) no-error.
+     1126                     if error-status:error
+     1127                     then
+     1128                        return error return-value.
+     1129                 end.
+     1130              end.
+     1131              else do transaction on error undo, return error return-value:
+     1132                  find first buf_user-login where buf_user-login.db-num             = 0
+     1133                                              and buf_user-login.user-id            = i-user-id
+     1134                  exclusive-lock no-error.
+     1135                  if available buf_user-login
+     1136                  then
+     1137                     delete buf_user-login.
+     1138              end.
+     1139              if     i-adm-ubd ne ?
+     1140              then do:
+     1141                 do transaction
+     1142                 on error undo, return error return-value
+     1143                 :
+     1144                     define variable vDbError as character no-undo.
+     1145                     block-db:
+     1146                     for each db where db.db-num ne 0
+     1147                     no-lock:
+     1148                        find first buf_user-login where buf_user-login.db-num             eq db.db-num
+     1149                                                    and buf_user-login.user-login         eq i-user-login
+     1150                                                    and buf_user-login.status_            eq 0
+     1151                                                    and buf_user-login.user-id            ne i-user-id
+     1152                        no-lock no-error.
+     1153                        if available buf_user-login
+     1154                        then do:
+     1155                           vDbError = vDbError + "," + String(db.db-num) no-error.
+     1156                           next block-db.
+     1157                        end.
+     1158                        find first buf_user-login where buf_user-login.db-num             = db.db-num
+     1159                                                    and buf_user-login.user-id            = i-user-id
+     1160                        exclusive-lock no-error.
+     1161                        if not available buf_user-login
+     1162                        then do:
+     1163                           create buf_user-login .
+     1164                           assign
+     1165                               buf_user-login.db-num             = db.db-num
+     1166                               buf_user-login.user-id            = i-user-id
+     1167                               buf_user-login.status_            = 0
+     1168                               buf_user-login.user-password-encoded = i-encoded-pass
+     1169                           .
+     1170                        end.
+     1171                        assign
+     1172                            buf_user-login.status_            = 0 when i-db-num ne G#db-num
+     1173                            buf_user-login.user-login         = i-user-login
+     1174                            buf_user-login.user-administrator = i-adm-ubd
+     1175                            buf_user-login.max-discnt         = i-max-discnt
+     1176                            buf_user-login.quest-print        = i-quest-print
+     1177                        .
+     1178                        if i-nextcon ne ?
+     1179                        then do:
+     1180                           run SetAttrUserId(buf_user-login.db-num, buf_user-login.user-id, "ChangPwdNextConect", string(i-nextcon )).
+     1181                        end.
+     1182                        run addobj(buf_user-login.db-num,buf_user-login.user-id)no-error.
+     1183                        if error-status:error
+     1184                        then
+     1185                           return error return-value.
+     1186                    end.
+     1187                    if vDbError ne ""
+     1188                    then
+     1189                       undo, return error substitute ("Уже есть такой логин в УБД &1",substring (vDbError,2,4000)).
+     1190                 end.
+     1191              end.
+     1192              else do:
+     1193                 do transaction
+     1194                 on error undo, return error return-value
+     1195                 :
+     1196                     block-UserDb:
+     1197                     for each UserDbAdm where UserDbAdm.db-num ne 0
+     1198                     no-lock:
+     1199                        find first buf_user-login where buf_user-login.db-num             eq UserDbAdm.db-num
+     1200                                                    and buf_user-login.user-login         eq i-user-login
+     1201                                                    and buf_user-login.status_            eq 0
+     1202                                                    and buf_user-login.user-id            ne i-user-id
+     1203                        no-lock no-error.
+     1204                        if available buf_user-login and UserDbAdm.db-usr
+     1205                        then do:
+     1206                           vDbError = vDbError + "," + String(db.db-num) no-error.
+     1207                           next block-UserDb.
+     1208                        end.
+     1209                        find first buf_user-login where buf_user-login.db-num             = UserDbAdm.db-num
+     1210                                                    and buf_user-login.user-id            = i-user-id
+     1211                        exclusive-lock no-error.
+     1212                        if UserDbAdm.db-usr
+     1213                        then do:
+     1214                           if not available buf_user-login
+     1215                           then do:
+     1216                              create buf_user-login .
+     1217                              assign
+     1218                                  buf_user-login.db-num             = UserDbAdm.db-num
+     1219                                  buf_user-login.user-id            = i-user-id
+     1220                                  buf_user-login.status_            = if UserDbAdm.db-block then 1 else 0
+     1221                                  buf_user-login.user-password-encoded = i-encoded-pass
+     1222                              .
+     1223                           end.
+     1224                           assign
+     1225                               buf_user-login.status_            = if UserDbAdm.db-block then 1 else 0 when i-db-num ne G#db-num or G#db-num = 0
+     1226                               buf_user-login.user-login         = i-user-login
+     1227                               buf_user-login.user-administrator = UserDbAdm.db-adm
+     1228                               buf_user-login.max-discnt         = i-max-discnt
+     1229                               buf_user-login.quest-print        = i-quest-print
+     1230                           .
+     1231                           if i-nextcon ne ?
+     1232                           then do:
+     1233                              run SetAttrUserId(buf_user-login.db-num, buf_user-login.user-id, "ChangPwdNextConect", string(i-nextcon )).
+     1234                           end.
+     1235                           if UserDbAdm.db-adm
+     1236                           then do:
+     1237                              run addobj(buf_user-login.db-num,buf_user-login.user-id)no-error.
+     1238                              if error-status:error
+     1239                              then
+     1240                                 undo, return error return-value.
+     1241                           end.
+     1242                       end.
+     1243                       else do:
+     1244                          if available buf_user-login
+     1245                          then do:
+     1246                             define variable vok as logical no-undo.
+     1247                             run procedure-user-login-delete-question (UserDbAdm.db-num,i-user-id, no, output vok).
+     1248                             if not vok
+     1249                             then
+     1250                                undo, return error return-value.
+     1251                          end.
+     1252                       end.
+     1253                    end.
+     1254                     if vDbError ne ""
+     1255                     then
+     1256                       undo, return error substitute ("Уже есть такой логин в УБД &1",substring (vDbError,2,4000)).
+     1257                 end.
+     1258              end.
+     1259           end.
+     1260           else do transaction
+     1261           on error undo, return error return-value
+     1262           :
+     1263              find first buf_user-login where buf_user-login.db-num             = i-db-num
+     1264                                          and buf_user-login.user-id            = i-user-id
+     1265              exclusive-lock no-error.
+     1266              if not available buf_user-login
+     1267              then do:
+     1268                 create buf_user-login .
+     1269                 assign
+     1270                    buf_user-login.db-num             = i-db-num
+     1271                    buf_user-login.user-id            = i-user-id
+     1272                    buf_user-login.status_            = 0
+     1273                 .
+     1274              end.
+     1275              assign
+     1276                   buf_user-login.user-login         = i-user-login
+     1277                   buf_user-login.user-administrator = i-user-administrator
+     1278                   buf_user-login.max-discnt         = i-max-discnt
+     1279                   buf_user-login.quest-print        = i-quest-print
+     1280                   buf_user-login.user-password-encoded = i-encoded-pass
+     1281               .
+     1282               if i-user-administrator
+     1283               then
+     1284                  run addobj(buf_user-login.db-num,buf_user-login.user-id).
+     1285               if i-nextcon ne ?
+     1286               then do:
+     1287                  run SetAttrUserId(buf_user-login.db-num, buf_user-login.user-id, "ChangPwdNextConect", string(i-nextcon )).
+     1288               end.
+     1289           end.
+     1290       end.
+     1291   end procedure.
+     1292   procedure addobj:
+     1293      define input  parameter i-db-num as integer no-undo.
+     1294      define input  parameter i-user-id as character no-undo.
+     1295      define buffer buf_user-obj     for ub.user-obj.
+     1296      define buffer buf_clients      for ub.clients.
+     1297      if i-db-num <> 0 then do:
+     1298          for each buf_clients
+     1299              where buf_clients.db-num = i-db-num
+     1300              and ( buf_clients.obj-type = 'маг':U
+     1301                 or buf_clients.obj-type = 'скл':U
+     1302                  )
+     1303              no-lock:
+     1304             if can-find (buf_user-obj where buf_user-obj.obj-type = buf_clients.obj-type
+     1305                                     and buf_user-obj.obj-code     = buf_clients.obj-code
+     1306                                     and buf_user-obj.user-id      = i-user-id
+     1307                                     and buf_user-obj.db-num       = i-db-num
+     1308                                   no-lock)
+     1309                                   then next.
+     1310             run enbl-obj (i-db-num, i-user-id, buf_clients.obj-type, buf_clients.obj-code).
+     1311          end.
+     1312       end.
+     1313       else do:
+     1314          for each buf_clients
+     1315              where
+     1316                  ( buf_clients.obj-type = 'маг':U
+     1317                 or buf_clients.obj-type = 'скл':U
+     1318                  )
+     1319              no-lock:
+     1320             if can-find (buf_user-obj where buf_user-obj.obj-type = buf_clients.obj-type
+     1321                                     and buf_user-obj.obj-code     = buf_clients.obj-code
+     1322                                     and buf_user-obj.user-id      = i-user-id
+     1323                                     and buf_user-obj.db-num       = i-db-num
+     1324                                   no-lock)
+     1325                                   then next.
+     1326             run enbl-obj (i-db-num, i-user-id, buf_clients.obj-type, buf_clients.obj-code).
+     1327          end.
+     1328       end.
+     1329   end.
+     1330   procedure enbl-obj :
+     1331      define input  parameter i-db-num  as integer   no-undo.
+     1332      define input  parameter i-user-id as character no-undo.
+     1333      define input  parameter i-type    as character no-undo.
+     1334      define input  parameter i-code    as integer   no-undo.
+     1335       define variable v-host-code    as integer      no-undo.
+     1336       define variable v-host-name    as character    no-undo.
+     1337       define variable v-base-code    as integer      no-undo.
+     1338       define buffer buf_user-obj      for ub.user-obj.
+     1339       define buffer buf_user-host     for ub.user-host.
+     1340       define buffer buf_clients       for ub.clients.
+     1341   do
+     1342   for buf_user-obj
+     1343     , buf_user-host
+     1344     , buf_clients
+     1345   on error undo, return error
+     1346   :
+     1347       find first buf_user-obj exclusive-lock
+     1348            where buf_user-obj.db-num    = i-db-num
+     1349              and buf_user-obj.user-id   = i-user-id
+     1350              and buf_user-obj.obj-type  = i-type
+     1351              and buf_user-obj.obj-code  = i-code
+     1352       no-error.
+     1353       if not available buf_user-obj
+     1354       then do:
+     1355           find first buf_clients no-lock
+     1356                where buf_clients.obj-type = i-type
+     1357                  and buf_clients.obj-code = i-code
+     1358           .
+     1359   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1360   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostname in g#library
+     1361     (input  i-type
+     1362     ,input  i-code
+     1363     ,output v-host-code
+     1364     ,output v-host-name
+     1365     )  .
+     1366   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1367   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run basecode in g#library
+     1368     (input  v-host-code
+     1369     ,output v-base-code
+     1370     )  .
+     1371           create buf_user-obj.
+     1372           assign
+     1373               buf_user-obj.db-num    = i-db-num
+     1374               buf_user-obj.user-id   = i-user-id
+     1375               buf_user-obj.obj-type  = i-type
+     1376               buf_user-obj.obj-code  = i-code
+     1377               buf_user-obj.host-code = v-host-code
+     1378           .
+     1379           find first buf_user-host exclusive-lock
+     1380                where buf_user-host.db-num    = i-db-num
+     1381                  and buf_user-host.user-id   = i-user-id
+     1382                  and buf_user-host.host-code = v-host-code
+     1383           no-error.
+     1384           if not available buf_user-host
+     1385           then do:
+     1386               create buf_user-host.
+     1387               assign
+     1388                   buf_user-host.db-num    = i-db-num
+     1389                   buf_user-host.user-id   = i-user-id
+     1390                   buf_user-host.host-code = v-host-code
+     1391               .
+     1392           end.
+     1393      end.
+     1394   end.
+     1395   end procedure.
+     1396   procedure procedure-user-login-change-password :
+     1397      define input  parameter p-db-num         as integer          no-undo.
+     1398      define input  parameter p-user-id        as character        no-undo.
+     1399      define input  parameter iChange          as logical          no-undo.
+     1400      define variable v-can-edit         as logical   no-undo .
+     1401      define variable v-encoded-pass     as character no-undo .
+     1402      define variable v-encoded-pass-old as character no-undo .
+     1403      define variable v-nextcon          as logical   no-undo .
+     1404      define variable VadmSuff           as character no-undo.
+     1405      define variable vChange as logical no-undo.
+     1406      define variable v-param-type as character no-undo .
+     1407      define variable v-value-character as character no-undo .
+     1408      define variable v-value-date as date no-undo .
+     1409      define variable v-value-decimal as decimal no-undo .
+     1410      define variable v-value-integer as integer no-undo .
+     1411      define variable v-value-logical as logical no-undo .
+     1412      define variable v-tth           as handle  no-undo .
+     1413      define buffer buf_lock_user-login for user-login.
+     1414      define buffer buf_init_user-account for user-account.
+     1415      do:
+     1416         find first buf_lock_user-login no-lock
+     1417                 where buf_lock_user-login.db-num  = p-db-num
+     1418                   and buf_lock_user-login.user-id = p-user-id
+     1419         no-error.
+     1420         if not available buf_lock_user-login then do:
+     1421            message
+     1422               "Нельзя редактировать пароль пока не заведен логин для пользователя" skip
+     1423               view-as alert-box error .
+     1424               undo, return error "Нельзя редактировать пароль пока не заведен логин для пользователя" .
+     1425         end.
+     1426         vChange = buf_lock_user-login.user-login eq userid ("ub") or iChange.
+     1427         if     available buf_lock_user-login
+     1428            and buf_lock_user-login.user-administrator
+     1429         then
+     1430            VadmSuff = 'Adm':U.
+     1431         define variable v-TimeAvail as integer no-undo.
+     1432         define variable v-DateChg   as date    no-undo.
+     1433         define variable v-Time      as integer no-undo.
+     1434         run cur-time-mjd-to-date (buf_lock_user-login.user-password-set-mjd, output v-DateChg, output v-Time).
+     1435         run adm/shattri.p (
+     1436              input "get":U
+     1437              ,input  '':U
+     1438              ,input  0
+     1439              ,input  'staff':U
+     1440              ,input  'TimeBlock':U + VadmSuff
+     1441              ,output v-value-character
+     1442              ,output v-value-date
+     1443              ,output v-value-decimal
+     1444              ,output v-TimeAvail
+     1445              ,output v-value-logical
+     1446              ,output v-param-type
+     1447              ,input-output table-handle v-tth
+     1448              )  .
+     1449         if     not iChange
+     1450            and v-TimeAvail ne 0
+     1451            and v-DateChg + v-TimeAvail < today
+     1452         then do:
+     1453            do trans:
+     1454               find current buf_lock_user-login exclusive-lock.
+     1455               buf_lock_user-login.status_ = 1.
+     1456            end.
+     1457            return error "Ваша учетная запись заблокирована." .
+     1458         end.
+     1459         run adm/shattri.p (
+     1460              input "get":U
+     1461              ,input  '':U
+     1462              ,input  0
+     1463              ,input  'staff':U
+     1464              ,input  'TimeAvail':U + VadmSuff
+     1465              ,output v-value-character
+     1466              ,output v-value-date
+     1467              ,output v-value-decimal
+     1468              ,output v-TimeAvail
+     1469              ,output v-value-logical
+     1470              ,output v-param-type
+     1471              ,input-output table-handle v-tth
+     1472              )  .
+     1473         delete object v-tth.
+     1474         define variable vfl as logical no-undo.
+     1475         vfl = logical(GetAttrUserId(buf_lock_user-login.db-num, buf_lock_user-login.user-id, "ChangPwdNextConect")) no-error.
+     1476         if    vfl eq yes
+     1477            or (     v-TimeAvail ne 0
+     1478                 and v-DateChg + v-TimeAvail < today)
+     1479            or iChange
+     1480         then do:
+     1481             find first buf_init_user-account where buf_init_user-account.user-id = buf_lock_user-login.user-id
+     1482             no-lock.
+     1483             assign
+     1484             v-encoded-pass-old = buf_lock_user-login.user-password-encoded
+     1485             v-encoded-pass     = buf_lock_user-login.user-password-encoded.
+     1486             do while v-encoded-pass = v-encoded-pass-old or v-encoded-pass eq ?:
+     1487                v-encoded-pass = v-encoded-pass-old.
+     1488                run adm/chg-pswd.w ( input  this-procedure
+     1489                                   , input  p-db-num
+     1490                                   , input  buf_lock_user-login.user-id
+     1491                                   , input  buf_lock_user-login.user-login
+     1492                                   , input  substitute('&1 &2 &3':U, buf_init_user-account.last-name
+     1493                                                                   , buf_init_user-account.first-name
+     1494                                                                   , buf_init_user-account.second-name
+     1495                                          )
+     1496                                   , input  iChange
+     1497                                   , input  yes
+     1498                                   , input  buf_lock_user-login.user-password-encoded
+     1499                                   , input  yes
+     1500                                   , input  buf_lock_user-login.user-administrator
+     1501                                   , output v-encoded-pass
+     1502                                   , output v-nextcon
+     1503                                   ) no-error .
+     1504               if error-status :error
+     1505               then do:
+     1506                 message
+     1507                    vss-workfile vss-revision vss-description skip
+     1508                    "Ошибка при вызове процедуры" 'adm/chg-pswd.w':U skip
+     1509                    error-status :get-message(1) skip
+     1510                    return-value skip
+     1511                    view-as alert-box error .
+     1512                 undo, return error return-value .
+     1513                end.
+     1514                if    v-encoded-pass = v-encoded-pass-old
+     1515                then do:
+     1516                    message
+     1517                       vss-workfile vss-revision vss-description skip
+     1518                       "Старый пароль и новый равны. Смените пароль.":U skip
+     1519                       error-status :get-message(1) skip
+     1520                       return-value skip
+     1521                       view-as alert-box error .
+     1522                end.
+     1523                else if v-encoded-pass eq ?
+     1524                then do:
+     1525                   message  "Отказ от смены пароля. Работа дальше не возможна"
+     1526                   view-as alert-box error.
+     1527                   return error "Отказ от смены пароля. Работа дальше не возможна".
+     1528                end.
+     1529             end.
+     1530             if v-encoded-pass <> ? then
+     1531             do trans:
+     1532                find current buf_lock_user-login
+     1533                      exclusive-lock
+     1534                   .
+     1535                assign
+     1536                   buf_lock_user-login.user-password-encoded = v-encoded-pass
+     1537                .
+     1538                run SetAttrUserId(buf_lock_user-login.db-num, buf_lock_user-login.user-id, "ChangPwdNextConect", if vChange then v-nextcon else ?).
+     1539                run SetAttrUserId(buf_lock_user-login.db-num, buf_lock_user-login.user-id, "ChangPwdUserId", string(g#userid)).
+     1540                release buf_lock_user-login .
+     1541                message
+     1542                   "Пароль успешно изменен"
+     1543                   view-as alert-box information
+     1544                .
+     1545             end.
+     1546          end.
+     1547      end.
+     1548   end procedure.
+     1549   procedure procedure-user-login-delete :
+     1550      define input  parameter i-db-num     as integer          no-undo.
+     1551      define input  parameter i-user-id    as character        no-undo.
+     1552      define output parameter o-deleted   as logical          no-undo.
+     1553      run procedure-user-login-delete-question (i-db-num,i-user-id,yes,output o-deleted).
+     1554   end.
+     1555   procedure procedure-user-login-delete-question :
+     1556   define input  parameter i-db-num     as integer          no-undo.
+     1557   define input  parameter i-user-id    as character        no-undo.
+     1558   define input  parameter i-question as logical no-undo.
+     1559   define output parameter o-deleted   as logical          no-undo.
+     1560     define variable v-can-edit as logical   no-undo .
+     1561       define buffer buf_user-login         for user-login .
+     1562       define buffer buf_user-account       for user-account.
+     1563       define buffer buf_init_user-account  for user-account.
+     1564   do
+     1565   for buf_user-login
+     1566     , buf_user-account
+     1567   on error undo, return error return-value
+     1568   :
+     1569       assign
+     1570           o-deleted = no
+     1571       .
+     1572       find first buf_init_user-account no-lock
+     1573            where buf_init_user-account.user-id = i-user-id
+     1574           .
+     1575       if available buf_init_user-account
+     1576       then do:
+     1577         do transaction
+     1578         on error undo, return error return-value
+     1579         :
+     1580           run can-edit-login in this-procedure (
+     1581                 input  i-db-num
+     1582               , output v-can-edit
+     1583           ).
+     1584           if v-can-edit <> true
+     1585           then do:
+     1586             message
+     1587               "Нельзя удалять логин пользователя для базы" i-db-num
+     1588             view-as alert-box error .
+     1589             undo, return error return-value .
+     1590           end.
+     1591           find first buf_user-login exclusive-lock
+     1592                where buf_user-login.db-num  = i-db-num
+     1593                  and buf_user-login.user-id = i-user-id
+     1594           no-error no-wait.
+     1595           if not available buf_user-login
+     1596           then do:
+     1597             if locked( buf_user-login )
+     1598             then do:
+     1599               find first buf_user-login no-lock
+     1600                    where buf_user-login.db-num  = i-db-num
+     1601                      and buf_user-login.user-id = i-user-id
+     1602               .
+     1603               message
+     1604                 "Удаление логина невозможно" skip
+     1605                 "Пользователь в данный момент работает в системе" skip
+     1606                 "БД" i-db-num skip
+     1607                 "Идентификатор" i-user-id skip
+     1608                 "Псевдоним"                    buf_init_user-account.nik skip
+     1609                 "Имя пользователя"             buf_init_user-account.last-name buf_init_user-account.first-name buf_init_user-account.second-name skip
+     1610                 "Компьютер"                    buf_user-login.last-login-computer-name skip
+     1611                 "Пользователь компьютера"      buf_user-login.last-login-computer-user skip
+     1612                 "TCP имя компьютера"           buf_user-login.last-login-computer-tcp-name skip
+     1613                 "IP адрес компьютера"          buf_user-login.last-login-computer-ip-addr skip
+     1614                 "Идентификатор процесса"       buf_user-login.last-login-process-id skip
+     1615                 "Номер подключения к БД"       buf_user-login.last-login-connection-id skip
+     1616                 "Дата и время входа в систему" sys-time_mjd-to-loc-str-func( buf_user-login.last-login-mjd ) skip
+     1617                 view-as alert-box error .
+     1618             end.
+     1619             else do:
+     1620               message
+     1621                 "У пользователя нет логина" skip
+     1622                 "БД" i-db-num skip
+     1623                 "Идентификатор" i-user-id skip
+     1624                 "Удаление невозможно" skip
+     1625                 view-as alert-box error .
+     1626             end.
+     1627             undo, return error return-value .
+     1628           end.
+     1629           define variable v-ok as logical   no-undo .
+     1630           if not i-question
+     1631           then
+     1632              v-ok = yes.
+     1633           else do:
+     1634              find first buf_user-account no-lock
+     1635                   where buf_user-account.user-id = buf_user-login.user-id
+     1636              .
+     1637              message
+     1638                "Удаление логина пользователя"
+     1639                skip "Идентификатор" buf_user-account.user-id
+     1640                skip "Псевдоним"    buf_user-account.nik
+     1641                skip "Пользователь" buf_user-account.last-name buf_user-account.first-name buf_user-account.second-name
+     1642                skip "Логин для базы данных" buf_user-login.db-num
+     1643                skip "Логин" buf_user-login.user-login
+     1644                skip (1)
+     1645                "После удаления пользователь не сможет работать в базе данных" buf_user-login.db-num skip
+     1646                skip (1)
+     1647                "Продолжить?"
+     1648              view-as alert-box question
+     1649              buttons yes-no
+     1650              update v-ok .
+     1651           end.
+     1652           if v-ok = yes
+     1653           then do:
+     1654               run str/usrlog03.p (
+     1655                     input buf_user-login.db-num
+     1656                   , input buf_user-login.user-id
+     1657               ).
+     1658               assign
+     1659                   o-deleted = yes
+     1660               .
+     1661           end.
+     1662         end.
+     1663       end.
+     1664     end.
+     1665   end procedure.
+     1666   define input parameter parparentproc                as widget-handle    no-undo .
+     1667   define input parameter p-parent-handle              as handle           no-undo.
+     1668   define input parameter p-mode                       as character        no-undo.
+     1669   define input parameter p-in-user-id                 as character        no-undo.
+     1670   define input parameter p-in-last-name               as character        no-undo.
+     1671   define input parameter p-in-first-name              as character        no-undo.
+     1672   define input parameter p-in-second-name             as character        no-undo.
+     1673   define input parameter p-in-nik                     as character        no-undo.
+     1674   define input parameter p-in-phone-number            as character        no-undo.
+     1675   define input parameter p-in-mobile-phone-number     as character        no-undo.
+     1676   define input parameter p-in-company                 as character        no-undo.
+     1677   define input parameter p-in-department              as character        no-undo.
+     1678   define input parameter p-in-position                as character        no-undo.
+     1679   define input parameter p-in-room                    as character        no-undo.
+     1680   define input parameter p-in-e-mail                  as character        no-undo.
+     1681   define input parameter p-in-internal-phone-number   as character        no-undo.
+     1682   define input parameter p-in-PS                      as character        no-undo.
+     1683   define input parameter p-in-psn-code                as integer          no-undo.
+     1684   define input parameter i-adm-gbd                    as logical          no-undo.
+     1685   define input parameter i-superAdm                   as logical          no-undo.
+     1686   define input parameter i-adm-Ubd                    as logical          no-undo.
+     1687   define input-output parameter table for UserDbAdm .
+     1688   define output parameter p-out-last-name             as character        no-undo.
+     1689   define output parameter p-out-first-name            as character        no-undo.
+     1690   define output parameter p-out-second-name           as character        no-undo.
+     1691   define output parameter p-out-nik                   as character        no-undo.
+     1692   define output parameter p-out-phone-number          as character        no-undo.
+     1693   define output parameter p-out-mobile-phone-number   as character        no-undo.
+     1694   define output parameter p-out-company               as character        no-undo.
+     1695   define output parameter p-out-department            as character        no-undo.
+     1696   define output parameter p-out-position              as character        no-undo.
+     1697   define output parameter p-out-room                  as character        no-undo.
+     1698   define output parameter p-out-e-mail                as character        no-undo.
+     1699   define output parameter p-out-internal-phone-number as character        no-undo.
+     1700   define output parameter p-out-PS                    as character        no-undo.
+     1701   define output parameter p-out-psn-code              as integer          no-undo.
+     1702   define output parameter O-adm-gbd                    as logical          no-undo.
+     1703   define output parameter o-superAdm                   as logical          no-undo.
+     1704   define output parameter O-adm-Ubd                    as logical          no-undo.
+     1705   define output parameter p-accepted                  as logical          no-undo.
+     1706   procedure vss-get-info :
+     1707     define output parameter p-vss-revision    like vss-revision    no-undo .
+     1708     define output parameter p-vss-author      like vss-author      no-undo .
+     1709     define output parameter p-vss-date        like vss-date        no-undo .
+     1710     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+     1711     define output parameter p-vss-archive     like vss-archive     no-undo .
+     1712     define output parameter p-vss-description like vss-description no-undo .
+     1713     assign
+     1714       p-vss-revision    = vss-revision
+     1715       p-vss-author      = vss-author
+     1716       p-vss-date        = vss-date
+     1717       p-vss-workfile    = vss-workfile
+     1718       p-vss-archive     = vss-archive
+     1719       p-vss-description = vss-description
+     1720     .
+     1721   end procedure.
+     1722   procedure vss-get-parameters :
+     1723     define output parameter p-vss-parameters as character no-undo .
+     1724   end procedure.
+     1725   define new global shared variable g#vssrevis-logger as handle    no-undo .
+     1726   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+     1727   define variable v-vssrevis-logger                   as handle    no-undo .
+     1728   procedure vss-logevent :
+     1729     define input  parameter p-extra-paramters as character no-undo .
+     1730     define variable v-vssrevis-parameters as character no-undo .
+     1731     do
+     1732     on error undo, return error return-value
+     1733     :
+     1734       if  valid-handle(v-vssrevis-logger)
+     1735       and v-vssrevis-logger :get-signature("logevent") <> ""
+     1736       then do:
+     1737         run vss-get-parameters in this-procedure
+     1738           (output v-vssrevis-parameters
+     1739           ).
+     1740         run logevent in v-vssrevis-logger
+     1741           (input vss-workfile
+     1742           ,input vss-revision
+     1743           ,input v-vssrevis-parameters
+     1744           ,input p-extra-paramters
+     1745           ).
+     1746       end.
+     1747     end.
+     1748   end procedure.
+     1749   assign
+     1750     v-vssrevis-logger = g#vssrevis-logger
+     1751   .
+     1752   if  valid-handle(v-vssrevis-logger)
+     1753   and v-vssrevis-logger :get-signature("logevent") <> ""
+     1754   then do:
+     1755     assign
+     1756       v-vssrevis-logevent = true
+     1757     .
+     1758     run vss-logevent in this-procedure (input vss-description) .
+     1759   end.
+     1760   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1761   DEF VAR BLACK_COLOR        AS INTEGER NO-UNDO INIT  0.
+     1762   DEF VAR DARK_BLUE_COLOR    AS INTEGER NO-UNDO INIT  1.
+     1763   DEF VAR DARK_GREEN_COLOR   AS INTEGER NO-UNDO INIT  2.
+     1764   DEF VAR CYAN_COLOR         AS INTEGER NO-UNDO INIT  3.
+     1765   DEF VAR BROWN_COLOR        AS INTEGER NO-UNDO INIT  4.
+     1766   DEF VAR DARK_GRAY_COLOR    AS INTEGER NO-UNDO INIT  7.
+     1767   DEF VAR DARK_GREY_COLOR    AS INTEGER NO-UNDO INIT  7.
+     1768   DEF VAR VERY_GRAY_COLOR    AS INTEGER NO-UNDO INIT  7.
+     1769   DEF VAR VERY_GREY_COLOR    AS INTEGER NO-UNDO INIT  7.
+     1770   DEF VAR GRAY_COLOR         AS INTEGER NO-UNDO INIT  8.
+     1771   DEF VAR GREY_COLOR         AS INTEGER NO-UNDO INIT  8.
+     1772   DEF VAR BLUE_COLOR         AS INTEGER NO-UNDO INIT  9.
+     1773   DEF VAR GREEN_COLOR        AS INTEGER NO-UNDO INIT 10.
+     1774   DEF VAR RED_COLOR          AS INTEGER NO-UNDO INIT 12.
+     1775   DEF VAR LIGHT_RED_COLOR    AS INTEGER NO-UNDO INIT 13.
+     1776   DEF VAR YELLOW_COLOR       AS INTEGER NO-UNDO INIT 14.
+     1777   DEF VAR WHITE_COLOR        AS INTEGER NO-UNDO INIT 15.
+     1778   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1779     define variable v-cntxt-db-num        as integer   no-undo .
+     1780     define variable v-cntxt-userid        as character no-undo .
+     1781     define variable v-cntxt-level         as character no-undo .
+     1782     define variable v-cntxt-host-code-obj as integer   no-undo .
+     1783     define variable v-cntxt-obj-type      as character no-undo .
+     1784     define variable v-cntxt-obj-code      as integer   no-undo .
+     1785     define variable v-cntxt-db-num-obj    as integer   no-undo .
+     1786     define variable v-cntxt-is-admin      as logical   no-undo .
+     1787   procedure proc-alt-shift-f2:
+     1788     if not ibs.th.gbl.gbl-var:rcode
+     1789   then
+     1790     run gbl\inidebug.p .
+     1791   end.
+     1792   procedure proc-alt-shift-f3:
+     1793     run gbl/prvssinf.p
+     1794       ( input this-procedure
+     1795       ) .
+     1796   end.
+     1797   define variable v-inform-launched as logical no-undo initial false .
+     1798   procedure proc-alt-shift-f4:
+     1799     define variable v-action as character no-undo .
+     1800     if v-inform-launched = false then do:
+     1801       assign
+     1802         v-inform-launched = true
+     1803       .
+     1804       run gbl/d-inform.w
+     1805         (  input self
+     1806         ,  input this-procedure
+     1807         , output v-action
+     1808         ) no-error .
+     1809       run gbl/infrmact.p (input self, input this-procedure, input v-action) no-error .
+     1810       assign
+     1811         v-inform-launched = false
+     1812       .
+     1813     end.
+     1814   end.
+     1815   procedure proc-alt-f1:
+     1816     run gbl/corrhelp.p
+     1817       (input this-procedure
+     1818       ) .
+     1819   end .
+     1820   on alt-shift-f2 anywhere do:
+     1821     run proc-alt-shift-f2.
+     1822   end.
+     1823   on alt-shift-f3 anywhere do:
+     1824     run proc-alt-shift-f3 in this-procedure .
+     1825   end.
+     1826   on alt-shift-f4 anywhere do:
+     1827     run proc-alt-shift-f4 in this-procedure.
+     1828   end.
+     1829   on alt-f1 anywhere do:
+     1830     run proc-alt-f1 in this-procedure .
+     1831   end.
+     1832   define variable v-user-exit-enabled     as logical      no-undo.
+     1833   define variable v-user-nik-autofill     as logical      no-undo.
+     1834   define variable mSyperAdm               as logical      no-undo.
+     1835   define variable mchenglistubd           as logical no-undo.
+     1836   FUNCTION GetAdm RETURNS CHARACTER
+     1837     (  )  FORWARD.
+     1838   DEFINE BUTTON b-close AUTO-END-KEY
+     1839        LABEL "&Отмена"
+     1840        SIZE 10 BY 1
+     1841        BGCOLOR 8 .
+     1842   DEFINE BUTTON b-exit AUTO-GO
+     1843        LABEL "&Ввод"
+     1844        SIZE 10 BY 1
+     1845        BGCOLOR 8 .
+     1846   DEFINE BUTTON b-help
+     1847        LABEL "Помо&щь"
+     1848        SIZE 10 BY 1
+     1849        BGCOLOR 8 .
+     1850   DEFINE BUTTON b-psn
+     1851        IMAGE-UP FILE "btn-down-arrow":U
+     1852        IMAGE-DOWN FILE "btn-down-arrow":U
+     1853        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+     1854        LABEL "Button 1"
+     1855        SIZE 3 BY 1.
+     1856   DEFINE BUTTON btnAdm
+     1857        LABEL "Админ/Пользователь"
+     1858        SIZE 20 BY 1.
+     1859   DEFINE BUTTON BtnDel
+     1860        LABEL "Удалить"
+     1861        SIZE 10 BY 1.
+     1862   DEFINE VARIABLE ed-PS AS CHARACTER
+     1863        VIEW-AS EDITOR SCROLLBAR-VERTICAL
+     1864        SIZE 32.5 BY 2.25 NO-UNDO.
+     1865   DEFINE VARIABLE fi-company AS CHARACTER FORMAT "X(256)":U
+     1866        LABEL "Организация"
+     1867        VIEW-AS FILL-IN
+     1868        SIZE 15 BY 1 NO-UNDO.
+     1869   DEFINE VARIABLE fi-department AS CHARACTER FORMAT "X(256)":U
+     1870        LABEL "Отдел"
+     1871        VIEW-AS FILL-IN
+     1872        SIZE 15 BY 1 NO-UNDO.
+     1873   DEFINE VARIABLE fi-e-mail AS CHARACTER FORMAT "X(256)":U
+     1874        LABEL "E-Mail"
+     1875        VIEW-AS FILL-IN
+     1876        SIZE 15 BY 1 NO-UNDO.
+     1877   DEFINE VARIABLE fi-first-name AS CHARACTER FORMAT "X(256)":U
+     1878        LABEL "Имя"
+     1879        VIEW-AS FILL-IN
+     1880        SIZE 15 BY 1 NO-UNDO.
+     1881   DEFINE VARIABLE fi-internal-phone-number AS CHARACTER FORMAT "X(256)":U
+     1882        LABEL "Раб.телефон"
+     1883        VIEW-AS FILL-IN
+     1884        SIZE 15 BY 1 NO-UNDO.
+     1885   DEFINE VARIABLE fi-last-name AS CHARACTER FORMAT "X(256)":U
+     1886        LABEL "Фамилия"
+     1887        VIEW-AS FILL-IN
+     1888        SIZE 32.5 BY 1 NO-UNDO.
+     1889   DEFINE VARIABLE fi-mobile-phone-number AS CHARACTER FORMAT "X(256)":U
+     1890        LABEL "Моб.Телефон"
+     1891        VIEW-AS FILL-IN
+     1892        SIZE 15 BY 1 NO-UNDO.
+     1893   DEFINE VARIABLE fi-nik AS CHARACTER FORMAT "X(256)":U
+     1894        VIEW-AS FILL-IN
+     1895        SIZE 32.5 BY 1
+     1896        FGCOLOR 1  NO-UNDO.
+     1897   DEFINE VARIABLE fi-phone-number AS CHARACTER FORMAT "X(256)":U
+     1898        LABEL "Телефон"
+     1899        VIEW-AS FILL-IN
+     1900        SIZE 15 BY 1 NO-UNDO.
+     1901   DEFINE VARIABLE fi-position AS CHARACTER FORMAT "X(256)":U
+     1902        LABEL "Должность"
+     1903        VIEW-AS FILL-IN
+     1904        SIZE 15 BY 1 NO-UNDO.
+     1905   DEFINE VARIABLE fi-PS-label AS CHARACTER FORMAT "X(256)":U INITIAL "Примечание:"
+     1906        VIEW-AS FILL-IN
+     1907        SIZE 12 BY 1 NO-UNDO.
+     1908   DEFINE VARIABLE fi-PS-label-2 AS CHARACTER FORMAT "X(256)":U INITIAL "Псевдоним:"
+     1909        VIEW-AS FILL-IN
+     1910        SIZE 11 BY 1
+     1911        FGCOLOR 1  NO-UNDO.
+     1912   DEFINE VARIABLE fi-psn-code AS INTEGER FORMAT "->>>>>>>>9":U INITIAL 0
+     1913        LABEL "Физ. лицо"
+     1914        VIEW-AS FILL-IN
+     1915        SIZE 11.5 BY 1 NO-UNDO.
+     1916   DEFINE VARIABLE fi-room AS CHARACTER FORMAT "X(256)":U
+     1917        LABEL "Комната"
+     1918        VIEW-AS FILL-IN
+     1919        SIZE 15 BY 1 NO-UNDO.
+     1920   DEFINE VARIABLE fi-second-name AS CHARACTER FORMAT "X(256)":U
+     1921        LABEL "Отчество"
+     1922        VIEW-AS FILL-IN
+     1923        SIZE 15 BY 1 NO-UNDO.
+     1924   DEFINE VARIABLE fi-user-id AS CHARACTER FORMAT "X(256)":U
+     1925        LABEL "ID"
+     1926         VIEW-AS TEXT
+     1927        SIZE 15 BY .67
+     1928        FGCOLOR 4  NO-UNDO.
+     1929   DEFINE VARIABLE v-psn-name AS CHARACTER FORMAT "X(256)":U
+     1930        VIEW-AS FILL-IN
+     1931        SIZE 17 BY 1 NO-UNDO.
+     1932   DEFINE VARIABLE RAD-adm-gbd AS INTEGER INITIAL 2
+     1933        VIEW-AS RADIO-SET VERTICAL
+     1934        RADIO-BUTTONS
+     1935             "Администратор ГБД", 1,
+     1936   "Пользователь ГБД", 3,
+     1937   "Отсутствует ", 2
+     1938        SIZE 28.5 BY 3 NO-UNDO.
+     1939   DEFINE VARIABLE RAD-adm-Ubd AS INTEGER INITIAL 2
+     1940        VIEW-AS RADIO-SET VERTICAL
+     1941        RADIO-BUTTONS
+     1942             "Администратор всех Убд", 1,
+     1943   "Пользователь всех УБД", 3,
+     1944   "Выборочно ", 2
+     1945        SIZE 40.5 BY 3 NO-UNDO.
+     1946   DEFINE VARIABLE TOG-superAdm AS LOGICAL INITIAL no
+     1947        LABEL "Супер Администратор"
+     1948        VIEW-AS TOGGLE-BOX
+     1949        SIZE 22.5 BY .83 NO-UNDO.
+     1950   DEFINE QUERY BRUserUbd FOR
+     1951         UserDbAdm SCROLLING.
+     1952   DEFINE BROWSE BRUserUbd
+     1953     QUERY BRUserUbd NO-LOCK DISPLAY
+     1954         UserDbAdm.db-num COLUMN-LABEL "УБД"
+     1955         getadm() COLUMN-LABEL "Роль" format "x(15)"
+     1956       WITH NO-ROW-MARKERS SEPARATORS SIZE 35.5 BY 7.75 FIT-LAST-COLUMN.
+     1957   DEFINE FRAME Dialog-Frame
+     1958        b-exit AT ROW 1 COL 1
+     1959        b-close AT ROW 1 COL 11
+     1960        b-help AT ROW 1 COL 36.5
+     1961        fi-last-name AT ROW 3.5 COL 5.63 WIDGET-ID 2
+     1962        RAD-adm-gbd AT ROW 3.5 COL 50 NO-LABEL WIDGET-ID 36
+     1963        fi-first-name AT ROW 4.75 COL 9.63 WIDGET-ID 4
+     1964        fi-second-name AT ROW 6 COL 4.5 WIDGET-ID 6
+     1965        TOG-superAdm AT ROW 6.5 COL 50 WIDGET-ID 38
+     1966        fi-PS-label-2 AT ROW 7.25 COL 3 NO-LABEL WIDGET-ID 34
+     1967        fi-nik AT ROW 7.25 COL 14.5 NO-LABEL WIDGET-ID 32
+     1968        RAD-adm-Ubd AT ROW 7.25 COL 50 NO-LABEL WIDGET-ID 42
+     1969        fi-phone-number AT ROW 8.5 COL 5.5 WIDGET-ID 8
+     1970        fi-mobile-phone-number AT ROW 9.75 COL 1.5 WIDGET-ID 10
+     1971        fi-company AT ROW 11 COL 1.63 WIDGET-ID 12
+     1972        BRUserUbd AT ROW 11 COL 51 WIDGET-ID 200
+     1973        fi-department AT ROW 12.25 COL 7.5 WIDGET-ID 14
+     1974        fi-position AT ROW 13.5 COL 3.5 WIDGET-ID 28
+     1975        fi-room AT ROW 14.75 COL 5.5 WIDGET-ID 16
+     1976        fi-e-mail AT ROW 16 COL 6.5 WIDGET-ID 18
+     1977        fi-internal-phone-number AT ROW 17.25 COL 1.5 WIDGET-ID 22
+     1978        fi-psn-code AT ROW 18.5 COL 12.5 COLON-ALIGNED WIDGET-ID 36
+     1979        b-psn AT ROW 18.5 COL 26.5 WIDGET-ID 38
+     1980        v-psn-name AT ROW 18.5 COL 28 COLON-ALIGNED NO-LABEL WIDGET-ID 40
+     1981        fi-PS-label AT ROW 19.75 COL 1.5 NO-LABEL WIDGET-ID 26
+     1982        ed-PS AT ROW 19.75 COL 14.5 NO-LABEL WIDGET-ID 24
+     1983        btnAdm AT ROW 19 COL 51 WIDGET-ID 46
+     1984        BtnDel AT ROW 19 COL 71.5 WIDGET-ID 48
+     1985        fi-user-id AT ROW 2.5 COL 10.5 WIDGET-ID 30
+     1986        SPACE(61.00) SKIP(19.07)
+     1987       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+     1988            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+     1989            TITLE "Пользователь системы"
+     1990            DEFAULT-BUTTON b-exit CANCEL-BUTTON b-close WIDGET-ID 100.
+     1991   ASSIGN
+     1992          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+     1993          FRAME Dialog-Frame:HIDDEN           = TRUE.
+     1994   ASSIGN
+     1995          v-psn-name:READ-ONLY IN FRAME Dialog-Frame          = TRUE
+     1996          TOG-superAdm:HIDDEN IN FRAME Dialog-Frame           = TRUE.
+     1997   ON GO OF FRAME Dialog-Frame
+     1998   DO:
+     1999       define variable v-have-error     as logical      no-undo.
+     2000       define variable v-error-desc     as character    no-undo.
+     2001       define variable v-focus-widget   as handle       no-undo.
+     2002       run check-user in this-procedure (
+     2003             output v-have-error
+     2004           , output v-error-desc
+     2005           , output v-focus-widget
+     2006       ).
+     2007       if v-have-error = yes
+     2008       then do:
+     2009           if valid-handle( v-focus-widget )
+     2010           then do:
+     2011               apply "entry" to v-focus-widget.
+     2012           end.
+     2013           message
+     2014               "Ошибка ввода параметров пользователя."
+     2015               skip (1)
+     2016               skip v-error-desc
+     2017           view-as alert-box.
+     2018           undo, return no-apply.
+     2019       end.
+     2020       assign
+     2021           v-user-exit-enabled = yes
+     2022       .
+     2023       if v-user-exit-enabled = yes
+     2024       then do:
+     2025           assign
+     2026               fi-last-name
+     2027               fi-first-name
+     2028               fi-second-name
+     2029               fi-phone-number
+     2030               fi-mobile-phone-number
+     2031               fi-company
+     2032               fi-department
+     2033               fi-position
+     2034               fi-room
+     2035               fi-e-mail
+     2036               fi-internal-phone-number
+     2037               fi-psn-code
+     2038               ed-PS
+     2039               rad-adm-gbd
+     2040               TOG-superAdm
+     2041               RAD-adm-Ubd
+     2042           .
+     2043           assign
+     2044               p-out-last-name             = fi-last-name
+     2045               p-out-first-name            = fi-first-name
+     2046               p-out-second-name           = fi-second-name
+     2047               p-out-nik                   = fi-nik
+     2048               p-out-phone-number          = fi-phone-number
+     2049               p-out-mobile-phone-number   = fi-mobile-phone-number
+     2050               p-out-company               = fi-company
+     2051               p-out-department            = fi-department
+     2052               p-out-position              = fi-position
+     2053               p-out-room                  = fi-room
+     2054               p-out-e-mail                = fi-e-mail
+     2055               p-out-internal-phone-number = fi-internal-phone-number
+     2056               p-out-PS                    = ed-PS
+     2057               p-out-psn-code              = fi-psn-code
+     2058               o-adm-gbd                   = if rad-adm-gbd eq 1
+     2059                                             then yes
+     2060                                             else if rad-adm-gbd eq 3
+     2061                                             then no
+     2062                                             else ?
+     2063               o-superAdm                  = TOG-superAdm
+     2064               o-adm-Ubd                   = if RAD-adm-Ubd eq 1
+     2065                                             then yes
+     2066                                             else if RAD-adm-Ubd eq 3
+     2067                                             then no
+     2068                                             else ?
+     2069           .
+     2070           if o-adm-ubd eq i-adm-ubd
+     2071              and not mchenglistubd
+     2072           then
+     2073              o-adm-ubd = ?.
+     2074           if p-out-last-name              <> p-in-last-name
+     2075           or p-out-first-name             <> p-in-first-name
+     2076           or p-out-second-name            <> p-in-second-name
+     2077           or p-out-nik                    <> p-in-nik
+     2078           or p-out-phone-number           <> p-in-phone-number
+     2079           or p-out-mobile-phone-number    <> p-in-mobile-phone-number
+     2080           or p-out-company                <> p-in-company
+     2081           or p-out-department             <> p-in-department
+     2082           or p-out-position               <> p-in-position
+     2083           or p-out-room                   <> p-in-room
+     2084           or p-out-e-mail                 <> p-in-e-mail
+     2085           or p-out-internal-phone-number  <> p-in-internal-phone-number
+     2086           or p-out-PS                     <> p-in-PS
+     2087           or p-out-psn-code               <> p-in-psn-code
+     2088           or (o-adm-gbd                   <> i-adm-gbd)
+     2089           or o-superAdm                   <> i-superAdm
+     2090           or (    o-adm-Ubd ne ?
+     2091               and o-adm-Ubd               <> i-adm-Ubd)
+     2092           or mchenglistubd
+     2093           then do:
+     2094               assign
+     2095                   p-accepted = yes
+     2096               .
+     2097           end.
+     2098       end.
+     2099   END.
+     2100   ON WINDOW-CLOSE OF FRAME Dialog-Frame
+     2101   DO:
+     2102     APPLY "END-ERROR":U TO SELF.
+     2103   END.
+     2104   ON CHOOSE OF b-close IN FRAME Dialog-Frame
+     2105   DO:
+     2106   define variable vss-include-info6 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2107   if lookup(self :type
+     2108            ,'BROWSE,FILL-IN,FRAME,BUTTON,RADIO-SET,COMBO-BOX,SELECTION-LIST,CONTROL-FRAME,SLIDER,DIALOG-BOX,TOGGLE-BOX,EDITOR,WINDOW'
+     2109            ) = 0
+     2110   then do:
+     2111     message
+     2112       "$Workfile$"
+     2113       "Указанному интерфейсному элементу фокус не может быть передан" skip
+     2114       "Интерфейсный элемент" self :name  skip
+     2115       "Тип" self :type  skip
+     2116       "Процедура" this-procedure :file-name skip
+     2117       view-as alert-box .
+     2118   end.
+     2119   else do:
+     2120     apply "entry":u to self  .
+     2121     if focus :handle <> self :handle  then do:
+     2122       return no-apply .
+     2123     end.
+     2124   end.
+     2125       assign
+     2126           v-user-exit-enabled     = yes
+     2127           p-accepted              = no
+     2128       .
+     2129   END.
+     2130   ON CHOOSE OF b-exit IN FRAME Dialog-Frame
+     2131   DO:
+     2132   define variable vss-include-info7 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2133   if lookup(self :type
+     2134            ,'BROWSE,FILL-IN,FRAME,BUTTON,RADIO-SET,COMBO-BOX,SELECTION-LIST,CONTROL-FRAME,SLIDER,DIALOG-BOX,TOGGLE-BOX,EDITOR,WINDOW'
+     2135            ) = 0
+     2136   then do:
+     2137     message
+     2138       "$Workfile$"
+     2139       "Указанному интерфейсному элементу фокус не может быть передан" skip
+     2140       "Интерфейсный элемент" self :name  skip
+     2141       "Тип" self :type  skip
+     2142       "Процедура" this-procedure :file-name skip
+     2143       view-as alert-box .
+     2144   end.
+     2145   else do:
+     2146     apply "entry":u to self  .
+     2147     if focus :handle <> self :handle  then do:
+     2148       return no-apply .
+     2149     end.
+     2150   end.
+     2151   END.
+     2152   ON CHOOSE OF btnAdm IN FRAME Dialog-Frame
+     2153   DO:
+     2154      define variable vrowid as rowid no-undo.
+     2155      if available UserDbAdm
+     2156      then do:
+     2157         if UserDbAdm.db-usr
+     2158         then
+     2159            if UserDbAdm.db-block
+     2160            then do:
+     2161               UserDbAdm.db-adm = yes.
+     2162               UserDbAdm.db-block = no.
+     2163             end.
+     2164             else if UserDbAdm.db-adm
+     2165             then
+     2166                UserDbAdm.db-adm = no.
+     2167             else
+     2168                UserDbAdm.db-block = yes.
+     2169         else
+     2170            UserDbAdm.db-usr = yes.
+     2171         vrowid = rowid(UserDbAdm).
+     2172         BRUserUbd:refresh () no-error.
+     2173         reposition BRUserUbd to rowid vrowid no-error .
+     2174         mchenglistubd = yes.
+     2175      end.
+     2176   END.
+     2177   ON CHOOSE OF BtnDel IN FRAME Dialog-Frame
+     2178   DO:
+     2179      define variable vrowid as rowid no-undo.
+     2180      if available UserDbAdm
+     2181      then do:
+     2182         assign
+     2183            UserDbAdm.db-adm = no
+     2184            UserDbAdm.db-usr = no
+     2185            UserDbAdm.db-block = no.
+     2186            vrowid = rowid(UserDbAdm)
+     2187         .
+     2188         BRUserUbd:refresh () no-error.
+     2189         reposition BRUserUbd to rowid vrowid no-error .
+     2190         mchenglistubd = yes.
+     2191      end.
+     2192   END.
+     2193   ON CHOOSE OF b-psn IN FRAME Dialog-Frame
+     2194   DO:
+     2195      RUN person-user IN THIS-PROCEDURE ( INPUT-OUTPUT fi-psn-code, INPUT-OUTPUT v-psn-name ).
+     2196      display
+     2197         fi-psn-code
+     2198         v-psn-name
+     2199      with frame Dialog-Frame.
+     2200   END.
+     2201   ON ANY-PRINTABLE OF fi-last-name IN FRAME Dialog-Frame
+     2202   or DELETE-CHARACTER OF fi-last-name IN FRAME Dialog-Frame
+     2203   or BACKSPACE OF fi-last-name IN FRAME Dialog-Frame
+     2204   or ANY-PRINTABLE OF fi-first-name IN FRAME Dialog-Frame
+     2205   or DELETE-CHARACTER OF fi-first-name IN FRAME Dialog-Frame
+     2206   or BACKSPACE OF fi-first-name IN FRAME Dialog-Frame
+     2207   or ANY-PRINTABLE OF fi-second-name IN FRAME Dialog-Frame
+     2208   or DELETE-CHARACTER OF fi-second-name IN FRAME Dialog-Frame
+     2209   or BACKSPACE OF fi-second-name IN FRAME Dialog-Frame
+     2210   DO:
+     2211       if v-user-nik-autofill = yes
+     2212       then do:
+     2213           assign
+     2214               fi-last-name
+     2215               fi-first-name
+     2216               fi-second-name
+     2217           .
+     2218       end.
+     2219   END.
+     2220   ON VALUE-CHANGED OF fi-last-name IN FRAME Dialog-Frame
+     2221   or VALUE-CHANGED OF fi-first-name   IN FRAME Dialog-Frame
+     2222   or VALUE-CHANGED OF fi-second-name  IN FRAME Dialog-Frame
+     2223   DO:
+     2224       if v-user-nik-autofill = yes
+     2225       then do:
+     2226           assign
+     2227               fi-last-name
+     2228               fi-first-name
+     2229               fi-second-name
+     2230           .
+     2231           assign
+     2232               fi-nik = trim( substitute( "&1 &2 &3", fi-last-name, fi-first-name, fi-second-name ) )
+     2233           .
+     2234           display
+     2235               fi-nik
+     2236           with frame Dialog-Frame.
+     2237       end.
+     2238   END.
+     2239   ON LEAVE OF fi-nik IN FRAME Dialog-Frame
+     2240   DO:
+     2241       assign
+     2242           fi-last-name
+     2243           fi-first-name
+     2244           fi-second-name
+     2245           fi-nik
+     2246       .
+     2247       run get-nik-autofill in this-procedure (
+     2248             input fi-last-name
+     2249           , input fi-first-name
+     2250           , input fi-second-name
+     2251           , input fi-nik
+     2252           , output v-user-nik-autofill
+     2253       ).
+     2254   END.
+     2255   ON LEAVE OF fi-psn-code IN FRAME Dialog-Frame
+     2256   DO:
+     2257      define buffer buf_clients     for ub.clients .
+     2258      assign
+     2259         fi-psn-code
+     2260      .
+     2261      FIND FIRST buf_clients
+     2262           WHERE buf_clients.obj-code = fi-psn-code
+     2263             and buf_clients.obj-type = 'чел':U
+     2264           no-lock
+     2265           no-error
+     2266           .
+     2267      IF AVAILABLE buf_clients
+     2268      THEN DO:
+     2269         ASSIGN
+     2270            v-psn-name = buf_clients.obj-name
+     2271         .
+     2272      END.
+     2273      ELSE DO:
+     2274         assign
+     2275            fi-psn-code = ?
+     2276            v-psn-name  = "":U
+     2277         .
+     2278      END.
+     2279      display
+     2280         fi-psn-code
+     2281         v-psn-name
+     2282      with frame Dialog-Frame.
+     2283   END.
+     2284   ON VALUE-CHANGED OF RAD-adm-gbd IN FRAME Dialog-Frame
+     2285   DO:
+     2286      tog-superadm:visible = rad-adm-gbd:screen-value eq "1".
+     2287      if not tog-superadm:visible
+     2288      then
+     2289         tog-superadm:screen-value = "no".
+     2290   END.
+     2291   ON VALUE-CHANGED OF RAD-adm-Ubd IN FRAME Dialog-Frame
+     2292   DO:
+     2293      btnAdm:visible   = RAD-adm-Ubd:screen-value eq "2" and mSyperAdm.
+     2294      BtnDel:visible   = RAD-adm-Ubd:screen-value eq "2" and mSyperAdm.
+     2295      BRUserUbd:visible = RAD-adm-Ubd:screen-value eq "2" or g#db-num ne 0.
+     2296   END.
+     2297   define variable vss-include-info8 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2298   on F2 of frame Dialog-Frame anywhere do:
+     2299     if b-exit :sensitive then DO: apply "CHOOSE":U to b-exit in frame Dialog-Frame. END.
+     2300     return no-apply.
+     2301   end.
+     2302   define variable vss-include-info9 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2303   on CTRL-F7 of frame Dialog-Frame anywhere do:
+     2304     if b-close :sensitive then DO: apply "CHOOSE":U to b-close in frame Dialog-Frame. END.
+     2305     return no-apply.
+     2306   end.
+     2307   IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+     2308   THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+     2309   define variable vss-include-info10 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2310   on help of frame Dialog-Frame
+     2311   do:
+     2312     run gbl/app_help.p
+     2313       (input this-procedure :file-name
+     2314       ,input ''
+     2315       ,input ?
+     2316       ) no-error.
+     2317     if error-status :error then do:
+     2318       message
+     2319         "Ошибка при вызове помощи"
+     2320         error-status :get-message(1)
+     2321         view-as alert-box .
+     2322     end.
+     2323   end.
+     2324   run minbtn-set in this-procedure .
+     2325   on choose of b-help in frame Dialog-Frame
+     2326   do:
+     2327     apply "help":u to frame Dialog-Frame .
+     2328   end.
+     2329   define variable vss-include-info11 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2330   procedure minbtn-set :
+     2331       do
+     2332           on error undo, return error return-value
+     2333           :
+     2334           define variable ii              as integer       no-undo .
+     2335           define variable fh              as widget-handle no-undo .
+     2336           define variable hh              as widget-handle no-undo .
+     2337           define variable v-h             as handle        extent 4 no-undo .
+     2338           define variable v-name-button   as character     no-undo .
+     2339           define variable v-help-old-x    as decimal       no-undo .
+     2340           define variable v-help-old-y    as decimal       no-undo .
+     2341           define variable v-help-old-size as decimal       no-undo .
+     2342           define variable v-frame-width   as decimal       no-undo .
+     2343           define variable jj              as integer       no-undo .
+     2344           do
+     2345               on error undo, return error
+     2346               :
+     2347               assign
+     2348                   v-frame-width = frame Dialog-Frame:width - 0.3
+     2349                   fh            = frame Dialog-Frame:first-child
+     2350                   hh            = fh:first-child
+     2351                   ii            = 1
+     2352                   .
+     2353               do while valid-handle(hh):
+     2354                   if LOOKUP(lc(hh:name), "b-help,b-print,b-history,b-hist,b-hist-user,b-sch") > 0  then
+     2355                   do:
+     2356                       case lc(hh:name) :
+     2357                           when "b-help" then
+     2358                               do:
+     2359                                   hh:load-image-up("cmp/b-help.bmp":u) .
+     2360                                   hh:load-image-down("cmp/b-help.bmp":u) .
+     2361                                   hh:load-image-insensitive("cmp/b-help.bmp":u) .
+     2362                                   hh:TOOLTIP = "Помощь" .
+     2363                                   v-help-old-x = hh:column .
+     2364                                   v-help-old-y = hh:row    .
+     2365                                   v-help-old-size = hh:width .
+     2366                                   hh:width-chars = 2.5 .
+     2367                               end.
+     2368                           when "b-print" then
+     2369                               do:
+     2370                                   hh:load-image("cmp/b-print.bmp":u) .
+     2371                                   hh:TOOLTIP = "Печать" .
+     2372                                   v-h[ii] = hh:handle .
+     2373                                   ii = ii + 1 .
+     2374                                   hh:width-chars = 3 .
+     2375                               end.
+     2376                           when "b-history" or
+     2377                           when "b-hist" then
+     2378                               do:
+     2379                                   hh:load-image("cmp/b-hist.bmp":u) .
+     2380                                   hh:TOOLTIP = "История" .
+     2381                                   v-h[ii] = hh:handle .
+     2382                                   ii = ii + 1 .
+     2383                                   hh:width-chars = 3 .
+     2384                               end.
+     2385                           when "b-sch" then
+     2386                               do:
+     2387                                   hh:load-image("cmp/b-sch.bmp":u) .
+     2388                                   hh:TOOLTIP = "Установка Фильтра" .
+     2389                                   v-h[ii] = hh:handle .
+     2390                                   ii = ii + 1 .
+     2391                                   hh:width-chars = 3 .
+     2392                               end.
+     2393                           when "b-hist-user" then
+     2394                               do:
+     2395                                   hh:load-image("cmp/b-hist.bmp":u) .
+     2396                                   hh:TOOLTIP = "История пользователя" .
+     2397                                   ii = ii + 1 .
+     2398                               end.
+     2399                       end case.
+     2400                   end.
+     2401                   hh = hh:next-sibling.
+     2402               end.
+     2403               b-help:column = v-frame-width - b-help:width-chars.
+     2404               jj = 0.
+     2405               repeat ii = 4 to 1 by -1 :
+     2406                   if valid-handle (v-h[ii] ) then
+     2407                   do:
+     2408                       jj  = jj + 1 .
+     2409                       v-h[ii]:column = v-frame-width - b-help:width-chars - ( 3 * jj ).
+     2410                       v-h[ii]:row    = v-help-old-y .
+     2411                   end.
+     2412               end.
+     2413           end.
+     2414       end.
+     2415   end procedure.
+     2416   define variable vss-include-info12 as character format "x(65)" no-undo initial "@(#)$Workfile$ Библиотека изменения размеров окна".
+     2417   define variable v-diasize-need-maximize        as logical   no-undo init true  .
+     2418   define variable v-diasize-orig-frame-height    as decimal   no-undo .
+     2419   define variable v-diasize-orig-frame-width     as decimal   no-undo .
+     2420   define variable v-diasize-current-frame-width  as decimal   no-undo .
+     2421   define variable v-diasize-current-frame-height as decimal   no-undo .
+     2422   define variable v-diasize-change-size          as logical   no-undo .
+     2423   define variable v-diasize-resize-button        as handle    no-undo .
+     2424   define variable v-diasize-wndmax               as logical   no-undo .
+     2425   define variable v-diasize-wndstore             as logical   no-undo .
+     2426   define variable v-diasize-proc-name            as character no-undo .
+     2427   define variable v-diasize-browse-handle        as handle    no-undo .
+     2428   define variable v-diasize-browse-number        as integer   no-undo .
+     2429   define variable v-diasize-need-full-display    as logical   no-undo init false .
+     2430   define temp-table temp-diasize-handle no-undo
+     2431     field handle-value  as handle
+     2432     field save-position as decimal
+     2433     index xpk is primary unique handle-value
+     2434     .
+     2435   define temp-table temp-browse-handle no-undo
+     2436     field browse-type   as character
+     2437     field browse-number as integer
+     2438     field browse-handle as handle
+     2439     field original-size as decimal
+     2440     index xpk is primary unique browse-type browse-number
+     2441     index xie browse-type browse-handle
+     2442   .
+     2443   procedure diasize_change-height :
+     2444     define input  parameter p-change-value  as decimal   no-undo .
+     2445     define input  parameter p-move-resize   as logical   no-undo .
+     2446     define variable v-field-group-handle    as handle    no-undo .
+     2447     define variable v-object-handle         as handle    no-undo .
+     2448     define variable v-frame-height          as decimal   no-undo .
+     2449     define variable v-frame-virtual-height  as decimal   no-undo .
+     2450     define variable v-browse-height         as decimal   no-undo .
+     2451     define variable v-window-height         as decimal   no-undo .
+     2452     define variable v-window-virtual-height as decimal   no-undo .
+     2453     define variable v-change-sign           as integer   no-undo .
+     2454     define buffer buf_temp-diasize-handle for temp-diasize-handle .
+     2455     define buffer buf_temp-browse-handle  for temp-browse-handle .
+     2456     if p-change-value > 0
+     2457     then do:
+     2458       if frame Dialog-Frame :height + p-change-value
+     2459           > decimal(session :work-area-height-pixels) / session :pixels-per-row
+     2460       then do:
+     2461         assign
+     2462           p-change-value = decimal(session :work-area-height-pixels) / session :pixels-per-row
+     2463                           - (frame Dialog-Frame :height-chars)
+     2464         .
+     2465         if p-change-value <= 0
+     2466         then do:
+     2467           run diasize_position-resize-button in this-procedure .
+     2468           return .
+     2469         end.
+     2470       end.
+     2471     end.
+     2472     if p-change-value < 0
+     2473     then do:
+     2474       if frame Dialog-Frame :height + p-change-value < v-diasize-orig-frame-height
+     2475       then do:
+     2476         assign
+     2477           p-change-value = v-diasize-orig-frame-height
+     2478                          - (frame Dialog-Frame :height-chars)
+     2479         .
+     2480         if p-change-value >= 0
+     2481         then do:
+     2482           run diasize_position-resize-button in this-procedure .
+     2483           return .
+     2484         end.
+     2485       end.
+     2486     end.
+     2487     if p-change-value >= 0
+     2488     then do:
+     2489       assign
+     2490         v-change-sign = 1
+     2491       .
+     2492     end.
+     2493     else do:
+     2494       assign
+     2495         v-change-sign = -1
+     2496       .
+     2497     end.
+     2498     assign
+     2499       p-change-value = truncate(abs(p-change-value), 0) * v-change-sign
+     2500     .
+     2501     if p-change-value = 0
+     2502     then do:
+     2503       run diasize_position-resize-button in this-procedure .
+     2504       return .
+     2505     end.
+     2506     move_block:
+     2507     do
+     2508     on error undo move_block, retry move_block
+     2509     :
+     2510       if retry
+     2511       then do:
+     2512         do
+     2513         on error undo move_block, leave move_block
+     2514         :
+     2515           if p-change-value > 0
+     2516           then do:
+     2517             for each buf_temp-diasize-handle
+     2518             on error undo, next
+     2519             :
+     2520               assign
+     2521                 v-object-handle = buf_temp-diasize-handle.handle-value
+     2522               .
+     2523               if v-object-handle <> v-diasize-resize-button
+     2524               then do:
+     2525                 assign
+     2526                   v-object-handle :row = buf_temp-diasize-handle.save-position
+     2527                 .
+     2528               end.
+     2529             end.
+     2530             assign
+     2531               v-diasize-browse-handle :height = v-browse-height
+     2532             .
+     2533             for each buf_temp-browse-handle
+     2534               where buf_temp-browse-handle.browse-type = 'height':u
+     2535             on error undo, next
+     2536             :
+     2537               assign
+     2538                 buf_temp-browse-handle.browse-handle :height = buf_temp-browse-handle.original-size
+     2539               .
+     2540             end.
+     2541             assign
+     2542               frame Dialog-Frame :height = v-frame-height
+     2543             .
+     2544             if frame Dialog-Frame :scrollable = true
+     2545             then do:
+     2546               assign
+     2547                 frame Dialog-Frame :virtual-height = v-frame-virtual-height
+     2548               .
+     2549             end.
+     2550             run diasize_position-resize-button in this-procedure .
+     2551           end.
+     2552           else do:
+     2553             if frame Dialog-Frame :scrollable = true
+     2554             then do:
+     2555               assign
+     2556                 frame Dialog-Frame :virtual-height = v-frame-virtual-height
+     2557               .
+     2558             end.
+     2559             assign
+     2560               frame Dialog-Frame :height = v-frame-height
+     2561             .
+     2562             assign
+     2563               v-diasize-browse-handle :height = v-browse-height
+     2564             .
+     2565             for each buf_temp-browse-handle
+     2566               where buf_temp-browse-handle.browse-type = 'height':u
+     2567             on error undo, next
+     2568             :
+     2569               assign
+     2570                 buf_temp-browse-handle.browse-handle :height = buf_temp-browse-handle.original-size
+     2571               .
+     2572             end.
+     2573             for each buf_temp-diasize-handle
+     2574             on error undo, next
+     2575             :
+     2576               assign
+     2577                 v-object-handle = buf_temp-diasize-handle.handle-value
+     2578               .
+     2579               if v-object-handle <> v-diasize-resize-button
+     2580               then do:
+     2581                 assign
+     2582                   v-object-handle :row = buf_temp-diasize-handle.save-position
+     2583                 .
+     2584               end.
+     2585             end.
+     2586             run diasize_position-resize-button in this-procedure .
+     2587           end.
+     2588           assign
+     2589             v-diasize-change-size = false
+     2590           .
+     2591           leave move_block .
+     2592         end.
+     2593       end.
+     2594       assign
+     2595         v-diasize-need-full-display = true
+     2596       .
+     2597       if v-diasize-change-size = false
+     2598       then do:
+     2599         assign
+     2600           v-diasize-change-size = true
+     2601         .
+     2602       end.
+     2603       else do:
+     2604         return .
+     2605       end.
+     2606       assign
+     2607         v-frame-height = frame Dialog-Frame :height
+     2608         v-frame-virtual-height = frame Dialog-Frame :virtual-height
+     2609         v-browse-height = v-diasize-browse-handle :height
+     2610       .
+     2611       for each buf_temp-browse-handle
+     2612         where buf_temp-browse-handle.browse-type = 'height':u
+     2613       :
+     2614         assign
+     2615           buf_temp-browse-handle.original-size = buf_temp-browse-handle.browse-handle :height
+     2616         .
+     2617       end.
+     2618       for each buf_temp-diasize-handle
+     2619       :
+     2620         delete buf_temp-diasize-handle .
+     2621       end.
+     2622       assign
+     2623         v-field-group-handle = frame Dialog-Frame :first-child
+     2624       .
+     2625       do while valid-handle(v-field-group-handle)
+     2626       :
+     2627         assign
+     2628           v-object-handle = v-field-group-handle :first-child
+     2629         .
+     2630         do while valid-handle(v-object-handle)
+     2631         :
+     2632           if  v-object-handle <> v-diasize-browse-handle :handle
+     2633           and can-query(v-object-handle, "row")
+     2634           and can-query(v-object-handle, "height")
+     2635           and ( v-object-handle :row > v-diasize-browse-handle :row )
+     2636           then do:
+     2637             find first buf_temp-browse-handle
+     2638               where buf_temp-browse-handle.browse-type   = 'height':u
+     2639                 and buf_temp-browse-handle.browse-handle = v-object-handle
+     2640               no-error .
+     2641             if available buf_temp-browse-handle
+     2642             then do:
+     2643             end.
+     2644             else do:
+     2645               create buf_temp-diasize-handle .
+     2646               assign
+     2647                 buf_temp-diasize-handle.handle-value  = v-object-handle
+     2648                 buf_temp-diasize-handle.save-position = v-object-handle :row
+     2649               .
+     2650             end.
+     2651           end.
+     2652           assign
+     2653             v-object-handle = v-object-handle :next-sibling
+     2654           .
+     2655         end.
+     2656         assign
+     2657           v-field-group-handle = v-field-group-handle :next-sibling
+     2658         .
+     2659       end.
+     2660       do with frame Dialog-Frame
+     2661       :
+     2662         hide v-diasize-resize-button .
+     2663         assign
+     2664           v-diasize-resize-button :row    = 1
+     2665           v-diasize-resize-button :column = 1
+     2666         .
+     2667       end.
+     2668       if p-change-value > 0
+     2669       then do:
+     2670         if frame Dialog-Frame :scrollable = true
+     2671         then do:
+     2672           assign
+     2673             frame Dialog-Frame :virtual-height = frame Dialog-Frame :virtual-height + p-change-value
+     2674             no-error .
+     2675           if error-status :error
+     2676           or error-status :get-message(1) <> ""
+     2677           then do:
+     2678             undo move_block, retry move_block .
+     2679           end.
+     2680         end.
+     2681         assign
+     2682           frame Dialog-Frame :height = frame Dialog-Frame :height + p-change-value
+     2683           no-error .
+     2684         if error-status :error
+     2685         or error-status :get-message(1) <> ""
+     2686         then do:
+     2687           undo move_block, retry move_block .
+     2688         end.
+     2689         assign
+     2690           v-diasize-browse-handle :height = v-diasize-browse-handle :height + p-change-value
+     2691           no-error .
+     2692         if error-status :error
+     2693         or error-status :get-message(1) <> ""
+     2694         then do:
+     2695           undo move_block, retry move_block .
+     2696         end.
+     2697         for each buf_temp-browse-handle
+     2698           where buf_temp-browse-handle.browse-type = 'height':u
+     2699         on error undo move_block, retry move_block
+     2700         :
+     2701           assign
+     2702             buf_temp-browse-handle.browse-handle :height
+     2703               = buf_temp-browse-handle.browse-handle :height + p-change-value
+     2704             no-error .
+     2705           if error-status :error
+     2706           or error-status :get-message(1) <> ""
+     2707           then do:
+     2708             undo move_block, retry move_block .
+     2709           end.
+     2710         end.
+     2711         for each buf_temp-diasize-handle
+     2712         on error undo move_block, retry move_block
+     2713         :
+     2714           assign
+     2715             v-object-handle = buf_temp-diasize-handle.handle-value
+     2716           .
+     2717           if v-object-handle <> v-diasize-resize-button
+     2718           then do:
+     2719             assign
+     2720               v-object-handle :row = v-object-handle :row + p-change-value
+     2721               no-error .
+     2722             if error-status :error
+     2723             or error-status :get-message(1) <> ""
+     2724             then do:
+     2725               undo move_block, retry move_block .
+     2726             end.
+     2727           end.
+     2728         end.
+     2729       end.
+     2730       else do:
+     2731         for each buf_temp-diasize-handle
+     2732         on error undo move_block, retry move_block
+     2733         :
+     2734           assign
+     2735             v-object-handle = buf_temp-diasize-handle.handle-value
+     2736           .
+     2737           if v-object-handle <> v-diasize-resize-button
+     2738           then do:
+     2739             assign
+     2740               v-object-handle :row = v-object-handle :row + p-change-value
+     2741               no-error .
+     2742             if error-status :error
+     2743             or error-status :get-message(1) <> ""
+     2744             then do:
+     2745               undo move_block, retry move_block .
+     2746             end.
+     2747           end.
+     2748         end.
+     2749         assign
+     2750           v-diasize-browse-handle :height = v-diasize-browse-handle :height + p-change-value
+     2751           no-error .
+     2752         if error-status :error
+     2753         or error-status :get-message(1) <> ""
+     2754         then do:
+     2755           undo move_block, retry move_block .
+     2756         end.
+     2757         for each buf_temp-browse-handle
+     2758           where buf_temp-browse-handle.browse-type = 'height':u
+     2759         on error undo move_block, retry move_block
+     2760         :
+     2761           assign
+     2762             buf_temp-browse-handle.browse-handle :height
+     2763               = buf_temp-browse-handle.browse-handle :height + p-change-value
+     2764             no-error .
+     2765           if error-status :error
+     2766           or error-status :get-message(1) <> ""
+     2767           then do:
+     2768             undo move_block, retry move_block .
+     2769           end.
+     2770         end.
+     2771         assign
+     2772           frame Dialog-Frame :height = frame Dialog-Frame :height + p-change-value
+     2773           no-error .
+     2774         if error-status :error
+     2775         or error-status :get-message(1) <> ""
+     2776         then do:
+     2777           undo move_block, retry move_block .
+     2778         end.
+     2779         if frame Dialog-Frame :scrollable = true
+     2780         then do:
+     2781           assign
+     2782             frame Dialog-Frame :virtual-height = frame Dialog-Frame :virtual-height + p-change-value
+     2783             no-error .
+     2784           if error-status :error
+     2785           or error-status :get-message(1) <> ""
+     2786           then do:
+     2787             undo move_block, retry move_block .
+     2788           end.
+     2789         end.
+     2790       end.
+     2791       if p-move-resize = true
+     2792       then do:
+     2793         run diasize_position-resize-button in this-procedure .
+     2794       end.
+     2795       if v-diasize-wndstore = true
+     2796       then do:
+     2797         if connected("ub") = true
+     2798         then do:
+     2799           define variable v-cntxt-db-num        as integer   no-undo .
+     2800           define variable v-cntxt-userid        as character no-undo .
+     2801           RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+     2802                                             , OUTPUT v-cntxt-userid
+     2803                                             ) .
+     2804           run gbl/wndsizew.p
+     2805             (input  v-cntxt-db-num
+     2806             ,input  v-cntxt-userid
+     2807             ,input  v-diasize-proc-name
+     2808             ,input  'height':u
+     2809             ,input  string(frame Dialog-Frame :height - v-diasize-orig-frame-height)
+     2810             ) .
+     2811         end.
+     2812       end.
+     2813     end.
+     2814     assign
+     2815       v-diasize-change-size = false
+     2816     .
+     2817   end procedure.
+     2818   procedure diasize_set-height :
+     2819     define input  parameter p-new-height  as decimal   no-undo .
+     2820     define input  parameter p-move-resize as logical   no-undo .
+     2821     do
+     2822     on error undo, return error return-value
+     2823     :
+     2824       run diasize_change-height in this-procedure
+     2825         (input  (p-new-height - frame Dialog-Frame :height)
+     2826         ,input  p-move-resize
+     2827         ) .
+     2828     end.
+     2829   end procedure.
+     2830   procedure diasize_change-width :
+     2831     define input  parameter p-change-value as decimal   no-undo .
+     2832     define input  parameter p-move-resize  as logical   no-undo .
+     2833     define variable v-field-group-handle   as handle    no-undo .
+     2834     define variable v-object-handle        as handle    no-undo .
+     2835     define variable v-frame-width          as decimal   no-undo .
+     2836     define variable v-frame-virtual-width  as decimal   no-undo .
+     2837     define variable v-browse-width         as decimal   no-undo .
+     2838     define variable v-window-width         as decimal   no-undo .
+     2839     define variable v-window-virtual-width as decimal   no-undo .
+     2840     define variable v-change-sign          as integer   no-undo .
+     2841     define buffer buf_temp-diasize-handle for temp-diasize-handle .
+     2842     define buffer buf_temp-browse-handle  for temp-browse-handle .
+     2843     if p-change-value > 0
+     2844     then do:
+     2845       if frame Dialog-Frame :width + p-change-value >
+     2846           session :width-chars
+     2847       then do:
+     2848         assign
+     2849           p-change-value = session :width-chars - frame Dialog-Frame :width
+     2850         .
+     2851         if p-change-value <= 0
+     2852         then do:
+     2853           run diasize_position-resize-button in this-procedure .
+     2854           return .
+     2855         end.
+     2856       end.
+     2857     end.
+     2858     if p-change-value < 0
+     2859     then do:
+     2860       if frame Dialog-Frame :width + p-change-value < v-diasize-orig-frame-width
+     2861       then do:
+     2862         assign
+     2863           p-change-value = v-diasize-orig-frame-width
+     2864                          - frame Dialog-Frame :width
+     2865         .
+     2866         if p-change-value >= 0
+     2867         then do:
+     2868           run diasize_position-resize-button in this-procedure .
+     2869           return .
+     2870         end.
+     2871       end.
+     2872     end.
+     2873     if p-change-value >= 0
+     2874     then do:
+     2875       assign
+     2876         v-change-sign = 1
+     2877       .
+     2878     end.
+     2879     else do:
+     2880       assign
+     2881         v-change-sign = -1
+     2882       .
+     2883     end.
+     2884     assign
+     2885       p-change-value = truncate(abs(p-change-value), 0) * v-change-sign
+     2886     .
+     2887     if p-change-value = 0
+     2888     then do:
+     2889       run diasize_position-resize-button in this-procedure .
+     2890       return .
+     2891     end.
+     2892     move_block:
+     2893     do
+     2894     on error undo move_block, leave move_block
+     2895     :
+     2896       if retry
+     2897       then do:
+     2898         do
+     2899         on error undo move_block, leave move_block
+     2900         :
+     2901           if p-change-value > 0
+     2902           then do:
+     2903             for each buf_temp-diasize-handle
+     2904             on error undo, next
+     2905             :
+     2906               assign
+     2907                 v-object-handle = buf_temp-diasize-handle.handle-value
+     2908               .
+     2909               if v-object-handle <> v-diasize-resize-button
+     2910               then do:
+     2911                 assign
+     2912                   v-object-handle :col = buf_temp-diasize-handle.save-position
+     2913                 .
+     2914               end.
+     2915             end.
+     2916             assign
+     2917               v-diasize-browse-handle :width = v-browse-width
+     2918             .
+     2919             for each buf_temp-browse-handle
+     2920               where buf_temp-browse-handle.browse-type = 'width':u
+     2921             on error undo, next
+     2922             :
+     2923               assign
+     2924                 buf_temp-browse-handle.browse-handle :width = buf_temp-browse-handle.original-size
+     2925               .
+     2926             end.
+     2927             assign
+     2928               frame Dialog-Frame :width = v-frame-width
+     2929             .
+     2930             if frame Dialog-Frame :scrollable = true
+     2931             then do:
+     2932               assign
+     2933                 frame Dialog-Frame :virtual-width = v-frame-virtual-width
+     2934               .
+     2935             end.
+     2936             run diasize_position-resize-button in this-procedure .
+     2937           end.
+     2938           else do:
+     2939             if frame Dialog-Frame :scrollable = true
+     2940             then do:
+     2941               assign
+     2942                 frame Dialog-Frame :virtual-width = v-frame-virtual-width
+     2943               .
+     2944             end.
+     2945             assign
+     2946               frame Dialog-Frame :width = v-frame-width
+     2947             .
+     2948             for each buf_temp-browse-handle
+     2949               where buf_temp-browse-handle.browse-type = 'width':u
+     2950             on error undo, next
+     2951             :
+     2952               assign
+     2953                 buf_temp-browse-handle.browse-handle :width = buf_temp-browse-handle.original-size
+     2954               .
+     2955             end.
+     2956             assign
+     2957               v-diasize-browse-handle :width = v-browse-width
+     2958             .
+     2959             for each buf_temp-diasize-handle
+     2960             on error undo, next
+     2961             :
+     2962               assign
+     2963                 v-object-handle = buf_temp-diasize-handle.handle-value
+     2964               .
+     2965               if v-object-handle <> v-diasize-resize-button
+     2966               then do:
+     2967                 assign
+     2968                   v-object-handle :col = buf_temp-diasize-handle.save-position
+     2969                 .
+     2970               end.
+     2971             end.
+     2972             run diasize_position-resize-button in this-procedure .
+     2973           end.
+     2974           assign
+     2975             v-diasize-change-size = false
+     2976           .
+     2977           leave move_block .
+     2978         end.
+     2979       end.
+     2980       assign
+     2981         v-diasize-need-full-display = true
+     2982       .
+     2983       if v-diasize-change-size = false
+     2984       then do:
+     2985         assign
+     2986           v-diasize-change-size = true
+     2987         .
+     2988       end.
+     2989       else do:
+     2990         return .
+     2991       end.
+     2992       assign
+     2993         v-frame-width = frame Dialog-Frame :width
+     2994         v-frame-virtual-width = frame Dialog-Frame :virtual-width
+     2995         v-browse-width = v-diasize-browse-handle :width
+     2996       .
+     2997       for each buf_temp-browse-handle
+     2998         where buf_temp-browse-handle.browse-type = 'width':u
+     2999       :
+     3000         assign
+     3001           buf_temp-browse-handle.original-size = buf_temp-browse-handle.browse-handle :width
+     3002         .
+     3003       end.
+     3004       for each buf_temp-diasize-handle
+     3005       :
+     3006         delete buf_temp-diasize-handle .
+     3007       end.
+     3008       assign
+     3009         v-field-group-handle = frame Dialog-Frame :first-child
+     3010       .
+     3011       do while valid-handle(v-field-group-handle)
+     3012       :
+     3013         assign
+     3014           v-object-handle = v-field-group-handle :first-child
+     3015         .
+     3016         do while valid-handle(v-object-handle)
+     3017         :
+     3018           if  v-object-handle <> v-diasize-browse-handle :handle
+     3019           and v-object-handle <> v-diasize-resize-button
+     3020           and can-query(v-object-handle, "row")
+     3021           and can-query(v-object-handle, "height")
+     3022           and ( v-object-handle :col + v-object-handle :width
+     3023                 > v-diasize-browse-handle :col + v-diasize-browse-handle :width
+     3024               )
+     3025           then do:
+     3026             find first buf_temp-browse-handle
+     3027               where buf_temp-browse-handle.browse-type   = 'width':u
+     3028                 and buf_temp-browse-handle.browse-handle = v-object-handle
+     3029               no-error .
+     3030             if available buf_temp-browse-handle
+     3031             then do:
+     3032             end.
+     3033             else do:
+     3034               create buf_temp-diasize-handle .
+     3035               assign
+     3036                 buf_temp-diasize-handle.handle-value  = v-object-handle
+     3037                 buf_temp-diasize-handle.save-position = v-object-handle :col
+     3038               .
+     3039             end.
+     3040           end.
+     3041           assign
+     3042             v-object-handle = v-object-handle :next-sibling
+     3043           .
+     3044         end.
+     3045         assign
+     3046           v-field-group-handle = v-field-group-handle :next-sibling
+     3047         .
+     3048       end.
+     3049       do with frame Dialog-Frame
+     3050       :
+     3051         hide v-diasize-resize-button .
+     3052         v-diasize-resize-button :row = 1.
+     3053         v-diasize-resize-button :column = 1.
+     3054       end.
+     3055       if p-change-value > 0
+     3056       then do:
+     3057         if frame Dialog-Frame :scrollable = true
+     3058         then do:
+     3059           assign
+     3060             frame Dialog-Frame :virtual-width = frame Dialog-Frame :virtual-width + p-change-value
+     3061             no-error .
+     3062           if error-status :error
+     3063           or error-status :get-message(1) <> ""
+     3064           then do:
+     3065             undo move_block, retry move_block.
+     3066           end.
+     3067         end.
+     3068         assign
+     3069           frame Dialog-Frame :width = v-frame-width + p-change-value
+     3070           no-error .
+     3071         if error-status :error
+     3072         or error-status :get-message(1) <> ""
+     3073         then do:
+     3074           undo move_block, retry move_block.
+     3075         end.
+     3076         assign
+     3077           v-diasize-browse-handle :width = v-browse-width + p-change-value
+     3078         no-error .
+     3079         if error-status :error
+     3080         or error-status :get-message(1) <> ""
+     3081         then do:
+     3082           undo move_block, retry move_block.
+     3083         end.
+     3084         for each buf_temp-browse-handle
+     3085           where buf_temp-browse-handle.browse-type = 'width':u
+     3086         on error undo move_block, retry move_block
+     3087         :
+     3088           assign
+     3089             buf_temp-browse-handle.browse-handle :width
+     3090               = buf_temp-browse-handle.browse-handle :width + p-change-value
+     3091             no-error .
+     3092           if error-status :error
+     3093           or error-status :get-message(1) <> ""
+     3094           then do:
+     3095             undo move_block, retry move_block .
+     3096           end.
+     3097         end.
+     3098         for each buf_temp-diasize-handle
+     3099         on error undo move_block, retry move_block
+     3100         :
+     3101           assign
+     3102             v-object-handle = buf_temp-diasize-handle.handle-value
+     3103           .
+     3104           if v-object-handle <> v-diasize-resize-button
+     3105           then do:
+     3106             assign
+     3107               v-object-handle :col = v-object-handle :col + p-change-value
+     3108               no-error .
+     3109             if error-status :error
+     3110             or error-status :get-message(1) <> ""
+     3111             then do:
+     3112               undo move_block, retry move_block .
+     3113             end.
+     3114           end.
+     3115         end.
+     3116       end.
+     3117       else do:
+     3118         for each buf_temp-diasize-handle
+     3119         on error undo move_block, retry move_block
+     3120         :
+     3121           assign
+     3122             v-object-handle = buf_temp-diasize-handle.handle-value
+     3123           .
+     3124           if v-object-handle <> v-diasize-resize-button
+     3125           then do:
+     3126             assign
+     3127               v-object-handle :col = v-object-handle :col + p-change-value
+     3128               no-error .
+     3129             if error-status :error
+     3130             or error-status :get-message(1) <> ""
+     3131             then do:
+     3132               undo move_block, retry move_block .
+     3133             end.
+     3134           end.
+     3135         end.
+     3136         for each buf_temp-browse-handle
+     3137           where buf_temp-browse-handle.browse-type = 'width':u
+     3138         on error undo move_block, retry move_block
+     3139         :
+     3140           assign
+     3141             buf_temp-browse-handle.browse-handle :width
+     3142               = buf_temp-browse-handle.browse-handle :width + p-change-value
+     3143             no-error .
+     3144           if error-status :error
+     3145           or error-status :get-message(1) <> ""
+     3146           then do:
+     3147             undo move_block, retry move_block .
+     3148           end.
+     3149         end.
+     3150         assign
+     3151           v-diasize-browse-handle :width = v-diasize-browse-handle :width + p-change-value
+     3152           no-error .
+     3153         if error-status :error
+     3154         or error-status :get-message(1) <> ""
+     3155         then do:
+     3156           undo move_block, retry move_block.
+     3157         end.
+     3158         assign
+     3159           frame Dialog-Frame :width = frame Dialog-Frame :width + p-change-value
+     3160         no-error .
+     3161         if error-status :error
+     3162         or error-status :get-message(1) <> ""
+     3163         then do:
+     3164           undo move_block, retry move_block.
+     3165         end.
+     3166         if frame Dialog-Frame :scrollable = true
+     3167         then do:
+     3168           assign
+     3169             frame Dialog-Frame :virtual-width = frame Dialog-Frame :virtual-width + p-change-value
+     3170           no-error .
+     3171           if error-status :error
+     3172           or error-status :get-message(1) <> ""
+     3173           then do:
+     3174             undo move_block, retry move_block.
+     3175           end.
+     3176         end.
+     3177       end.
+     3178       if p-move-resize
+     3179       then do:
+     3180         run diasize_position-resize-button in this-procedure .
+     3181       end.
+     3182       if v-diasize-wndstore = true
+     3183       then do:
+     3184         if connected("ub") = true
+     3185         then do:
+     3186           define variable v-cntxt-db-num        as integer   no-undo .
+     3187           define variable v-cntxt-userid        as character no-undo .
+     3188           RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+     3189                                             , OUTPUT v-cntxt-userid
+     3190                                             ) .
+     3191           run gbl/wndsizew.p
+     3192             (input  v-cntxt-db-num
+     3193             ,input  v-cntxt-userid
+     3194             ,input  v-diasize-proc-name
+     3195             ,input  'width':u
+     3196             ,input  string(frame Dialog-Frame :width - v-diasize-orig-frame-width)
+     3197             ) .
+     3198         end.
+     3199       end.
+     3200     end.
+     3201     assign
+     3202       v-diasize-change-size = false
+     3203     .
+     3204   end procedure.
+     3205   procedure diasize_set-width :
+     3206     define input  parameter p-new-width  as decimal   no-undo .
+     3207     define input  parameter p-move-resize as logical   no-undo .
+     3208     do
+     3209     on error undo, return error return-value
+     3210     :
+     3211       run diasize_change-width in this-procedure
+     3212         (input  (p-new-width - frame Dialog-Frame :width)
+     3213         ,input  p-move-resize
+     3214         ) .
+     3215     end.
+     3216   end procedure.
+     3217   procedure diasize_position-resize-button :
+     3218     do with frame Dialog-Frame
+     3219     :
+     3220       hide v-diasize-resize-button .
+     3221       assign
+     3222         v-diasize-resize-button :row = frame Dialog-Frame :height - v-diasize-resize-button :height
+     3223                     - 1
+     3224                     - (frame Dialog-Frame :border-bottom-pixels / session :pixels-per-row)
+     3225         v-diasize-resize-button :col = frame Dialog-Frame :width - v-diasize-resize-button :width
+     3226                     - 1
+     3227                     - (frame Dialog-Frame :border-right-pixels / session :pixels-per-column)
+     3228       .
+     3229       view v-diasize-resize-button .
+     3230     end.
+     3231   end procedure.
+     3232   on alt-right anywhere
+     3233   do:
+     3234     run diasize_change-width in this-procedure
+     3235       (input 1
+     3236       ,input true
+     3237       ) .
+     3238     return no-apply .
+     3239   end.
+     3240   on alt-left anywhere
+     3241   do:
+     3242     run diasize_change-width in this-procedure
+     3243       (input -1
+     3244       ,input true
+     3245       ) .
+     3246     return no-apply .
+     3247   end.
+     3248   on alt-down anywhere
+     3249   do:
+     3250     run diasize_change-height in this-procedure
+     3251       (input 1
+     3252       ,input true
+     3253       ) .
+     3254     return no-apply .
+     3255   end.
+     3256   on alt-up anywhere
+     3257   do:
+     3258     run diasize_change-height in this-procedure
+     3259       (input -1
+     3260       ,input true
+     3261       ) .
+     3262     return no-apply .
+     3263   end.
+     3264   on alt-enter of frame Dialog-Frame
+     3265   do:
+     3266     run diasize_maximize in this-procedure
+     3267       (input  ?
+     3268       ).
+     3269     return no-apply .
+     3270   end.
+     3271   procedure diasize_end-move :
+     3272     do
+     3273     on error undo, return error return-value
+     3274     :
+     3275       define variable v-row-delta as decimal   no-undo .
+     3276       define variable v-col-delta as decimal   no-undo .
+     3277       define variable v-new-row as decimal   no-undo .
+     3278       define variable v-new-col as decimal   no-undo .
+     3279       assign
+     3280         v-new-row = decimal(last-event :y) / (session :pixels-per-row)
+     3281         v-new-col = decimal(last-event :x) / (session :pixels-per-column)
+     3282       .
+     3283       assign
+     3284         v-row-delta = v-new-row - frame Dialog-Frame :height
+     3285         v-col-delta = v-new-col - frame Dialog-Frame :width
+     3286       .
+     3287       run diasize_change-height in this-procedure
+     3288         (input v-row-delta
+     3289         ,input true
+     3290         ) .
+     3291       run diasize_change-width in this-procedure
+     3292         (input v-col-delta
+     3293         ,input true
+     3294         ) .
+     3295     end.
+     3296   end procedure.
+     3297   procedure diasize_maximize :
+     3298     define input  parameter p-action as logical   no-undo .
+     3299     do
+     3300     on error undo, return error return-value
+     3301     :
+     3302       if p-action = ?
+     3303       then do:
+     3304         if v-diasize-need-maximize = true
+     3305         then do:
+     3306           assign
+     3307             p-action = true
+     3308           .
+     3309         end.
+     3310         else do:
+     3311           assign
+     3312             p-action = false
+     3313           .
+     3314         end.
+     3315       end.
+     3316       if p-action = true
+     3317       then do:
+     3318         run diasize_change-height in this-procedure
+     3319           (input decimal(session :work-area-height-pixels) / session :pixels-per-row
+     3320               - frame Dialog-Frame :height-chars
+     3321           ,input true
+     3322           ) .
+     3323         run diasize_change-width in this-procedure
+     3324           (input session :width-chars
+     3325               - frame Dialog-Frame :width-chars
+     3326           ,input true
+     3327           ) .
+     3328         assign
+     3329           v-diasize-need-maximize = false
+     3330         .
+     3331       end.
+     3332       else do:
+     3333         run diasize_change-width in this-procedure
+     3334           (input v-diasize-orig-frame-width
+     3335               - frame Dialog-Frame :width-chars
+     3336           ,input true
+     3337           ) .
+     3338         run diasize_change-height in this-procedure
+     3339           (input v-diasize-orig-frame-height
+     3340               - frame Dialog-Frame :height-chars
+     3341           ,input true
+     3342           ) .
+     3343         assign
+     3344           v-diasize-need-maximize = true
+     3345         .
+     3346       end.
+     3347     end.
+     3348   end procedure.
+     3349   procedure diasize_restore-orig-size :
+     3350     do
+     3351     on error undo, return error return-value
+     3352     :
+     3353       assign
+     3354         v-diasize-current-frame-width  = frame Dialog-Frame :width
+     3355         v-diasize-current-frame-height = frame Dialog-Frame :height
+     3356       .
+     3357       run diasize_set-height in this-procedure
+     3358         (input  v-diasize-orig-frame-height
+     3359         ,input  true
+     3360         ) .
+     3361       run diasize_set-width in this-procedure
+     3362         (input  v-diasize-orig-frame-width
+     3363         ,input  true
+     3364         ) .
+     3365     end.
+     3366   end procedure.
+     3367   procedure diasize_restore-current-size :
+     3368     do
+     3369     on error undo, return error return-value
+     3370     :
+     3371       run diasize_set-height in this-procedure
+     3372         (input  v-diasize-current-frame-height
+     3373         ,input  true
+     3374         ) .
+     3375       run diasize_set-width in this-procedure
+     3376         (input  v-diasize-current-frame-width
+     3377         ,input  true
+     3378         ) .
+     3379     end.
+     3380   end procedure.
+     3381   procedure diasize_set-browse-handle :
+     3382     define input  parameter p-browse-handle as handle   no-undo .
+     3383     define buffer buf_temp-browse-handle for temp-browse-handle .
+     3384     do
+     3385     on error undo, return error return-value
+     3386     :
+     3387       assign
+     3388         v-diasize-browse-handle = p-browse-handle
+     3389       .
+     3390       for each buf_temp-browse-handle
+     3391       on error undo, return error return-value
+     3392       :
+     3393         delete buf_temp-browse-handle .
+     3394       end.
+     3395     end.
+     3396   end procedure.
+     3397   procedure diasize_add_browse :
+     3398     define input  parameter p-browse-type   as character no-undo .
+     3399     define input  parameter p-browse-handle as handle    no-undo .
+     3400     define buffer buf_temp-browse-handle for temp-browse-handle .
+     3401     do
+     3402     on error undo, return error return-value
+     3403     :
+     3404       assign
+     3405         v-diasize-browse-number = v-diasize-browse-number + 1
+     3406       .
+     3407       create buf_temp-browse-handle .
+     3408       assign
+     3409         buf_temp-browse-handle.browse-type   = p-browse-type
+     3410         buf_temp-browse-handle.browse-number = v-diasize-browse-number
+     3411         buf_temp-browse-handle.browse-handle = p-browse-handle
+     3412       .
+     3413     end.
+     3414   end procedure.
+     3415   procedure diasize_init :
+     3416     define variable v-default-value    as logical   no-undo .
+     3417     define variable v-restore-saved    as logical   no-undo .
+     3418     define variable v-resize-value-str as character no-undo .
+     3419     do
+     3420     on error undo, return error return-value
+     3421     :
+     3422       do with frame Dialog-Frame
+     3423       :
+     3424         assign
+     3425           v-diasize-orig-frame-height = frame Dialog-Frame :height
+     3426           v-diasize-orig-frame-width  = frame Dialog-Frame :width
+     3427           v-diasize-browse-handle     = browse BRUserUbd :handle
+     3428         .
+     3429         create button v-diasize-resize-button
+     3430         assign
+     3431           parent        = frame Dialog-Frame :first-child
+     3432           label         = "s"
+     3433           height-pixels = 16
+     3434           width-pixels  = 16
+     3435           visible       = true
+     3436           sensitive     = true
+     3437           movable       = true
+     3438           triggers:
+     3439             on end-move persistent run diasize_end-move in this-procedure .
+     3440           end triggers.
+     3441         v-diasize-resize-button :load-mouse-pointer("SIZE") .
+     3442         v-diasize-resize-button :load-image("exe/grip.bmp":U) .
+     3443         v-diasize-resize-button :load-image-down("exe/grip.bmp":U) .
+     3444         v-diasize-resize-button :load-image-insensitive("exe/grip.bmp":U) .
+     3445         assign
+     3446           v-diasize-wndmax = false
+     3447         .
+     3448         if connected("ub") = true
+     3449         then do:
+     3450           define variable v-cntxt-db-num        as integer   no-undo .
+     3451           define variable v-cntxt-userid        as character no-undo .
+     3452           RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+     3453                                             , OUTPUT v-cntxt-userid
+     3454                                             ) .
+     3455           run gbl/wndpar_r.p
+     3456             (input  v-cntxt-db-num
+     3457             ,input  v-cntxt-userid
+     3458             ,input  'wndmax':U
+     3459             ,output v-diasize-wndmax
+     3460             ,output v-default-value
+     3461             ) .
+     3462         end.
+     3463         assign
+     3464           v-diasize-wndstore = false
+     3465         .
+     3466         if connected("ub") = true
+     3467         then do:
+     3468           run gbl/wndpar_r.p
+     3469             (input  v-cntxt-db-num
+     3470             ,input  v-cntxt-userid
+     3471             ,input  'wndstore':U
+     3472             ,output v-diasize-wndstore
+     3473             ,output v-default-value
+     3474             ) .
+     3475         end.
+     3476         assign
+     3477           v-diasize-proc-name = entry(1, program-name(2), '.')
+     3478         .
+     3479         if v-diasize-wndstore = true
+     3480         then do:
+     3481           assign
+     3482             v-restore-saved = false
+     3483           .
+     3484           if connected("ub") = true
+     3485           then do:
+     3486             run gbl/wndsizer.p
+     3487               (input  v-cntxt-db-num
+     3488               ,input  v-cntxt-userid
+     3489               ,input  v-diasize-proc-name
+     3490               ,input  'height':u
+     3491               ,output v-resize-value-str
+     3492               ) .
+     3493             if v-resize-value-str <> '':U
+     3494             then do:
+     3495               run diasize_change-height in this-procedure
+     3496                 (input  integer(v-resize-value-str)
+     3497                 ,input  true
+     3498                 ) .
+     3499               assign
+     3500                 v-restore-saved = true
+     3501               .
+     3502             end.
+     3503           end.
+     3504           if connected("ub") = true
+     3505           then do:
+     3506             run gbl/wndsizer.p
+     3507               (input  v-cntxt-db-num
+     3508               ,input  v-cntxt-userid
+     3509               ,input  v-diasize-proc-name
+     3510               ,input  'width':u
+     3511               ,output v-resize-value-str
+     3512               ) .
+     3513             if v-resize-value-str <> '':U
+     3514             then do:
+     3515               run diasize_change-width in this-procedure
+     3516                 (input  integer(v-resize-value-str)
+     3517                 ,input  true
+     3518                 ) .
+     3519               assign
+     3520                 v-restore-saved = true
+     3521               .
+     3522             end.
+     3523           end.
+     3524           if v-restore-saved <> true
+     3525           then do:
+     3526             if v-diasize-wndmax = true
+     3527             then do:
+     3528               run diasize_maximize in this-procedure
+     3529                 (input  true
+     3530                 ) .
+     3531             end.
+     3532           end.
+     3533         end.
+     3534         else do:
+     3535           if v-diasize-wndmax = true
+     3536           then do:
+     3537             run diasize_maximize in this-procedure
+     3538               (input  true
+     3539               ) .
+     3540           end.
+     3541         end.
+     3542       end.
+     3543     end.
+     3544   end procedure.
+     3545   procedure diasize_need-full-display :
+     3546     define output parameter p-need-full-display as logical   no-undo .
+     3547     do
+     3548     on error undo, return error return-value
+     3549     :
+     3550       assign
+     3551         p-need-full-display = v-diasize-need-full-display
+     3552       .
+     3553       assign
+     3554         v-diasize-need-full-display = false
+     3555       .
+     3556     end.
+     3557   end procedure.
+     3558   procedure get-context :
+     3559      define output parameter p-db-num as integer          no-undo.
+     3560      define output parameter p-user-id as character        no-undo.
+     3561      define variable v-login               as character    no-undo.
+     3562      define buffer buf_sys-ctrl    for ub.sys-ctrl .
+     3563      define buffer buf_user-login  for ub.user-login .
+     3564      do
+     3565      on error undo, return error
+     3566      :
+     3567            FIND FIRST buf_sys-ctrl no-lock.
+     3568            ASSIGN
+     3569               v-login = USERID("ub")
+     3570               p-db-num = buf_sys-ctrl.db-num
+     3571            .
+     3572            FIND FIRST buf_user-login
+     3573                 WHERE buf_user-login.db-num = p-db-num
+     3574                   AND buf_user-login.user-login = v-login
+     3575                 no-lock
+     3576                 no-error
+     3577                 .
+     3578            IF AVAILABLE buf_user-login
+     3579            THEN DO:
+     3580               assign
+     3581                  p-user-id = buf_user-login.user-id
+     3582               .
+     3583            END.
+     3584      end.
+     3585   end procedure.
+     3586       run diasize_init in this-procedure .
+     3587   MAIN-BLOCK:
+     3588   DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+     3589      ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+     3590   define variable vss-include-info13 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     3591     run mainmenu_getcntxt in parparentproc
+     3592       (output v-cntxt-db-num
+     3593       ,output v-cntxt-userid
+     3594       ,output v-cntxt-level
+     3595       ,output v-cntxt-host-code-obj
+     3596       ,output v-cntxt-obj-type
+     3597       ,output v-cntxt-obj-code
+     3598       ,output v-cntxt-db-num-obj
+     3599       ,output v-cntxt-is-admin
+     3600       ) .
+     3601       run init-fields in this-procedure .
+     3602       RUN enable_UI.
+     3603       find first user-account-attr where user-account-attr.user-id    eq g#userid
+     3604                                      and user-account-attr.attr-code  eq "superadm"
+     3605       no-lock no-error.
+     3606       if     available user-account-attr
+     3607          and logical(user-account-attr.attr-value) eq yes
+     3608       then
+     3609          mSyperAdm = yes.
+     3610       apply "VALUE-CHANGED" to rad-adm-gbd.
+     3611       apply "VALUE-CHANGED" to rad-adm-ubd.
+     3612       TOG-superAdm:sensitive = mSyperAdm.
+     3613       RAD-adm-gbd:sensitive = mSyperAdm.
+     3614       RAD-adm-Ubd:sensitive = mSyperAdm.
+     3615       RAD-adm-gbd:visible = g#db-num eq 0.
+     3616       RAD-adm-Ubd:visible = g#db-num eq 0.
+     3617       if p-mode = 'ПРОСМОТР':U
+     3618       then do:
+     3619           disable
+     3620               all
+     3621           except
+     3622               b-help
+     3623               b-close
+     3624           with frame Dialog-Frame .
+     3625           apply "entry":U to b-close.
+     3626       end.
+     3627       else do:
+     3628           apply "entry":U to fi-last-name.
+     3629       end.
+     3630       WAIT-FOR GO OF FRAME Dialog-Frame.
+     3631   END.
+     3632   RUN disable_UI.
+     3633   PROCEDURE check-user :
+     3634       define output parameter p-have-error    as logical          no-undo.
+     3635       define output parameter p-error-desc    as character        no-undo.
+     3636       define output parameter p-focus-widget  as handle           no-undo.
+     3637   do
+     3638   with frame Dialog-Frame
+     3639   on error undo, return error
+     3640   :
+     3641       if fi-nik :screen-value = "":U
+     3642       then do:
+     3643           assign
+     3644               p-have-error = yes
+     3645               p-error-desc = substitute( "Не задан псевдоним пользователя.&1&1Для корректного отображения пользователя в системе&1необходимо определить псевдоним.&1&1Определите псевдоним пользователя.", chr(10) )
+     3646               p-focus-widget = fi-nik :handle
+     3647           .
+     3648       end.
+     3649       if fi-last-name :screen-value = "":U
+     3650       then do:
+     3651           if p-have-error = no
+     3652           then do:
+     3653               assign
+     3654                   p-focus-widget = fi-last-name :handle
+     3655               .
+     3656           end.
+     3657           assign
+     3658               p-have-error = yes
+     3659               p-error-desc = substitute( "&2Не задана фамилия пользователя.&1&1Для корректного отображения пользователя в системе&1необходимо ввести фамилию.&1&1Введите фамилию пользователя."
+     3660                                   , chr(10)
+     3661                                   , ( if p-error-desc = "":U then "":U else p-error-desc + chr(10) + chr(10) )
+     3662                                   )
+     3663           .
+     3664       end.
+     3665   end.
+     3666   END PROCEDURE.
+     3667   PROCEDURE disable_UI :
+     3668     HIDE FRAME Dialog-Frame.
+     3669   END PROCEDURE.
+     3670   PROCEDURE enable_UI :
+     3671     DISPLAY fi-last-name fi-first-name fi-second-name fi-PS-label-2 fi-nik
+     3672             fi-phone-number fi-mobile-phone-number fi-company fi-department
+     3673             fi-position fi-room fi-e-mail fi-internal-phone-number
+     3674             fi-PS-label ed-PS fi-user-id
+     3675             fi-psn-code v-psn-name
+     3676             RAD-adm-gbd TOG-superAdm RAD-adm-Ubd
+     3677         WITH FRAME Dialog-Frame.
+     3678     ENABLE b-exit b-close b-help fi-last-name fi-first-name fi-second-name fi-nik
+     3679            fi-phone-number fi-mobile-phone-number fi-company fi-department
+     3680            fi-position fi-room fi-e-mail fi-internal-phone-number ed-PS
+     3681            fi-psn-code b-psn v-psn-name
+     3682            btnAdm BtnDel
+     3683            RAD-adm-gbd TOG-superAdm  RAD-adm-Ubd BRUserUbd
+     3684         WITH FRAME Dialog-Frame.
+     3685     VIEW FRAME Dialog-Frame.
+     3686     OPEN QUERY BRUserUbd FOR EACH UserDbAdm NO-LOCK INDEXED-REPOSITION.
+     3687   END PROCEDURE.
+     3688   PROCEDURE get-nik-autofill :
+     3689       define input parameter p-last-name      as character        no-undo.
+     3690       define input parameter p-first-name     as character        no-undo.
+     3691       define input parameter p-second-name    as character        no-undo.
+     3692       define input parameter p-nik            as character        no-undo.
+     3693       define output parameter p-nik-autofill  as logical          no-undo.
+     3694   do
+     3695   on error undo, return error
+     3696   :
+     3697       if p-nik = trim( substitute( "&1 &2 &3", p-last-name, p-first-name, p-second-name ) )
+     3698       then do:
+     3699           assign
+     3700               p-nik-autofill = yes
+     3701           .
+     3702       end.
+     3703       else do:
+     3704           assign
+     3705               p-nik-autofill = no
+     3706           .
+     3707       end.
+     3708   end.
+     3709   END PROCEDURE.
+     3710   PROCEDURE init-fields :
+     3711   do
+     3712   on error undo, return error
+     3713   :
+     3714       define buffer buf_clients     for ub.clients .
+     3715       assign
+     3716           v-user-exit-enabled = no
+     3717           p-accepted          = no
+     3718       .
+     3719       IF p-in-psn-code <> 0
+     3720       OR p-in-psn-code <> ?
+     3721       THEN DO:
+     3722         FIND FIRST buf_clients
+     3723              WHERE buf_clients.obj-code = p-in-psn-code
+     3724                and buf_clients.obj-type = 'чел':U
+     3725              no-lock
+     3726              no-error
+     3727              .
+     3728       END.
+     3729       assign
+     3730           fi-user-id                  = p-in-user-id
+     3731           fi-last-name                = p-in-last-name
+     3732           fi-first-name               = p-in-first-name
+     3733           fi-second-name              = p-in-second-name
+     3734           fi-nik                      = p-in-nik
+     3735           fi-phone-number             = p-in-phone-number
+     3736           fi-mobile-phone-number      = p-in-mobile-phone-number
+     3737           fi-company                  = p-in-company
+     3738           fi-department               = p-in-department
+     3739           fi-position                 = p-in-position
+     3740           fi-room                     = p-in-room
+     3741           fi-e-mail                   = p-in-e-mail
+     3742           fi-internal-phone-number    = p-in-internal-phone-number
+     3743           ed-PS                       = p-in-PS
+     3744           fi-psn-code                 = p-in-psn-code
+     3745           v-psn-name                  = IF AVAILABLE buf_clients THEN buf_clients.obj-name ELSE "Не найден"
+     3746           rad-adm-gbd                 = if i-adm-gbd eq yes
+     3747                                         then 1
+     3748                                         else if i-adm-gbd eq no
+     3749                                         then 3
+     3750                                         else 2
+     3751           tog-superAdm                = i-superAdm
+     3752           rad-adm-Ubd                 = if i-adm-Ubd eq yes
+     3753                                         then 1
+     3754                                         else if i-adm-Ubd eq no
+     3755                                         then 3
+     3756                                         else 2
+     3757       .
+     3758       run get-nik-autofill in this-procedure (
+     3759             input fi-last-name
+     3760           , input fi-first-name
+     3761           , input fi-second-name
+     3762           , input fi-nik
+     3763           , output v-user-nik-autofill
+     3764       ).
+     3765   end.
+     3766   END PROCEDURE.
+     3767   PROCEDURE person-user :
+     3768   define input-output parameter p-code               as integer          no-undo.
+     3769   define input-output parameter p-name               as character        no-undo.
+     3770   do
+     3771   on error undo, return error
+     3772   :
+     3773      define buffer buf_clients     for ub.clients .
+     3774      define variable v-recid-person as character no-undo.
+     3775      run ref/cli-all.w ( input parparentproc
+     3776                        , input "b-sel"
+     3777                        , input 'чел':U
+     3778                        , input 'все':U
+     3779                        , input 'текущие':U
+     3780                        , input ?
+     3781                        , input ",,,,,,NO,,"
+     3782                        , input "lock-cli-type":U
+     3783                        , output v-recid-person
+     3784                        ) .
+     3785      IF v-recid-person <> "":U
+     3786      THEN DO:
+     3787         FIND FIRST buf_clients
+     3788              WHERE RECID(buf_clients) = INTEGER(ENTRY(1, v-recid-person))
+     3789              no-lock
+     3790              no-error
+     3791              .
+     3792         IF AVAILABLE buf_clients
+     3793         THEN DO:
+     3794            ASSIGN
+     3795               p-code = buf_clients.obj-code
+     3796               p-name = buf_clients.obj-name
+     3797            .
+     3798         END.
+     3799         ELSE DO:
+     3800            assign
+     3801               p-code = ?
+     3802               p-name = "":U
+     3803            .
+     3804         END.
+     3805      END.
+     3806   end.
+     3807   END PROCEDURE.
+     3808   FUNCTION GetAdm RETURNS CHARACTER
+     3809     (  ) :
+     3810     RETURN if UserDbAdm.db-adm
+     3811            then "Администратор"
+     3812            else if UserDbAdm.db-block
+     3813            then "Заблокирована"
+     3814            else if UserDbAdm.db-usr
+     3815            then "Пользователь"
+     3816            else "Отсутствует"
+     3817              .
+     3818   END FUNCTION.

@@ -1,0 +1,1238 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-mode   as character        no-undo.
+        3   on write of ub.cli-grp     override do: end.
+        4   on write of ub.clients     override do: end.
+        5   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        6   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        7   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        8   define variable vss-workfile    as character no-undo init "$Workfile: ini-cli.p $":U .
+        9   define variable vss-archive     as character no-undo init "$Archive: utl/ini-cli.p $":U .
+       10   define variable vss-description as character no-undo init "Инициализация полных имен групп в clients, gds-obj".
+       11   procedure vss-get-info :
+       12     define output parameter p-vss-revision    like vss-revision    no-undo .
+       13     define output parameter p-vss-author      like vss-author      no-undo .
+       14     define output parameter p-vss-date        like vss-date        no-undo .
+       15     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       16     define output parameter p-vss-archive     like vss-archive     no-undo .
+       17     define output parameter p-vss-description like vss-description no-undo .
+       18     assign
+       19       p-vss-revision    = vss-revision
+       20       p-vss-author      = vss-author
+       21       p-vss-date        = vss-date
+       22       p-vss-workfile    = vss-workfile
+       23       p-vss-archive     = vss-archive
+       24       p-vss-description = vss-description
+       25     .
+       26   end procedure.
+       27   procedure vss-get-parameters :
+       28     define output parameter p-vss-parameters as character no-undo .
+       29   end procedure.
+       30   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       31   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       32   define variable v-vssrevis-logger                   as handle    no-undo .
+       33   procedure vss-logevent :
+       34     define input  parameter p-extra-paramters as character no-undo .
+       35     define variable v-vssrevis-parameters as character no-undo .
+       36     do
+       37     on error undo, return error return-value
+       38     :
+       39       if  valid-handle(v-vssrevis-logger)
+       40       and v-vssrevis-logger :get-signature("logevent") <> ""
+       41       then do:
+       42         run vss-get-parameters in this-procedure
+       43           (output v-vssrevis-parameters
+       44           ).
+       45         run logevent in v-vssrevis-logger
+       46           (input vss-workfile
+       47           ,input vss-revision
+       48           ,input v-vssrevis-parameters
+       49           ,input p-extra-paramters
+       50           ).
+       51       end.
+       52     end.
+       53   end procedure.
+       54   assign
+       55     v-vssrevis-logger = g#vssrevis-logger
+       56   .
+       57   if  valid-handle(v-vssrevis-logger)
+       58   and v-vssrevis-logger :get-signature("logevent") <> ""
+       59   then do:
+       60     assign
+       61       v-vssrevis-logevent = true
+       62     .
+       63     run vss-logevent in this-procedure (input vss-description) .
+       64   end.
+       65   define new global shared variable g#language as character no-undo .
+       66   if g#language <> '' and g#language <> 'rus':U then do:
+       67     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       68   end.
+       69   define new global shared variable g#library  as handle no-undo .
+       70   define new global shared variable g#library2 as handle no-undo .
+       71   define   shared variable g#auto as logical no-undo.
+       72   define   shared variable g#news as logical no-undo.
+       73   define   shared variable g#oxml as logical no-undo.
+       74   define   shared variable g#esys as logical no-undo.
+       75   define   shared variable g#news-source-db as integer no-undo.
+       76   define   shared variable g#esys-source-esys as integer no-undo.
+       77   define   shared variable g#db-num as integer   no-undo .
+       78   define   shared variable g#userid as character no-undo .
+       79   define   shared variable g#passwd as character no-undo .
+       80   define variable vss-include-info0 as character format "X(65)" no-undo
+       81   initial "@(#)$Workfile$ $Revision$".
+       82   define temp-table temp_cgrplib_grp no-undo
+       83       field sel           as character
+       84       field full-name     as character
+       85       field sort-name     as character
+       86       field node-code     as integer
+       87       field upper-code    as integer
+       88       field d-pcnt        as decimal
+       89       field name          as character
+       90       field level         as integer
+       91       field mark          as character
+       92       index pi is primary unique sort-name
+       93       index fn full-name
+       94       index nc is unique node-code
+       95       index sl sel
+       96       index uc upper-code
+       97   .
+       98   define temp-table temp_cgrplib_found-grp no-undo
+       99       field full-name   as character
+      100       field sort-name   as character
+      101       field node-code   as integer
+      102       field level       as integer
+      103       field is-terminal as logical
+      104       field d-pcnt      as decimal
+      105       index pi is primary unique sort-name
+      106       index fn full-name
+      107       index lv level
+      108       index it is-terminal
+      109   .
+      110   define temp-table temp_cfound-result-nodelist no-undo
+      111       field node-code     as recid
+      112       field processed     as logical
+      113       field full-name     as character
+      114       field sort-name     as character
+      115       index pi is primary unique node-code
+      116       index ps processed
+      117   .
+      118   procedure cli-grplib-get-sort-name :
+      119   do
+      120   on error undo, return error
+      121   :
+      122   define input parameter p-node-code  as integer      no-undo.
+      123   define output parameter p-sort-name as character    no-undo.
+      124       define variable v-upper-code    as integer           no-undo.
+      125       define buffer buf_cli-grp       for ub.cli-grp.
+      126       define buffer buf_upper_cli-grp for ub.cli-grp.
+      127       find first buf_cli-grp no-lock
+      128            where buf_cli-grp.node-code = p-node-code
+      129       no-error.
+      130       if not available buf_cli-grp
+      131       then do:
+      132           undo, return error "cli-grplib-get-sort-name: Не найдена группа клиентов с кодом " + string( p-node-code ).
+      133       end.
+      134       assign
+      135           p-sort-name  = ""
+      136           v-upper-code = 1
+      137       .
+      138       do while buf_cli-grp.upper-code <> 0
+      139       on error undo, return error "cli-grplib-get-sort-name: Ошибка составления полного имени группы"
+      140       :
+      141           assign
+      142               p-sort-name  = buf_cli-grp.node-name
+      143                            + (if p-sort-name <> "" then chr(2) else "")
+      144                            + p-sort-name
+      145               v-upper-code = buf_cli-grp.upper-code
+      146           .
+      147           find first buf_cli-grp no-lock
+      148                where buf_cli-grp.node-code = v-upper-code
+      149           no-error.
+      150           if not available buf_cli-grp
+      151           then do:
+      152               undo, return error "cli-grplib-get-sort-name: Не найдена группа клиентов с кодом "
+      153                                   + string( v-upper-code )
+      154                                   + ". Ошибка ссылки в дереве товаров для узла p-node-code".
+      155           end.
+      156       end.
+      157   end.
+      158   end procedure.
+      159   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      160   procedure cli-grplib-get-full-name :
+      161      define input parameter  p-node-code  as integer      no-undo.
+      162      define output parameter p-full-name as character    no-undo.
+      163   do
+      164   on error undo, return error
+      165   :
+      166       define variable v-upper-code    as integer           no-undo.
+      167       define buffer buf_cli-grp       for ub.cli-grp.
+      168       define buffer buf_upper_cli-grp for ub.cli-grp.
+      169       find first buf_cli-grp no-lock
+      170            where buf_cli-grp.node-code = p-node-code
+      171       no-error.
+      172       if not available buf_cli-grp
+      173       then do:
+      174           undo, return error "cli-grplib-get-full-name: Не найдена группа клиентов с кодом " + string( p-node-code ).
+      175       end.
+      176       assign
+      177           p-full-name  = ""
+      178           v-upper-code = 1
+      179       .
+      180       do while buf_cli-grp.upper-code <> 0
+      181       on error undo, return error "grplib-get-full-name: Ошибка составления полного имени группы"
+      182       :
+      183           assign
+      184               p-full-name  = buf_cli-grp.node-name
+      185                            + (if p-full-name <> "" then chr(47) else "")
+      186                            + p-full-name
+      187               v-upper-code = buf_cli-grp.upper-code
+      188           .
+      189           find first buf_cli-grp no-lock
+      190                where buf_cli-grp.node-code = v-upper-code
+      191           no-error.
+      192           if not available buf_cli-grp
+      193           then do:
+      194               undo, return error "cli-grplib-get-full-name: Не найдена группа клиентов с кодом "
+      195                                   + string( v-upper-code )
+      196                                   + ". Ошибка ссылки в дереве товаров для узла p-node-code".
+      197           end.
+      198       end.
+      199       assign
+      200       p-full-name = p-full-name + (if p-full-name = "":U then "":U else chr(47))
+      201       .
+      202   end.
+      203   end .
+      204   procedure cgrplib-get-node-from-full-name :
+      205   define input parameter p-full-name as character no-undo .
+      206   define output parameter p-node-code as integer no-undo .
+      207   define variable v-ii as integer no-undo .
+      208   define variable v-upper-code as integer no-undo .
+      209   define variable v-root-code as integer no-undo .
+      210   define variable v-entry as character no-undo .
+      211   define buffer buf_cli-grp       for ub.cli-grp.
+      212   do
+      213   on error undo, return error
+      214   :
+      215     find first buf_cli-grp no-lock
+      216         where buf_cli-grp.upper-code = 0
+      217     no-error .
+      218     if not available buf_cli-grp
+      219     then do:
+      220         undo, return error substitute("Не найдена корневая группа клиентов (upper-code = 0)").
+      221     end.
+      222     else do:
+      223       assign
+      224       v-root-code = buf_cli-grp.node-code
+      225       .
+      226     end.
+      227     v-upper-code = v-root-code.
+      228     do v-ii = 1 to num-entries(p-full-name, chr(47)):
+      229       assign
+      230       v-entry = entry(v-ii, p-full-name, chr(47)).
+      231       if v-entry = '' then leave.
+      232       find first buf_cli-grp no-lock where
+      233                 buf_cli-grp.node-name = v-entry
+      234             and buf_cli-grp.upper-code = v-upper-code
+      235             no-error.
+      236       if not available buf_cli-grp then do:
+      237         undo, return error substitute("Не найдена подгруппа &1 в группе с вн. кодом &2", v-entry, v-upper-code).
+      238       end.
+      239       else do:
+      240         p-node-code = buf_cli-grp.node-code.
+      241         v-upper-code = buf_cli-grp.node-code.
+      242       end.
+      243     end.
+      244   end.
+      245   end .
+      246   procedure cgrplib-get-root-code :
+      247   do
+      248   on error undo, return error
+      249   :
+      250   define output parameter p-root-code as integer      no-undo.
+      251       define buffer buf_cli-grp       for ub.cli-grp.
+      252       find first buf_cli-grp no-lock
+      253           where buf_cli-grp.upper-code = 0
+      254       no-error .
+      255       if not available buf_cli-grp
+      256       then do:
+      257           undo, return error .
+      258       end.
+      259       else do:
+      260           assign
+      261               p-root-code = buf_cli-grp.node-code
+      262           .
+      263       end.
+      264   end.
+      265   end procedure.
+      266   procedure cgrplib-find-grp-by-full-name :
+      267   do
+      268   on error undo, return error
+      269   :
+      270   define input parameter p-search-name  as character    no-undo.
+      271   define input parameter p-fill-path    as logical      no-undo.
+      272       define variable v-upper-code    as integer          no-undo.
+      273       define variable v-not-found     as logical init yes no-undo.
+      274       define variable v-counter       as integer           no-undo.
+      275       define variable v-level         as integer           no-undo.
+      276       define variable v-full-name     as character         no-undo.
+      277       define variable v-sort-name     as character         no-undo.
+      278       define buffer buf_cli-grp       for ub.cli-grp.
+      279       assign
+      280           p-search-name = replace( p-search-name, chr(47), chr(2) )
+      281       .
+      282       run cgrplib-get-root-code ( output v-upper-code ) no-error .
+      283       if error-status :error
+      284       then do:
+      285           undo, return error "cgrplib-expand-name: Ошибка при поиске корневого узла".
+      286       end.
+      287       assign
+      288           v-full-name  = ""
+      289           v-level      = num-entries( p-search-name, chr(2) )
+      290       .
+      291       for each temp_cgrplib_found-grp
+      292       :
+      293           delete temp_cgrplib_found-grp.
+      294       end.
+      295       start-name-analyze:
+      296       do v-counter = 1 to v-level
+      297       :
+      298           if v-counter < v-level
+      299           then do:
+      300               find first buf_cli-grp no-lock
+      301                    where buf_cli-grp.upper-code = v-upper-code
+      302                      and buf_cli-grp.node-name  = entry( v-counter, p-search-name, chr(2) )
+      303               no-error .
+      304               if not available buf_cli-grp
+      305               then do:
+      306                   assign
+      307                       v-full-name  = p-search-name
+      308                       v-sort-name  = p-search-name
+      309                   .
+      310                   return error "cgrplib-expand-name: не найдена группа " + entry( v-level, p-search-name, chr(2) ).
+      311               end.
+      312               else do:
+      313                   assign
+      314                       v-full-name = v-full-name + (if v-full-name = "" then "" else chr(47) )         + buf_cli-grp.node-name
+      315                       v-sort-name = v-sort-name + ( if v-sort-name = "" then "" else chr(2) ) + buf_cli-grp.node-name
+      316                       v-upper-code = buf_cli-grp.node-code
+      317                   .
+      318                   if p-fill-path = yes
+      319                   then do:
+      320                       create temp_cgrplib_found-grp.
+      321                       assign
+      322                           temp_cgrplib_found-grp.full-name = v-full-name + chr(47)
+      323                           temp_cgrplib_found-grp.sort-name = v-sort-name
+      324                           temp_cgrplib_found-grp.node-code = v-upper-code
+      325                           temp_cgrplib_found-grp.level     = v-counter
+      326                       .
+      327                   end.
+      328               end.
+      329           end.
+      330           else do:
+      331               for each buf_cli-grp no-lock
+      332                  where buf_cli-grp.upper-code = v-upper-code
+      333                    and buf_cli-grp.node-name begins entry( v-counter, p-search-name, chr(2) )
+      334               :
+      335                   assign
+      336                       v-not-found = no
+      337                   .
+      338                   create temp_cgrplib_found-grp.
+      339                   assign
+      340                       temp_cgrplib_found-grp.full-name = v-full-name
+      341                                                           + ( if v-full-name = "" then "" else chr(47) )
+      342                                                           + buf_cli-grp.node-name + chr(47)
+      343                       temp_cgrplib_found-grp.sort-name = v-sort-name
+      344                                                           + ( if v-sort-name = "" then "" else chr(2) )
+      345                                                           + buf_cli-grp.node-name
+      346                       temp_cgrplib_found-grp.node-code = buf_cli-grp.node-code
+      347                       temp_cgrplib_found-grp.level     = v-level
+      348                   .
+      349               end.
+      350               if v-not-found = yes
+      351               then do:
+      352                   assign
+      353                       v-full-name  = p-search-name
+      354                       v-sort-name  = p-search-name
+      355                   .
+      356                   for each temp_cgrplib_found-grp
+      357                   :
+      358                       delete temp_cgrplib_found-grp.
+      359                   end.
+      360                   return error "cgrplib-expand-name: не найдена группа " + entry( v-level, p-search-name, chr(2) ).
+      361               end.
+      362           end.
+      363       end.
+      364   end.
+      365   end procedure.
+      366   procedure cgrplib-find-all-subgroup :
+      367   do
+      368   on error undo, return error
+      369   :
+      370   define input parameter p-start-node-code    as integer      no-undo.
+      371   define input parameter p-terminal-only      as logical      no-undo.
+      372       define variable v-start-full-name   as character     no-undo.
+      373       define variable v-start-sort-name   as character     no-undo.
+      374       define variable v-not-found         as logical       no-undo.
+      375       define variable v-is-terminal       as logical       no-undo.
+      376       define variable v-d-pcnt            as decimal       no-undo.
+      377       define buffer buf_cli-grp           for ub.cli-grp.
+      378       create temp_cfound-result-nodelist.
+      379       assign
+      380           temp_cfound-result-nodelist.node-code = p-start-node-code
+      381           temp_cfound-result-nodelist.processed = no
+      382       .
+      383       run cli-grplib-get-full-name in this-procedure (
+      384             input p-start-node-code
+      385           , output v-start-full-name
+      386       ).
+      387       run cli-grplib-get-sort-name in this-procedure (
+      388             input p-start-node-code
+      389           , output v-start-sort-name
+      390       ).
+      391       process-nodes:
+      392       do while yes
+      393       :
+      394           find first temp_cfound-result-nodelist
+      395                where temp_cfound-result-nodelist.node-code = p-start-node-code
+      396           .
+      397           assign
+      398               temp_cfound-result-nodelist.processed = yes
+      399           .
+      400           for each buf_cli-grp no-lock
+      401              where buf_cli-grp.upper-code = p-start-node-code
+      402           on error undo, return error
+      403           :
+      404               run cgrplib-is-terminal in this-procedure (
+      405                     input buf_cli-grp.node-code
+      406                   , output v-is-terminal
+      407               ).
+      408               if v-is-terminal = yes
+      409               then do:
+      410                   create temp_cgrplib_found-grp.
+      411                   assign
+      412                       temp_cgrplib_found-grp.full-name   = right-trim(v-start-full-name, chr(47)) +
+      413                                                           chr(47) + buf_cli-grp.node-name + chr(47)
+      414                       temp_cgrplib_found-grp.sort-name   = right-trim(v-start-sort-name, chr(2)) +
+      415                                                           chr(2) + buf_cli-grp.node-name + chr(2)
+      416                       temp_cgrplib_found-grp.node-code   = buf_cli-grp.node-code
+      417                       temp_cgrplib_found-grp.is-terminal = yes
+      418                   .
+      419                  run cgrplib-get-pcnt-value in this-procedure ( input temp_cgrplib_found-grp.node-code , output v-d-pcnt) no-error .
+      420                  if not error-status:error then do:
+      421                    temp_cgrplib_found-grp.d-pcnt = v-d-pcnt.
+      422                  end.
+      423                  else do:
+      424                    temp_cgrplib_found-grp.d-pcnt = ?.
+      425                  end.
+      426               end.
+      427               else do:
+      428                   create temp_cfound-result-nodelist.
+      429                   assign
+      430                       temp_cfound-result-nodelist.node-code = buf_cli-grp.node-code
+      431                       temp_cfound-result-nodelist.full-name = right-trim(v-start-full-name, chr(47)) +
+      432                                                              chr(47) + buf_cli-grp.node-name + chr(47)
+      433                       temp_cfound-result-nodelist.sort-name = right-trim(v-start-sort-name, chr(2)) +
+      434                                                              chr(2) + buf_cli-grp.node-name + chr(2)
+      435                       temp_cfound-result-nodelist.processed = no
+      436                   .
+      437                   if p-terminal-only = no
+      438                   then do:
+      439                       create temp_cgrplib_found-grp.
+      440                       assign
+      441                           temp_cgrplib_found-grp.full-name   = right-trim(v-start-full-name, chr(47)) +
+      442                                                               chr(47) + buf_cli-grp.node-name + chr(47)
+      443                           temp_cgrplib_found-grp.sort-name   = right-trim(v-start-sort-name, chr(2)) +
+      444                                                               chr(2) + buf_cli-grp.node-name + chr(2)
+      445                           temp_cgrplib_found-grp.node-code   = buf_cli-grp.node-code
+      446                           temp_cgrplib_found-grp.is-terminal = no
+      447                       .
+      448                   end.
+      449               end.
+      450           end.
+      451           find first temp_cfound-result-nodelist
+      452                where temp_cfound-result-nodelist.processed = no
+      453           no-error.
+      454           if not available temp_cfound-result-nodelist
+      455           then do:
+      456               leave process-nodes.
+      457           end.
+      458           else do:
+      459               assign
+      460                   p-start-node-code = temp_cfound-result-nodelist.node-code
+      461                   v-start-full-name = temp_cfound-result-nodelist.full-name
+      462                   v-start-sort-name = temp_cfound-result-nodelist.sort-name
+      463               .
+      464           end.
+      465       end.
+      466   end.
+      467   end procedure.
+      468   procedure cgrplib-expand-name :
+      469   do
+      470   on error undo, return error
+      471   :
+      472   define input parameter p-start-name as character        no-undo.
+      473   define output parameter p-end-name  as character        no-undo.
+      474       define variable v-is-terminal     as logical           no-undo.
+      475       define buffer buf_temp_cgrplib_found-grp     for temp_cgrplib_found-grp.
+      476       run cgrplib-find-grp-by-full-name in this-procedure (
+      477             input p-start-name
+      478           , input no
+      479       ) no-error.
+      480       run cgrplib-get-max-substring in this-procedure (
+      481                   input length( p-start-name )
+      482                 , output p-end-name
+      483       ) no-error .
+      484       if error-status :error
+      485       then do:
+      486           assign
+      487               p-end-name = ""
+      488           .
+      489       end.
+      490       else do:
+      491           find first temp_cgrplib_found-grp
+      492               where temp_cgrplib_found-grp.full-name = p-end-name
+      493           no-error.
+      494           if available temp_cgrplib_found-grp
+      495           then do:
+      496               find first buf_temp_cgrplib_found-grp
+      497                   where buf_temp_cgrplib_found-grp.full-name begins p-end-name
+      498                   and recid( buf_temp_cgrplib_found-grp ) <> recid( temp_cgrplib_found-grp )
+      499               no-error.
+      500               if not available buf_temp_cgrplib_found-grp
+      501               then do:
+      502                   run cgrplib-is-terminal in this-procedure (
+      503                       input temp_cgrplib_found-grp.node-code
+      504                       , output v-is-terminal
+      505                   ).
+      506               end.
+      507           end.
+      508       end.
+      509   end.
+      510   end procedure.
+      511   procedure cgrplib-get-max-substring :
+      512   do
+      513   on error undo, return error
+      514   :
+      515   define input parameter p-min-substring-length   as integer      no-undo.
+      516   define output parameter p-substring             as character    no-undo.
+      517           define variable v-char-counter  as integer           no-undo.
+      518           define variable v-current-char  as character         no-undo.
+      519           define variable v-names-counter  as integer           no-undo.
+      520           define variable v-base-string   as character         no-undo.
+      521           assign
+      522               v-char-counter  = p-min-substring-length
+      523           .
+      524           find first temp_cgrplib_found-grp no-error.
+      525           if not available temp_cgrplib_found-grp
+      526           then do:
+      527               undo, return error "cgrplib-get-max-substring: Нет строк для вычисления общей подстроки".
+      528           end.
+      529           else do:
+      530               assign
+      531                   v-base-string = temp_cgrplib_found-grp.full-name
+      532               .
+      533               counter-block:
+      534               do while yes
+      535               on error undo, return error "cgrplib-get-max-substring: Ошибка вычисления продолжения имени группы."
+      536               :
+      537                   assign
+      538                       v-char-counter  = v-char-counter + 1
+      539                       v-current-char  = substring( v-base-string, v-char-counter, 1 )
+      540                       v-names-counter = 0
+      541                   .
+      542                   compare-block:
+      543                   for each temp_cgrplib_found-grp
+      544                   :
+      545                       assign
+      546                           v-names-counter = v-names-counter + 1
+      547                       .
+      548                       if v-names-counter = 1
+      549                       then do:
+      550                           next compare-block.
+      551                       end.
+      552                       if substring( temp_cgrplib_found-grp.full-name, v-char-counter, 1 ) <> v-current-char
+      553                       then do:
+      554                           leave counter-block.
+      555                       end.
+      556                   end.
+      557                   if v-names-counter = 1
+      558                   then do:
+      559                       assign
+      560                           p-substring = v-base-string
+      561                       .
+      562                       return.
+      563                   end.
+      564               end.
+      565               assign
+      566                   p-substring = substring( v-base-string, 1, v-char-counter - 1 )
+      567               .
+      568           end.
+      569   end.
+      570   end procedure.
+      571   procedure cgrplib-is-terminal :
+      572   do
+      573   on error undo, return error "Ошибка процедуры cgrplib-is-terminal"
+      574   :
+      575   define input parameter p-node-code      as integer      no-undo.
+      576   define output parameter p-is-terminal   as logical      no-undo.
+      577       define buffer buf_cli-grp       for ub.cli-grp.
+      578       find first buf_cli-grp no-lock
+      579           where buf_cli-grp.upper-code = p-node-code
+      580       no-error .
+      581       if not available buf_cli-grp
+      582       then do:
+      583           assign
+      584               p-is-terminal = yes
+      585           .
+      586       end.
+      587       else do:
+      588           assign
+      589               p-is-terminal = no
+      590           .
+      591       end.
+      592   end.
+      593   end procedure.
+      594   procedure cgrplib-have-clients :
+      595   do
+      596   on error undo, return error
+      597   :
+      598   define input parameter p-node-code      as integer      no-undo.
+      599   define output parameter p-have-clients   as logical      no-undo.
+      600       define buffer buf_clients         for ub.clients.
+      601       find first buf_clients no-lock
+      602            where buf_clients.grp-code = p-node-code
+      603       no-error .
+      604       if available buf_clients
+      605       then do:
+      606           assign
+      607               p-have-clients = yes
+      608           .
+      609       end.
+      610       else do:
+      611           assign
+      612               p-have-clients = no
+      613           .
+      614       end.
+      615   end.
+      616   end procedure.
+      617   procedure cgrplib-find-by-substring :
+      618   do
+      619   on error undo, return error
+      620   :
+      621   define input parameter p-start-code         as integer      no-undo.
+      622   define input parameter p-full-search-string as character    no-undo.
+      623   define output parameter p-found-code        as integer      no-undo.
+      624   define output parameter p-full-name         as character    no-undo.
+      625       define variable v-start-code     as integer           no-undo.
+      626       define variable v-found          as logical  init no  no-undo.
+      627       define buffer buf_cli-grp       for ub.cli-grp.
+      628       search-grp:
+      629       for each buf_cli-grp no-lock
+      630           where buf_cli-grp.node-code > p-start-code
+      631       :
+      632           if index( buf_cli-grp.node-name, p-full-search-string ) <> 0
+      633           then do:
+      634               assign
+      635                   p-found-code = buf_cli-grp.node-code
+      636                   v-found      = yes
+      637               .
+      638               run cli-grplib-get-full-name in this-procedure (
+      639                     input p-found-code
+      640                   , output p-full-name
+      641               ) no-error .
+      642               if error-status :error
+      643               then do:
+      644                   undo, return error "cgrplib-find-by-substring: Ошибка вычисления полного имени группы." + chr(10) + return-value.
+      645               end.
+      646               leave search-grp.
+      647           end.
+      648       end.
+      649       if v-found = yes
+      650       then do:
+      651       end.
+      652       else do:
+      653           assign
+      654               p-full-name  = ""
+      655               p-found-code = 0
+      656           .
+      657       end.
+      658   end.
+      659   end procedure.
+      660   procedure cgrplib-analyze-grp-name :
+      661   do
+      662   on error undo, return error
+      663   :
+      664   define input parameter p-grp-name       as character            no-undo.
+      665   define input parameter p-upper-code     as integer              no-undo.
+      666   define output parameter p-error-message as character init ""    no-undo.
+      667       define variable v-char-list     as character    no-undo.
+      668       define variable v-char-counter  as integer      no-undo.
+      669       define variable v-full-name     as character    no-undo.
+      670       if p-grp-name = "" then do:
+      671           assign
+      672               p-error-message = "Название группы не может быть пустым.".
+      673           .
+      674       end.
+      675       else do:
+      676           assign
+      677               v-char-list = "47,92,58,63,34,60,62,171,187,183"
+      678           .
+      679           do v-char-counter = 1 to num-entries( v-char-list )
+      680           :
+      681               if index( p-grp-name, chr( integer( entry( v-char-counter, v-char-list ) ) ) ) <> 0
+      682               then do:
+      683                   assign
+      684                       p-error-message = 'Название группы не может содержать символы /\:*?"<>|«»·'
+      685                   .
+      686                   return.
+      687               end.
+      688           end.
+      689           run cli-grplib-get-full-name in this-procedure (
+      690                 input p-upper-code
+      691               , output v-full-name
+      692           ) no-error .
+      693           if error-status :error
+      694           then do:
+      695               undo, return error "cgrplib-analyze-grp-name: Не удалось вычислить полное имя группы." + chr(10) + return-value.
+      696           end.
+      697           if length( v-full-name ) + 1 + length( p-grp-name ) > 120
+      698           then do:
+      699               assign
+      700                   p-error-message = 'Полное название группы не может содержать более 120 символов.'
+      701               .
+      702           end.
+      703       end.
+      704   end.
+      705   end procedure.
+      706   procedure cgrplib-get-lvl-num :
+      707   define input parameter p-node-code  as integer      no-undo.
+      708   define output parameter p-lvl-num   as integer      no-undo.
+      709       define variable v-full-name    as character    no-undo.
+      710   do
+      711   on error undo, return error
+      712   :
+      713       run cli-grplib-get-full-name in this-procedure (
+      714             input p-node-code
+      715           , output v-full-name
+      716       ).
+      717       assign
+      718           p-lvl-num = num-entries( v-full-name, chr(47) ) - 1
+      719       .
+      720       if p-lvl-num = -1
+      721       then do:
+      722           assign
+      723               p-lvl-num = 0
+      724           .
+      725       end.
+      726   end.
+      727   end procedure.
+      728   PROCEDURE cgrplib-get-pcnt-value :
+      729   DEFINE INPUT PARAMETER p-node-code AS INTEGER NO-UNDO.
+      730   DEFINE output PARAMETER p-pcnt-value AS DECIMAL NO-UNDO.
+      731   define buffer buf_dis-grp-rule for ub.dis-grp-rule.
+      732   define buffer buf_dis-rule for ub.dis-rule.
+      733   find first buf_dis-grp-rule no-lock where
+      734             buf_dis-grp-rule.classif-type = 'cli-grp':U
+      735         and buf_dis-grp-rule.node-code = p-node-code
+      736         and buf_dis-grp-rule.host-code = 0
+      737         and buf_dis-grp-rule.obj-type = '':U
+      738         and buf_dis-grp-rule.obj-code = 0
+      739         and buf_dis-grp-rule.pos-type = '-':U
+      740         and buf_dis-grp-rule.discnt-role = 'cli-grp-pcnt':U no-error.
+      741   if available buf_dis-grp-rule then do:
+      742     find first buf_dis-rule no-lock where
+      743               buf_dis-rule.rule-num = buf_dis-grp-rule.rule-num no-error.
+      744     if available buf_dis-rule then do:
+      745       assign
+      746       p-pcnt-value        = buf_dis-rule.discnt-value.
+      747       .
+      748     end.
+      749   end.
+      750   END PROCEDURE.
+      751   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      752   procedure cur-time :
+      753      define output parameter p-today as date      no-undo .
+      754      define output parameter p-time  as integer   no-undo .
+      755     do
+      756     on error undo, return error
+      757     :
+      758       define variable v-date1 as date      no-undo .
+      759       define variable v-date2 as date      no-undo .
+      760       define variable v-time  as integer   no-undo .
+      761       assign
+      762         v-date1 = today
+      763         v-time  = time
+      764         v-date2 = today
+      765       .
+      766       if v-date1 <> v-date2
+      767       then do:
+      768         assign
+      769           v-date1 = today
+      770           v-time  = v-time
+      771         .
+      772       end.
+      773       assign
+      774         p-today = v-date1
+      775         p-time  = v-time
+      776       .
+      777     end.
+      778   end.
+      779   function cur-time-date returns character
+      780   :
+      781     return string(today, '99/99/9999':U) .
+      782   end.
+      783   function cur-time-mjd returns decimal
+      784   :
+      785     define variable v-date as date      no-undo .
+      786     define variable v-time as integer   no-undo .
+      787     run cur-time in this-procedure
+      788       (output v-date
+      789       ,output v-time
+      790       ) .
+      791     return integer(v-date) - 2400002 + (v-time / 86400) .
+      792   end.
+      793   function cur-time-get-ending-index returns integer
+      794   (input p-number as integer
+      795   )
+      796   :
+      797     if p-number < 0
+      798     or p-number = ?
+      799     then do:
+      800       return 1 .
+      801     end.
+      802     define variable v-rest as integer   no-undo .
+      803     assign
+      804       p-number = p-number modulo 100
+      805     .
+      806     if p-number < 20
+      807     then do:
+      808       assign
+      809         v-rest = p-number
+      810       .
+      811     end.
+      812     else do:
+      813       assign
+      814         v-rest = p-number modulo 10
+      815       .
+      816     end.
+      817     case v-rest :
+      818       when 1
+      819       then do:
+      820         return 2 .
+      821       end.
+      822       when 2 or
+      823       when 3 or
+      824       when 4
+      825       then do:
+      826         return 3 .
+      827       end.
+      828       otherwise do:
+      829         return 1 .
+      830       end.
+      831     end case .
+      832   end.
+      833   procedure cur-time-mjd-to-date :
+      834      define input  parameter i-mjd-diff as decimal no-undo.
+      835      define output parameter o-Date     as date    no-undo.
+      836      define output parameter o-Time     as integer no-undo.
+      837      define variable v-day-number as integer   no-undo .
+      838      if    i-mjd-diff < 0
+      839         or i-mjd-diff = ?
+      840      then do:
+      841         return "?" .
+      842      end.
+      843      assign
+      844         v-day-number = truncate(i-mjd-diff,0).
+      845         o-Date = date(v-day-number + 2400002).
+      846         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      847     .
+      848   end.
+      849   function cur-time-mjd-to-string returns character
+      850   (input p-mjd-diff as decimal
+      851   )
+      852   :
+      853     define variable v-day-number as integer   no-undo .
+      854     define variable v-seconds    as integer   no-undo .
+      855     define variable v-hour       as integer   no-undo .
+      856     define variable v-min        as integer   no-undo .
+      857     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      858     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      859     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      860     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      861     if p-mjd-diff < 0
+      862     or p-mjd-diff = ?
+      863     then do:
+      864       return "?" .
+      865     end.
+      866     assign
+      867       v-day-number = integer(truncate(p-mjd-diff,0))
+      868       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      869     .
+      870     if v-seconds > 86400
+      871     then do:
+      872       assign
+      873         v-seconds = 86400 - 1
+      874       .
+      875     end.
+      876     if v-seconds < 0
+      877     then do:
+      878       assign
+      879         v-seconds = 0
+      880       .
+      881     end.
+      882     assign
+      883       v-hour = truncate(v-seconds / 3600, 0)
+      884     .
+      885     assign
+      886       v-seconds = v-seconds modulo 3600
+      887     .
+      888     assign
+      889       v-min = truncate(v-seconds / 60, 0)
+      890     .
+      891     assign
+      892       v-seconds = v-seconds modulo 60
+      893     .
+      894     return
+      895         (if v-day-number <> 0
+      896           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      897           else ""
+      898         )
+      899       + (if v-day-number <> 0 or v-hour <> 0
+      900           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      901           else ""
+      902         )
+      903       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      904           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      905           else ""
+      906         )
+      907       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      908       .
+      909   end.
+      910   function cur-time-string returns character
+      911   :
+      912     define variable v-date as date      no-undo .
+      913     define variable v-time as integer   no-undo .
+      914     run cur-time in this-procedure
+      915       (output v-date
+      916       ,output v-time
+      917       ) .
+      918     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      919   end.
+      920   function cur-time-string-sec returns character
+      921   :
+      922     define variable v-date as date      no-undo .
+      923     define variable v-time as integer   no-undo .
+      924     run cur-time in this-procedure
+      925       (output v-date
+      926       ,output v-time
+      927       ) .
+      928     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      929   end.
+      930   function cur-time-custom  returns character
+      931   (input p-prefix as character
+      932   ,input p-date-format as character
+      933   ,input p-delimiter as character
+      934   ,input p-time-format as character
+      935   ,input p-suffix as character
+      936   )
+      937   :
+      938     define variable v-date as date      no-undo .
+      939     define variable v-time as integer   no-undo .
+      940     run cur-time in this-procedure
+      941       (output v-date
+      942       ,output v-time
+      943       ) .
+      944     return
+      945       p-prefix
+      946       + string(v-date, p-date-format)
+      947       + p-delimiter
+      948       + string(v-time, p-time-format)
+      949       + p-suffix
+      950       .
+      951   end.
+      952   function cur-time-print  returns character
+      953   :
+      954     define variable v-date as date      no-undo .
+      955     define variable v-time as integer   no-undo .
+      956     run cur-time in this-procedure
+      957       (output v-date
+      958       ,output v-time
+      959       ) .
+      960     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      961   end.
+      962   function cur-time-datetime returns datetime
+      963   :
+      964     define variable v-char as character no-undo .
+      965     define variable v-datetime as datetime no-undo .
+      966     v-char = cur-time-string().
+      967     v-datetime = datetime(v-char).
+      968     return  v-datetime.
+      969   end.
+      970   function cur-time-string-msec returns character
+      971   :
+      972     define variable v-date as datetime  no-undo .
+      973     v-date = now.
+      974     return string(v-date) .
+      975   end.
+      976       define stream out-stream.
+      977       define variable v-clients-counter       as integer      init 0  no-undo.
+      978       define variable v-full-grp-name         as character            no-undo.
+      979       define variable v-yesno                 as logical              no-undo.
+      980       define frame a
+      981           v-clients-counter       label "Обработано объектов"
+      982       with.
+      983       define buffer buf_clients       for ub.clients.
+      984       define buffer buf_cli-grp       for ub.cli-grp.
+      985   do
+      986   for buf_clients
+      987     , buf_cli-grp
+      988   on error undo, return error
+      989   :
+      990       assign
+      991           v-yesno = no
+      992       .
+      993       if p-mode = "update":U
+      994       then do:
+      995           message
+      996               "Инициализация полных названий групп во всех объектах."
+      997               skip "Вы уверены?"
+      998           view-as alert-box question
+      999           buttons OK-Cancel
+     1000           title "Группы объектов"
+     1001           update v-yesno.
+     1002       end.
+     1003       else do:
+     1004           message
+     1005               "Тест полных названий групп во всех объектах."
+     1006               skip "Вы уверены?"
+     1007           view-as alert-box question
+     1008           buttons OK-Cancel
+     1009           title "Группы объектов"
+     1010           update v-yesno.
+     1011       end.
+     1012       if v-yesno <> yes
+     1013       then do:
+     1014           return.
+     1015       end.
+     1016   if session :set-wait-state( "compiler" ) then.
+     1017       view frame a.
+     1018       for each buf_clients no-lock
+     1019       on error undo, return error
+     1020       :
+     1021           run set-full-grp-name in this-procedure (
+     1022                 input p-mode
+     1023               , input buf_clients.obj-type
+     1024               , input buf_clients.obj-code
+     1025               , input-output v-clients-counter
+     1026           ) no-error.
+     1027           if error-status :error
+     1028           then do:
+     1029               run write-log in this-procedure (
+     1030                     input 2
+     1031                   , input substitute( "&1: *** Ошибка вычисления полного имени группы объекта. Объект: &2 &3. &4. &5."
+     1032                                       , p-mode
+     1033                                       , buf_clients.obj-type
+     1034                                       , buf_clients.obj-code
+     1035                                       , return-value
+     1036                                       , trim(error-status :get-message(1))
+     1037                                   )
+     1038               ).
+     1039           end.
+     1040           display
+     1041               v-clients-counter
+     1042           with frame a
+     1043           view-as dialog-box.
+     1044       end.
+     1045       for each buf_cli-grp no-lock
+     1046       on error undo, return error
+     1047       :
+     1048           run set-grp-fields in this-procedure (
+     1049                 input p-mode
+     1050               , input buf_cli-grp.node-code
+     1051           ) no-error.
+     1052           if error-status :error
+     1053           then do:
+     1054               message
+     1055                        vss-workfile vss-revision vss-description
+     1056                   skip(1)
+     1057                   skip "Ошибка вычисления полей группы."
+     1058                   skip(1)
+     1059                   skip "Код группы:" buf_cli-grp.node-code
+     1060                   skip "Имя группы:" buf_cli-grp.node-name
+     1061                   skip return-value
+     1062                   skip trim(error-status :get-message(1))
+     1063                        trim(error-status :get-message(2))
+     1064                        trim(error-status :get-message(3))
+     1065                   skip(1)
+     1066                   skip "Будет сделана запись об ошибке в лог."
+     1067               view-as alert-box error.
+     1068               run write-log in this-procedure (
+     1069                     input 2
+     1070                   , input substitute( "&1: *** Ошибка вычисления полей группы объектов. Группа: &2 &3. &4. &5."
+     1071                                       , p-mode
+     1072                                       , buf_cli-grp.node-code
+     1073                                       , buf_cli-grp.node-name
+     1074                                       , return-value
+     1075                                       , trim(error-status :get-message(1))
+     1076                                   )
+     1077               ).
+     1078           end.
+     1079       end.
+     1080   if session :set-wait-state( "" ) then.
+     1081       if p-mode = "update":U
+     1082       then do:
+     1083           message
+     1084               "Инициализация групп объектов завершена."
+     1085           view-as alert-box.
+     1086       end.
+     1087       else do:
+     1088           message
+     1089               "Тест групп объектов завершен."
+     1090               skip(1)
+     1091               skip "Результат проверки выведен в файл"
+     1092               skip "ini-cli.txt":U
+     1093           view-as alert-box.
+     1094       end.
+     1095   end.
+     1096   procedure set-grp-fields :
+     1097   define input parameter p-mode       as character        no-undo.
+     1098   define input parameter p-node-code  as integer          no-undo.
+     1099       define variable v-is-terminal   as logical      no-undo.
+     1100       define variable v-lvl-num       as integer      no-undo.
+     1101       define buffer buf_cli-grp       for ub.cli-grp.
+     1102   do
+     1103   for buf_cli-grp
+     1104   on error undo, return error
+     1105   :
+     1106       if p-mode = "update":U
+     1107       then do:
+     1108           find first buf_cli-grp exclusive-lock
+     1109                where buf_cli-grp.node-code = p-node-code
+     1110           .
+     1111       end.
+     1112       else do:
+     1113           find first buf_cli-grp no-lock
+     1114                where buf_cli-grp.node-code = p-node-code
+     1115           .
+     1116       end.
+     1117       run cgrplib-is-terminal in this-procedure (
+     1118             input p-node-code
+     1119           , output v-is-terminal
+     1120       ).
+     1121       if buf_cli-grp.is-term <> v-is-terminal
+     1122       then do:
+     1123           run write-log in this-procedure (
+     1124                 input 2
+     1125               , input substitute( "&1: изменение is-terminal для группы &2 &3: &4|&5"
+     1126                                   , p-mode
+     1127                                   , buf_cli-grp.node-code
+     1128                                   , buf_cli-grp.node-name
+     1129                                   , buf_cli-grp.is-term
+     1130                                   , v-is-terminal )
+     1131           ).
+     1132           if p-mode = "update":U
+     1133           then do:
+     1134               assign
+     1135                   buf_cli-grp.is-term = v-is-terminal
+     1136               .
+     1137           end.
+     1138       end.
+     1139       run cgrplib-get-lvl-num in this-procedure (
+     1140             input p-node-code
+     1141           , output v-lvl-num
+     1142       ).
+     1143       if buf_cli-grp.lvl-num <> v-lvl-num
+     1144       then do:
+     1145           run write-log in this-procedure (
+     1146                 input 2
+     1147               , input substitute( "&1: изменение lvl-num для группы &2 &3: &4|&5"
+     1148                                   , p-mode
+     1149                                   , buf_cli-grp.node-code
+     1150                                   , buf_cli-grp.node-name
+     1151                                   , buf_cli-grp.lvl-num
+     1152                                   , v-lvl-num )
+     1153           ).
+     1154           if p-mode = "update":U
+     1155           then do:
+     1156               assign
+     1157                   buf_cli-grp.lvl-num = v-lvl-num
+     1158               .
+     1159           end.
+     1160       end.
+     1161   end.
+     1162   end procedure.
+     1163   procedure write-log :
+     1164   define input parameter p-tab-position   as integer          no-undo.
+     1165   define input parameter p-log-text       as character        no-undo.
+     1166   do
+     1167   on error undo, return error
+     1168   :
+     1169       output stream out-stream to "ini-cli.txt":U append.
+     1170       if p-tab-position <> 0
+     1171       then do:
+     1172           put stream out-stream unformatted
+     1173               cur-time-string-sec()
+     1174           .
+     1175           put stream out-stream unformatted
+     1176               space( p-tab-position * 2 + 1 )
+     1177           .
+     1178       end.
+     1179       put stream out-stream unformatted
+     1180           p-log-text
+     1181       .
+     1182       put stream out-stream unformatted
+     1183           chr(10)
+     1184       .
+     1185       output stream out-stream close.
+     1186   end.
+     1187   end procedure.
+     1188   procedure set-full-grp-name :
+     1189   define input parameter p-mode                       as character        no-undo.
+     1190   define input parameter p-obj-type                   as character        no-undo.
+     1191   define input parameter p-obj-code                   as integer          no-undo.
+     1192   define input-output parameter p-clients-counter     as integer          no-undo.
+     1193       define buffer buf_clients         for ub.clients.
+     1194   do
+     1195   for buf_clients
+     1196   on error undo, return error
+     1197   :
+     1198       assign
+     1199           p-clients-counter = p-clients-counter + 1
+     1200       .
+     1201       if p-mode = "update":U
+     1202       then do:
+     1203           find first buf_clients exclusive-lock
+     1204                where buf_clients.obj-type = p-obj-type
+     1205                  and buf_clients.obj-code = p-obj-code
+     1206           .
+     1207       end.
+     1208       else do:
+     1209           find first buf_clients no-lock
+     1210                where buf_clients.obj-type = p-obj-type
+     1211                  and buf_clients.obj-code = p-obj-code
+     1212           .
+     1213       end.
+     1214       run cli-grplib-get-full-name in this-procedure (
+     1215             input buf_clients.grp-code
+     1216           , output v-full-grp-name
+     1217       ).
+     1218       if buf_clients.grp-name <> v-full-grp-name
+     1219       then do:
+     1220           run write-log in this-procedure (
+     1221                 input 2
+     1222               , input substitute( "&1: изменение полного имени группы объекта: &2|&3. Объект: &4 &5."
+     1223                                   , p-mode
+     1224                                   , buf_clients.grp-name
+     1225                                   , v-full-grp-name
+     1226                                   , buf_clients.obj-type
+     1227                                   , buf_clients.obj-code
+     1228                                 )
+     1229           ).
+     1230           if p-mode = "update":U
+     1231           then do:
+     1232               assign
+     1233                   buf_clients.grp-name = v-full-grp-name
+     1234               .
+     1235           end.
+     1236       end.
+     1237   end.
+     1238   end procedure.

@@ -1,0 +1,61 @@
+/*
+
+$Revision$
+$Author$
+$Date$
+$Workfile$
+$Archive$
+
+отсылка масок МЦ - процедура отсылки
+
+Автор: Бахтадзе Наталья Викторовна
+Дата создания: 07/06/07
+Author: Bakhtadze Natalya
+Creation date: 07/06/07
+
+*/
+
+&scoped-define vssseq {&sequence}
+define variable vss-include-info{&vssseq} as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+
+PROCEDURE SENDING:
+/*define input parameter p-full-stop-list-code as character no-undo .      */
+DEFINE VARIABLE fq as integer no-undo .
+define variable glog as logical no-undo .
+
+FOR EACH ub.cash-desk NO-LOCK WHERE
+        ub.cash-desk.db-num = g#db-num AND
+         ub.cash-desk.obj-code = i-obj-code AND
+        ub.cash-desk.cash-on   AND
+        ub.cash-desk.pos-type = {&cd-type-IBM-XML}
+BREAK
+By ub.cash-desk.pos-type :
+    /*выполним действия, разнящиеся для разных типов касс -
+    разные настройки в progress.ini - разные операции со spool-dir и т.д.*/
+  IF FIRST-OF(ub.cash-desk.pos-type) then do:
+    { str/cdg-gen.i
+    &cd-buffer=ub.cash-desk
+    &subject=wth-ser
+    &cdt-ibm-xml=yes
+    }
+
+    /*пройдем цикл по всем кассам одного типа*/
+    RUN for-cash-cycle in this-procedure /*( input p-full-stop-list-code)*/ no-error.
+  END. /*IF FIRST-OF(ub.cash-desk.pos-type*/
+
+    /*выполним действия, разнящиеся для разных типов касс - подчистки, сообщения и т.д.*/
+
+  IF LAST-OF(ub.cash-desk.pos-type) then do:
+    { str/cds-gen.i
+    &cd-buffer=ub.cash-desk
+    &subject=wth-ser
+    &cdt-ibm-xml=yes
+    &out-title="'Передача масок серийных МЦ'"
+    &out-title-add="'добавление масок серийных МЦ'"
+    &out-title-del="'удаление масок серийных МЦ'"
+    }
+  END.
+END. /*FOR EACH cash-desk*/
+
+END PROCEDURE.
+/* $Workfile$ e n d */

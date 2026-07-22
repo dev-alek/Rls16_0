@@ -1,0 +1,170 @@
+block-level on error undo, throw.
+define input parameter parparentproc as widget-handle no-undo .
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+define variable vss-author      as character no-undo init "$Author: expertek $":U .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: sum-grpr.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: str/sum-grpr.p $":U .
+define variable vss-description as character no-undo init "Запуск справочника групп товаров на кассах".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+define   shared variable g#auto as logical no-undo.
+define   shared variable g#news as logical no-undo.
+define   shared variable g#oxml as logical no-undo.
+define   shared variable g#esys as logical no-undo.
+define   shared variable g#news-source-db as integer no-undo.
+define   shared variable g#esys-source-esys as integer no-undo.
+define   shared variable g#db-num as integer   no-undo .
+define   shared variable g#userid as character no-undo .
+define   shared variable g#passwd as character no-undo .
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  define variable v-cntxt-db-num        as integer   no-undo .
+  define variable v-cntxt-userid        as character no-undo .
+  define variable v-cntxt-level         as character no-undo .
+  define variable v-cntxt-host-code-obj as integer   no-undo .
+  define variable v-cntxt-obj-type      as character no-undo .
+  define variable v-cntxt-obj-code      as integer   no-undo .
+  define variable v-cntxt-db-num-obj    as integer   no-undo .
+  define variable v-cntxt-is-admin      as logical   no-undo .
+DEFINE VARIABLE rid-list as character no-undo .
+DEFINE VARIABLE choice as integer no-undo .
+DEFINE VARIABLE v-exit  as logical no-undo .
+define buffer buf_clients for ub.clients.
+do
+on error undo, return error
+:
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  run mainmenu_getcntxt in parparentproc
+    (output v-cntxt-db-num
+    ,output v-cntxt-userid
+    ,output v-cntxt-level
+    ,output v-cntxt-host-code-obj
+    ,output v-cntxt-obj-type
+    ,output v-cntxt-obj-code
+    ,output v-cntxt-db-num-obj
+    ,output v-cntxt-is-admin
+    ) .
+  find first buf_clients No-LOCK WHERE
+             buf_clients.obj-type = v-cntxt-obj-type
+         AND buf_clients.obj-code = v-cntxt-obj-code.
+  do while v-exit = no:
+    if v-cntxt-obj-type = 'маг':U and buf_clients.db-num = v-cntxt-db-num then do:
+      run gbl/d-askw.w (input "Работа со справочником групп товаров на кассах",
+                    input "Выберите нужную функцию",
+                    input "|^",
+                    input "Работа со справочником|Передача на кассу|Удаление с кассы|Выход",
+                    input "|||",
+                    input 1,
+                    input 4,
+                    output choice).
+      if choice = 4 then do:
+        assign
+        v-exit = yes
+        .
+        return.
+      end.
+    end.
+    else do:
+      run gbl/d-askw.w (input "Работа со справочником групп товаров на кассах",
+                    input "Выберите нужную функцию",
+                    input "|^",
+                    input "Работа со справочником|Передача на кассу^disable|Удаление с кассы^disable|Выход",
+                    input "|||",
+                    input 1,
+                    input 4,
+                    output choice).
+      if choice = 4 then do:
+        assign
+        v-exit = yes
+        .
+        return.
+      end.
+    end.
+    CASE choice:
+      when 1 then do:
+        case v-cntxt-db-num :
+          when 0 then do:
+            run ref/sum-grps.w ( input parparentproc
+                                ,input 'b-add':U
+                                ,input-output rid-list).
+          end.
+          otherwise do:
+            run ref/sum-grps.w ( input parparentproc
+                                ,input  '':U
+                                ,input-output rid-list).
+          end.
+        END CASE.
+      end.
+      when 2 then do:
+        run str/sndgrup.p ( input parparentproc
+                           ,input v-cntxt-obj-code
+                           ,input 'U'
+                           ,input '':U).
+      end.
+      when 3 then do:
+        run str/sndgrup.p ( input parparentproc
+                           ,input v-cntxt-obj-code
+                           ,input 'D'
+                           ,input '':U).
+      end.
+    END CASE.
+  end.
+end.

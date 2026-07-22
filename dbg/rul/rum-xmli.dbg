@@ -1,0 +1,3574 @@
+        1   block-level on error undo, throw.
+        2   define input parameter parparentproc as widget-handle no-undo .
+        3   define input parameter p-log-handle  as handle no-undo .
+        4   define input parameter p-xml-file-name as character no-undo .
+        5   define input parameter p-profile-id as integer no-undo .
+        6   define input parameter p-xsd-file as character no-undo .
+        7   define input parameter p-esys-id as integer no-undo .
+        8   define input parameter p-pack-num as integer no-undo .
+        9   define input-output parameter v_dataseth as handle no-undo .
+       10   define input-output parameter v-xmlh as handle no-undo .
+       11   define variable vss-revision    as character no-undo init "$Revision$":U .
+       12   define variable vss-author      as character no-undo init "$Author$":U .
+       13   define variable vss-date        as character no-undo init "$Date$":U .
+       14   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+       15   define variable vss-archive     as character no-undo init "$Archive$":U .
+       16   define variable vss-description as character no-undo init "Импорт файла XML".
+       17   procedure vss-get-info :
+       18     define output parameter p-vss-revision    like vss-revision    no-undo .
+       19     define output parameter p-vss-author      like vss-author      no-undo .
+       20     define output parameter p-vss-date        like vss-date        no-undo .
+       21     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       22     define output parameter p-vss-archive     like vss-archive     no-undo .
+       23     define output parameter p-vss-description like vss-description no-undo .
+       24     assign
+       25       p-vss-revision    = vss-revision
+       26       p-vss-author      = vss-author
+       27       p-vss-date        = vss-date
+       28       p-vss-workfile    = vss-workfile
+       29       p-vss-archive     = vss-archive
+       30       p-vss-description = vss-description
+       31     .
+       32   end procedure.
+       33   procedure vss-get-parameters :
+       34     define output parameter p-vss-parameters as character no-undo .
+       35   end procedure.
+       36   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       37   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       38   define variable v-vssrevis-logger                   as handle    no-undo .
+       39   procedure vss-logevent :
+       40     define input  parameter p-extra-paramters as character no-undo .
+       41     define variable v-vssrevis-parameters as character no-undo .
+       42     do
+       43     on error undo, return error return-value
+       44     :
+       45       if  valid-handle(v-vssrevis-logger)
+       46       and v-vssrevis-logger :get-signature("logevent") <> ""
+       47       then do:
+       48         run vss-get-parameters in this-procedure
+       49           (output v-vssrevis-parameters
+       50           ).
+       51         run logevent in v-vssrevis-logger
+       52           (input vss-workfile
+       53           ,input vss-revision
+       54           ,input v-vssrevis-parameters
+       55           ,input p-extra-paramters
+       56           ).
+       57       end.
+       58     end.
+       59   end procedure.
+       60   assign
+       61     v-vssrevis-logger = g#vssrevis-logger
+       62   .
+       63   if  valid-handle(v-vssrevis-logger)
+       64   and v-vssrevis-logger :get-signature("logevent") <> ""
+       65   then do:
+       66     assign
+       67       v-vssrevis-logevent = true
+       68     .
+       69     run vss-logevent in this-procedure (input vss-description) .
+       70   end.
+       71   define new global shared variable g#language as character no-undo .
+       72   if g#language <> '' and g#language <> 'rus':U then do:
+       73     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       74   end.
+       75   define new global shared variable g#library  as handle no-undo .
+       76   define new global shared variable g#library2 as handle no-undo .
+       77   define   shared variable g#auto as logical no-undo.
+       78   define   shared variable g#news as logical no-undo.
+       79   define   shared variable g#oxml as logical no-undo.
+       80   define   shared variable g#esys as logical no-undo.
+       81   define   shared variable g#news-source-db as integer no-undo.
+       82   define   shared variable g#esys-source-esys as integer no-undo.
+       83   define   shared variable g#db-num as integer   no-undo .
+       84   define   shared variable g#userid as character no-undo .
+       85   define   shared variable g#passwd as character no-undo .
+       86   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       87   procedure gen-key-rec :
+       88     define input  parameter p-tbl-name    as character no-undo.
+       89     define input  parameter p-bh_tbl-name as handle    no-undo.
+       90     define output parameter p-key-rec     as character no-undo.
+       91     do
+       92     on error  undo, return error substitute( "&1 (gen-key-rec). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       93     on stop   undo, return error substitute( "&1 (gen-key-rec). stop", vss-workfile )
+       94     on endkey undo, return error substitute( "&1 (gen-key-rec). endkey", vss-workfile )
+       95     :
+       96       define variable fh               as handle    no-undo .
+       97       define variable v-ok             as logical   no-undo .
+       98       define variable v-inform         as character no-undo .
+       99       define variable v-ind            as integer   no-undo .
+      100       define variable v-idx-field-qnty as integer   no-undo .
+      101       if p-tbl-name = ?
+      102         or p-tbl-name = "":U
+      103       then do:
+      104         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Не задано имя таблицы.", vss-include-info0 ).
+      105       end.
+      106       if not p-bh_tbl-name:available then do:
+      107         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Переданый буфер таблицы &2 не доступен", vss-include-info0, p-tbl-name ).
+      108       end.
+      109       assign
+      110         p-key-rec = p-tbl-name
+      111         v-inform  = p-bh_tbl-name:index-information(1)
+      112         v-ind     = 2
+      113       .
+      114       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      115       on error undo, return error
+      116       :
+      117         assign
+      118           v-inform = p-bh_tbl-name:index-information( v-ind )
+      119           v-ind    = v-ind + 1
+      120         .
+      121       end.
+      122       if v-inform = ?
+      123         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      124         or entry( 3, v-inform, ",":U ) <> "1":U
+      125       then do:
+      126         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, p-tbl-name ).
+      127       end.
+      128       else do:
+      129         assign
+      130           v-idx-field-qnty = num-entries( v-inform ) - 4
+      131         .
+      132         if v-idx-field-qnty < 2 then do:
+      133           return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, p-tbl-name ).
+      134         end.
+      135         do v-ind = 1 to v-idx-field-qnty by 2
+      136         on error undo, return error
+      137         :
+      138           assign
+      139             fh = p-bh_tbl-name:buffer-field( entry( 4 + v-ind, v-inform, ",":U ) ).
+      140             p-key-rec = p-key-rec + chr(3) + substitute("&1", replace(fh:buffer-value(),chr(3),chr(2) + chr(9) + chr (2)))
+      141           .
+      142         end.
+      143       end.
+      144       if p-key-rec = ? then do:
+      145         assign
+      146           p-key-rec = "":U
+      147         .
+      148         return error substitute( "&1. Поле(поля) первичного ключа таблицы &2 имеет(ют) неопределенное значение", vss-include-info0, p-tbl-name ).
+      149       end.
+      150     end.
+      151     return.
+      152   end procedure.
+      153   procedure gen-where-keyr-tab :
+      154     define input  parameter i-tableSerach as character no-undo.
+      155     define input  parameter i-tablekey   as character  no-undo.
+      156     define input  parameter p-key-rec    as character  no-undo.
+      157     define input  parameter p-key-handle as handle     no-undo .
+      158     define input  parameter p-db-name    as character  no-undo .
+      159     define input  parameter p-tt-handle  as handle     no-undo .
+      160     define output parameter o-Where      as character  no-undo.
+      161     do
+      162     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      163     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      164     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile )
+      165     :
+      166       define variable v-full-tbl-name  as character no-undo .
+      167       define variable bh_tbl-name      as handle    no-undo .
+      168       define variable fh_key           as handle    no-undo .
+      169       define variable fh_search        as handle    no-undo .
+      170       define variable v-field-num      as integer   no-undo .
+      171       define variable v-count-fld      as integer   no-undo .
+      172       define variable v-inform         as character no-undo .
+      173       define variable v-ind            as integer   no-undo .
+      174       define variable v-idx-field-qnty as integer   no-undo .
+      175       define variable v-field-name     as character no-undo .
+      176       define variable v-field-val      as character no-undo .
+      177       define variable v-word-link      as character no-undo .
+      178       define variable vTable           as character no-undo.
+      179       define variable bh_tbl-key       as handle    no-undo .
+      180       assign
+      181         p-key-rec = trim( p-key-rec )
+      182       .
+      183       if p-key-handle <> ? then do:
+      184         if not valid-handle(p-key-handle)
+      185            or p-key-handle:type <> "buffer"
+      186         then do:
+      187           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Задан невалидный буфер для поиска.", vss-include-info0 ).
+      188         end.
+      189         if num-entries( p-key-rec, chr(3) ) > 1
+      190           or p-key-rec = ?
+      191           or p-key-rec = "":U
+      192         then do:
+      193           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. При поиске по буферу вместо ключа (&2) должено быть 'имя таблицы'.", vss-include-info0, p-key-rec ).
+      194         end.
+      195       end.
+      196       else do:
+      197         if p-key-rec = ?
+      198           or p-key-rec = "":U
+      199         then do:
+      200           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      201         end.
+      202       end.
+      203       assign
+      204         vTable = entry( 1 , p-key-rec, chr(3) )
+      205       .
+      206       if p-tt-handle <> ?
+      207         and ( not valid-handle(p-tt-handle)
+      208               or p-tt-handle:type <> "buffer"
+      209             )
+      210       then do:
+      211         return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. &2&3Передан невалидный handle для поиска или handle не типа BUFFER", vss-include-info0, vTable, chr(10) ).
+      212       end.
+      213       if p-tt-handle = ? then do:
+      214         assign
+      215           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable )
+      216         .
+      217         create buffer bh_tbl-name for table v-full-tbl-name .
+      218       end.
+      219       else do:
+      220         create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      221       end.
+      222       assign
+      223         v-inform = bh_tbl-name:index-information(1)
+      224         v-ind    = 2
+      225       .
+      226       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      227       on error undo, return error
+      228       :
+      229         assign
+      230           v-inform = bh_tbl-name:index-information( v-ind )
+      231           v-ind    = v-ind + 1
+      232         .
+      233       end.
+      234       if v-inform = ?
+      235         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      236         or entry( 3, v-inform, ",":U ) <> "1":U
+      237       then do:
+      238         delete object bh_tbl-name no-error.
+      239         return error substitute( "&1. Таблица &2 не имеет первичного ключа", vss-include-info0, vTable ).
+      240       end.
+      241       assign
+      242         v-idx-field-qnty = num-entries( v-inform ) - 4
+      243       .
+      244       if v-idx-field-qnty < 2 then do:
+      245         delete object bh_tbl-name no-error.
+      246         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, vTable ).
+      247       end.
+      248       assign
+      249         o-where     = "where":U
+      250         v-word-link = "":U
+      251         v-field-num = num-entries( p-key-rec, chr(3) ) - 1
+      252         v-count-fld = 0
+      253       .
+      254       if i-tablekey ne "" and i-tablekey ne ?
+      255       then do:
+      256         assign
+      257           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tablekey )
+      258         .
+      259         create buffer bh_tbl-key for table v-full-tbl-name .
+      260       end.
+      261       if i-tableSerach ne "" and i-tableSerach ne ?
+      262       then do:
+      263         delete object bh_tbl-name no-error.
+      264         assign
+      265           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach )
+      266         .
+      267         create buffer bh_tbl-name for table v-full-tbl-name .
+      268       end.
+      269       block_where:
+      270       do v-ind = 1 to v-idx-field-qnty by 2
+      271       on error undo, return error
+      272       :
+      273         assign
+      274           v-count-fld = v-count-fld + 1
+      275         .
+      276         if p-key-handle = ?
+      277           and v-count-fld > v-field-num
+      278         then do:
+      279           leave block_where.
+      280         end.
+      281         define variable VfieldKeyTable as handle no-undo.
+      282         assign
+      283           v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      284           fh_search    = bh_tbl-name:buffer-field( v-field-name )
+      285         .
+      286         if     bh_tbl-key ne ?
+      287         then do:
+      288            VfieldKeyTable = bh_tbl-key:buffer-field( v-field-name ) no-error.
+      289            if VfieldKeyTable eq ?
+      290            then next block_where.
+      291         end.
+      292         if v-full-tbl-name ne "" and v-full-tbl-name ne ?
+      293         then
+      294            o-where = substitute( "&1 &2 &3.&4 =", o-where, v-word-link,v-full-tbl-name, v-field-name ).
+      295         else
+      296            o-where = substitute( "&1 &2 &3 =", o-where, v-word-link, v-field-name ).
+      297         if p-key-handle = ? then do:
+      298           assign
+      299             v-field-val = replace (entry( v-count-fld + 1 , p-key-rec, chr(3) ),chr(2) + chr(9) + chr (2),chr(3))
+      300           .
+      301         end.
+      302         else do:
+      303           assign
+      304             fh_key = p-key-handle:buffer-field( v-field-name )
+      305           .
+      306           if fh_key = ?
+      307             or not valid-handle( fh_key )
+      308           then do:
+      309             delete object bh_tbl-name.
+      310             if     bh_tbl-key ne ?
+      311             then
+      312                delete object bh_tbl-key.
+      313             return error substitute( "&1. Буфер &2 не содержит поля &3 необходимого для поиска.", vss-include-info0, p-key-handle:name, v-field-name ).
+      314           end.
+      315           assign
+      316             v-field-val = fh_key:buffer-value
+      317           .
+      318         end.
+      319         if fh_search:data-type ="character":U then do:
+      320           assign
+      321             v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+      322             v-field-val = replace( v-field-val, '"':U, '~~"':U )
+      323             v-field-val = replace( v-field-val, "'":U, "~~'":U )
+      324             v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+      325             v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+      326             v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+      327             v-field-val = replace( v-field-val, chr(10), '~~n':U )
+      328             v-field-val = replace( v-field-val, chr(9), '~~t':U )
+      329             v-field-val = replace( v-field-val, chr(13), '~~r':U )
+      330             v-field-val = replace( v-field-val, chr(27), '~~E':U )
+      331             v-field-val = replace( v-field-val, chr(8), '~~b':U )
+      332             v-field-val = replace( v-field-val, chr(12), '~~f':U )
+      333             v-field-val = substitute( '"&1"', v-field-val )
+      334           .
+      335         end.
+      336         assign
+      337           o-where = substitute( "&1 &2", o-where, v-field-val )
+      338         .
+      339         if v-word-link = "":U then do:
+      340           assign
+      341             v-word-link = "and":U
+      342           .
+      343         end.
+      344       end.
+      345       delete object bh_tbl-name.
+      346       if     bh_tbl-key ne ?
+      347       then
+      348          delete object bh_tbl-key.
+      349       if p-key-handle = ?
+      350         and v-count-fld <> v-field-num
+      351       then do:
+      352         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2", vss-include-info0, vTable ).
+      353       end.
+      354     end.
+      355   end procedure.
+      356   procedure gen-hn-keyr-tab :
+      357     define input  parameter i-tableSerach as character no-undo.
+      358     define input  parameter i-tablekey   as character no-undo.
+      359     define input  parameter p-key-rec    as character no-undo.
+      360     define input  parameter p-key-handle as handle    no-undo .
+      361     define input  parameter p-db-name    as character no-undo .
+      362     define input  parameter p-tt-handle  as handle    no-undo .
+      363     define input  parameter p-stts-lock  as integer   no-undo .
+      364     define output parameter o-hn         as handle    no-undo.
+      365     define variable v-full-tbl-name as character no-undo.
+      366     define variable v-where         as character no-undo.
+      367     define variable bh_tbl-name     as handle    no-undo.
+      368     define variable vTable          as character no-undo.
+      369     do
+      370     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      371     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      372     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile ):
+      373         run gen-where-keyr-tab(i-tableSerach,
+      374                                i-tablekey,
+      375                                p-key-rec,
+      376                                p-key-handle,
+      377                                p-db-name,
+      378                                p-tt-handle,
+      379                                output v-where).
+      380         if i-tableSerach ne "" and i-tableSerach ne ?
+      381         then do:
+      382            v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach ).
+      383            create buffer bh_tbl-name for table v-full-tbl-name .
+      384         end.
+      385         else do:
+      386            if p-tt-handle = ? then do:
+      387               assign
+      388                  vTable = entry( 1 , p-key-rec, chr(3) )
+      389               .
+      390               v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable ).
+      391               create buffer bh_tbl-name for table v-full-tbl-name .
+      392            end.
+      393            else do:
+      394               create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      395            end.
+      396         end.
+      397         if p-tt-handle = ? then do:
+      398            bh_tbl-name:find-first( v-where, p-stts-lock ) no-error .
+      399         end.
+      400         else do:
+      401            bh_tbl-name:find-first( v-where ) no-error .
+      402         end.
+      403         o-hn = bh_tbl-name.
+      404      end.
+      405   end procedure.
+      406   procedure gen-hn-keyr :
+      407     define input  parameter p-key-rec    as character no-undo.
+      408     define input  parameter p-key-handle as handle    no-undo .
+      409     define input  parameter p-db-name    as character no-undo .
+      410     define input  parameter p-tt-handle  as handle    no-undo .
+      411     define input  parameter p-stts-lock  as integer   no-undo .
+      412     define output parameter o-hn         as handle    no-undo.
+      413     run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output o-hn).
+      414   end.
+      415   procedure gen-row-keyr :
+      416     define input  parameter p-key-rec    as character no-undo.
+      417     define input  parameter p-key-handle as handle    no-undo .
+      418     define input  parameter p-db-name    as character no-undo .
+      419     define input  parameter p-tt-handle  as handle    no-undo .
+      420     define input  parameter p-stts-lock  as integer   no-undo .
+      421     define output parameter p-tbl-row    as rowid     no-undo.
+      422     define output parameter p-tbl-name   as character no-undo.
+      423     define variable vHn as handle no-undo.
+      424       run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output vHn).
+      425       p-tbl-row = if vHn:available then vHn:rowid else ?.
+      426       p-tbl-name =  vHn:table.
+      427       delete object vHn no-error.
+      428     if p-tbl-row = ? then do:
+      429       return substitute( "Не найдена запись таблицы &2 по ключу &3", vss-include-info0, p-tbl-name, p-key-rec ).
+      430     end.
+      431     else do:
+      432       return.
+      433     end.
+      434   end procedure.
+      435   procedure gen-key-fv :
+      436     define input  parameter p-key-rec    as character no-undo .
+      437     define output parameter p-field-list as character no-undo .
+      438     define output parameter p-value-list as character no-undo.
+      439     do
+      440     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      441     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      442     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      443     :
+      444       define variable v-full-tbl-name  as character no-undo .
+      445       define variable bh_tbl-name      as handle    no-undo .
+      446       define variable v-tbl-name       as character no-undo .
+      447       define variable v-field-num      as integer   no-undo .
+      448       define variable v-count-fld      as integer   no-undo .
+      449       define variable v-inform         as character no-undo .
+      450       define variable v-ind            as integer   no-undo .
+      451       define variable v-idx-field-qnty as integer   no-undo .
+      452       define variable v-delim-key      as character no-undo .
+      453       if p-key-rec = ?
+      454         or p-key-rec = "":U
+      455       then do:
+      456         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      457       end.
+      458       assign
+      459         v-tbl-name      = entry( 1 , p-key-rec, chr(3) )
+      460         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      461       .
+      462       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      463       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверный уникальный ключ.", vss-include-info0 ).
+      464       assign
+      465         v-inform = bh_tbl-name:index-information(1)
+      466         v-ind    = 2
+      467       .
+      468       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      469       on error undo, return error
+      470       :
+      471         assign
+      472           v-inform = bh_tbl-name:index-information( v-ind )
+      473           v-ind    = v-ind + 1
+      474         .
+      475       end.
+      476       if v-inform = ?
+      477         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      478         or entry( 3, v-inform, ",":U ) <> "1":U
+      479       then do:
+      480         delete object bh_tbl-name no-error.
+      481         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      482       end.
+      483       assign
+      484         v-idx-field-qnty = num-entries( v-inform ) - 4
+      485       .
+      486       if v-idx-field-qnty < 2 then do:
+      487         delete object bh_tbl-name no-error.
+      488         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      489       end.
+      490       assign
+      491         p-field-list = "":U
+      492         p-value-list = "":U
+      493         v-delim-key  = "":U
+      494         v-field-num  = num-entries( p-key-rec, chr(3) ) - 1
+      495         v-count-fld  = 0
+      496       .
+      497       block_where:
+      498       do v-ind = 1 to v-idx-field-qnty by 2
+      499       on error undo, return error
+      500       :
+      501         assign
+      502           v-count-fld = v-count-fld + 1
+      503         .
+      504         if v-count-fld > v-field-num then do:
+      505           leave block_where.
+      506         end.
+      507         assign
+      508           p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U )
+      509           p-value-list = p-value-list + v-delim-key + entry( v-count-fld + 1 , p-key-rec, chr(3) )
+      510         .
+      511         if v-ind = 1 then do:
+      512           assign
+      513             v-delim-key = chr(3)
+      514           .
+      515         end.
+      516       end.
+      517       delete object bh_tbl-name.
+      518       if v-count-fld <> v-field-num then do:
+      519         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2 в БД", vss-include-info0, v-tbl-name ).
+      520       end.
+      521     end.
+      522   end procedure.
+      523   procedure gen-key-field :
+      524     define input  parameter p-table      as character no-undo .
+      525     define output parameter p-field-list as character no-undo .
+      526     do
+      527     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      528     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      529     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      530     :
+      531       define variable v-full-tbl-name  as character no-undo .
+      532       define variable bh_tbl-name      as handle    no-undo .
+      533       define variable v-tbl-name       as character no-undo .
+      534       define variable v-field-num      as integer   no-undo .
+      535       define variable v-count-fld      as integer   no-undo .
+      536       define variable v-inform         as character no-undo .
+      537       define variable v-ind            as integer   no-undo .
+      538       define variable v-idx-field-qnty as integer   no-undo .
+      539       define variable v-delim-key      as character no-undo .
+      540       if p-table = ?
+      541         or p-table = "":U
+      542       then do:
+      543         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан таблица.", vss-include-info0 ).
+      544       end.
+      545       assign
+      546         v-tbl-name      = p-table
+      547         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      548       .
+      549       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      550       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверная таблица.", vss-include-info0 ).
+      551       assign
+      552         v-inform = bh_tbl-name:index-information(1)
+      553         v-ind    = 2
+      554       .
+      555       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      556       on error undo, return error
+      557       :
+      558         assign
+      559           v-inform = bh_tbl-name:index-information( v-ind )
+      560           v-ind    = v-ind + 1
+      561         .
+      562       end.
+      563       if v-inform = ?
+      564         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      565         or entry( 3, v-inform, ",":U ) <> "1":U
+      566       then do:
+      567         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      568       end.
+      569       assign
+      570         v-idx-field-qnty = num-entries( v-inform ) - 4
+      571       .
+      572       if v-idx-field-qnty < 2 then do:
+      573         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      574       end.
+      575       assign
+      576         p-field-list = "":U
+      577         v-delim-key  = "":U
+      578         v-count-fld  = 0
+      579       .
+      580       block_where:
+      581       do v-ind = 1 to v-idx-field-qnty by 2
+      582       on error undo, return error
+      583       :
+      584         assign
+      585           v-count-fld = v-count-fld + 1
+      586         .
+      587         p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U ).
+      588         if v-ind = 1 then do:
+      589           assign
+      590             v-delim-key = chr(3)
+      591           .
+      592         end.
+      593       end.
+      594       delete object bh_tbl-name.
+      595     end.
+      596   end procedure.
+      597   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      598   define variable tempcxml_v-num_ as integer no-undo .
+      599   define SHARED temp-table temp-xml-tables no-undo
+      600   field order as integer
+      601   field tbl-name as character
+      602   field tbl-handle_ as handle
+      603   field table-handle_ as handle
+      604   field uniq-gate-rec as character
+      605   field gate-name as character
+      606   field gate-handle_ as handle
+      607   field is-parent as logical
+      608   index pi is unique primary
+      609   uniq-gate-rec
+      610   tbl-name
+      611   index iorder
+      612   order
+      613   index gr
+      614   uniq-gate-rec
+      615   index gh
+      616   gate-handle_
+      617   index iparent
+      618   is-parent
+      619   .
+      620   define SHARED temp-table temp-xml-records no-undo
+      621   field tbl-name as character
+      622   field uniq-key-rec as character
+      623   index pi is unique primary
+      624   tbl-name
+      625   uniq-key-rec
+      626   .
+      627   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      628   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      629   def var vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      630   procedure get-gate-file-name :
+      631   define input parameter p-gate-rec as character no-undo .
+      632   define output  parameter p-gate-file-name as character no-undo .
+      633   define buffer buf_clob-data for ub.clob-data.
+      634   define variable v-tbl-row as rowid no-undo .
+      635   define variable v-tbl-name as character no-undo .
+      636   run gen-row-keyr in this-procedure ( input p-gate-rec
+      637                                       ,input ?
+      638                                       ,input "ub"
+      639                                       ,input ?
+      640                                       ,input no-lock
+      641                                       ,output v-tbl-row
+      642                                       ,output v-tbl-name) no-error.
+      643   if error-status:error then undo, return error substitute("&1 (get-gate-name) Несуществующий gate &2"
+      644                                                           ,vss-include-info2
+      645                                                           ,p-gate-rec).
+      646   find first buf_clob-data no-lock where
+      647             rowid(buf_clob-data) = v-tbl-row no-error.
+      648   if not available buf_clob-data then do:
+      649     if error-status:error then undo, return error substitute("&1 (get-gate-name) Несуществующий gate &2"
+      650                                                             ,vss-include-info2
+      651                                                             ,p-gate-rec).
+      652   end.
+      653   p-gate-file-name = buf_clob-data.file-name.
+      654   end procedure.
+      655   procedure get-gate-rec :
+      656   define input  parameter p-gate-name as character no-undo .
+      657   define output parameter p-gate-rec as character no-undo .
+      658   define buffer buf_clob-bind for ub.clob-bind.
+      659   define buffer buf_clob-data for ub.clob-data.
+      660   main-block:
+      661   do
+      662   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-include-info2, return-value, chr(10), error-status :get-message (1))
+      663   on stop   undo main-block, return error substitute( "&1. stop", vss-include-info2 )
+      664   on endkey undo main-block, return error substitute( "&1. endkey", vss-include-info2 )
+      665   :
+      666       find first buf_clob-bind no-lock where
+      667                 buf_clob-bind.uniq-key-rec = p-gate-name
+      668             and buf_clob-bind.field-name = '':U
+      669             and buf_clob-bind.part-num = 1
+      670             and buf_clob-bind.resource-type = 'gate':U
+      671             no-error.
+      672       if not available buf_clob-bind then do:
+      673         undo, return error substitute("Неверная ссылка на XSD -файл &1 для gate"
+      674                                         , p-gate-name
+      675                                         ).
+      676       end.
+      677       find first buf_clob-data no-lock where
+      678                 buf_clob-data.db-num = buf_clob-bind.db-num
+      679             and buf_clob-data.int64-i= buf_clob-bind.int64-id no-error.
+      680       if not available buf_clob-data then do:
+      681         undo, return error substitute("Не найден CLOB c ДБ &1 id &2 - файл &3"
+      682                                         , buf_clob-bind.db-num
+      683                                         , buf_clob-bind.int64-id
+      684                                         , p-gate-name
+      685                                         ).
+      686       end.
+      687       run gen-key-rec in this-procedure ( input 'clob-data':U
+      688                                 ,input buffer buf_clob-data:handle
+      689                                 ,output p-gate-rec).
+      690   end.
+      691   end procedure.
+      692   procedure get-gate-by-name :
+      693   define input  parameter p-gate-name as character no-undo .
+      694   define output parameter p-gate-rec as character no-undo .
+      695   define output parameter p-dsh as handle no-undo .
+      696   define input-output  parameter p-xmlh as handle no-undo .
+      697   define variable v-ii as integer   no-undo .
+      698   define variable glog as logical   no-undo .
+      699   define variable v-longchar as longchar no-undo .
+      700   define variable v-txmlh as handle no-undo .
+      701   define variable v-db-num as integer no-undo .
+      702   define variable v-int64-id as int64 no-undo .
+      703   define buffer buf_clob-bind for ub.clob-bind.
+      704   define buffer buf_clob-data for ub.clob-data.
+      705   main-block:
+      706   do
+      707   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-include-info2, return-value, chr(10), error-status :get-message (1))
+      708   on stop   undo main-block, return error substitute( "&1. stop", vss-include-info2 )
+      709   on endkey undo main-block, return error substitute( "&1. endkey", vss-include-info2 )
+      710   :
+      711       find first buf_clob-bind no-lock where
+      712                 buf_clob-bind.uniq-key-rec = p-gate-name
+      713             and buf_clob-bind.field-name = '':U
+      714             and buf_clob-bind.part-num = 1
+      715             and buf_clob-bind.resource-type = 'gate':U
+      716             no-error.
+      717       if not available buf_clob-bind then do:
+      718         undo, return error substitute("Неверная ссылка на XSD -файл &1 для gate"
+      719                                         , p-gate-name
+      720                                         ).
+      721       end.
+      722       find first buf_clob-data no-lock where
+      723                 buf_clob-data.db-num = buf_clob-bind.db-num
+      724             and buf_clob-data.int64-i= buf_clob-bind.int64-id no-error.
+      725       if not available buf_clob-data then do:
+      726         undo, return error substitute("Не найден CLOB c ДБ &1 id &2 - файл &3"
+      727                                         , buf_clob-bind.db-num
+      728                                         , buf_clob-bind.int64-id
+      729                                         , p-gate-name
+      730                                         ).
+      731       end.
+      732       assign
+      733       v-longchar = buf_clob-data.cdata
+      734       .
+      735       run fix-schemalocation in this-procedure ( input-output v-longchar) no-error.
+      736       if error-status :error then do:
+      737         undo, return error substitute("Не удалось определить расположение составных частей схемы &1 (&2) из БД&3&4&3&5", p-gate-rec, buf_clob-data.file-name_, chr(10), error-status:get-message(1) , return-value ).
+      738       end.
+      739       create dataset p-dsh .
+      740       glog = p-dsh:READ-XMLSCHEMA( "LONGCHAR"
+      741                                     , v-longchar
+      742                                     , ?
+      743                                     , ?
+      744                                     , ?
+      745                                     ) no-error.
+      746       v-longchar = '':U.
+      747       if error-status :error
+      748       or not glog
+      749       then do:
+      750         undo, return error substitute("Не удалось прочитать XML-схему &1 из БД:&2&3", p-gate-name, chr(10), error-status:get-message(1) ).
+      751       end.
+      752       if not valid-handle(p-xmlh)
+      753       or not valid-handle(p-xmlh:buffer-field("tbl-name")) then do:
+      754         create temp-table v-txmlh.
+      755         v-txmlh:create-like(buffer temp-xml-tables:handle).
+      756         v-txmlh:temp-table-prepare("temp-xml-tables").
+      757         p-xmlh = v-txmlh:default-buffer-handle.
+      758       end.
+      759       run gen-key-rec in this-procedure ( input 'clob-data':U
+      760                                 ,input buffer buf_clob-data:handle
+      761                                 ,output p-gate-rec).
+      762       do v-ii = 1 to p-dsh:num-buffers:
+      763         p-xmlh:find-first(substitute(' where tbl-name = "&1"', p-dsh:get-buffer-handle(v-ii):name)) no-error.
+      764         if not p-xmlh:available then do:
+      765           p-xmlh:buffer-create().
+      766           assign
+      767           p-xmlh::tbl-name = p-dsh:get-buffer-handle(v-ii):name
+      768           p-xmlh::tbl-handle_ = p-dsh:get-buffer-handle(v-ii)
+      769           p-xmlh::table-handle_ = p-dsh:get-buffer-handle(v-ii):table-handle
+      770           p-xmlh::gate-handle_ = p-dsh
+      771           p-xmlh::uniq-gate-rec = p-gate-rec
+      772           p-xmlh::gate-name = p-dsh:name
+      773           p-xmlh::is-parent = not valid-handle(p-dsh:get-buffer-handle(v-ii):parent-relation)
+      774           .
+      775           if lookup(p-xmlh::tbl-name, "thheader,header_") > 0 then do:
+      776             assign
+      777             p-xmlh::order = -3.
+      778           end.
+      779         end.
+      780       end.
+      781   end.
+      782   end procedure.
+      783   procedure get-gate-by-rec :
+      784   define input  parameter p-gate-rec as character no-undo .
+      785   define output parameter p-dsh as handle no-undo .
+      786   define input-output  parameter p-xmlh as handle no-undo .
+      787   define input-output parameter p-longchar  as longchar no-undo .
+      788   define variable v-ii as integer   no-undo .
+      789   define variable glog as logical   no-undo .
+      790   define variable v-rowid as rowid no-undo .
+      791   define variable v-tbl-name as character no-undo .
+      792   define variable v-longchar as longchar no-undo .
+      793   define variable v-txmlh as handle no-undo .
+      794   define buffer buf_clob-data for ub.clob-data.
+      795   main-block:
+      796   do
+      797   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-include-info2, return-value, chr(10), error-status :get-message (1))
+      798   on stop   undo main-block, return error substitute( "&1. stop", vss-include-info2 )
+      799   on endkey undo main-block, return error substitute( "&1. endkey", vss-include-info2 )
+      800   :
+      801     run gen-row-keyr in this-procedure (
+      802                                           input  p-gate-rec
+      803                                           ,input  ?
+      804                                           ,input  "ub"
+      805                                           ,input  ?
+      806                                           ,input  NO-LOCK
+      807                                           ,output v-rowid
+      808                                           ,output v-tbl-name   ) no-error.
+      809       find first buf_clob-data no-lock where
+      810                 rowid(buf_clob-data) = v-rowid  no-error.
+      811       if not available buf_clob-data then do:
+      812         undo, return error substitute("Не найден CLOB  &1"
+      813                                         , p-gate-rec
+      814                                         ).
+      815       end.
+      816       assign
+      817       v-longchar = buf_clob-data.cdata
+      818       .
+      819       run fix-schemalocation in this-procedure ( input-output v-longchar) no-error.
+      820       if error-status :error then do:
+      821         undo, return error substitute("Не удалось определить расположение составных частей схемы &1 (&2) из БД&3&4&3&5", p-gate-rec, buf_clob-data.file-name_, chr(10), error-status:get-message(1) , return-value ).
+      822       end.
+      823       create dataset p-dsh .
+      824       glog = p-dsh:READ-XMLSCHEMA( "LONGCHAR"
+      825                                     , v-longchar
+      826                                     , ?
+      827                                     , ?
+      828                                     , ?
+      829                                     ) no-error.
+      830       define variable v-esm as character no-undo .
+      831       v-esm = error-status:get-message(1) .
+      832       if p-longchar <> ? then do:
+      833         p-longchar = v-longchar.
+      834       end.
+      835       v-longchar = '':U.
+      836       if error-status :error
+      837       or not glog
+      838       then do:
+      839         undo, return error substitute("Не удалось прочитать XML-схему &1 (&2) из БД&3&4"
+      840                                      , p-gate-rec
+      841                                      , p-gate-rec
+      842                                      , v-esm
+      843                                      ).
+      844       end.
+      845       p-dsh:private-data = buf_clob-data.file-name_ + chr(4) + p-gate-rec.
+      846       if not valid-handle(p-xmlh)
+      847       or not valid-handle(p-xmlh:buffer-field("tbl-name")) then do:
+      848         create temp-table v-txmlh.
+      849         v-txmlh:create-like(buffer temp-xml-tables:handle).
+      850         v-txmlh:temp-table-prepare("temp-xml-tables").
+      851         p-xmlh = v-txmlh:default-buffer-handle.
+      852       end.
+      853       do v-ii = 1 to p-dsh:num-buffers:
+      854         p-xmlh:find-first(substitute(' where tbl-name = "&1"', p-dsh:get-buffer-handle(v-ii):name)) no-error.
+      855         if not p-xmlh:available then do:
+      856           p-xmlh:buffer-create().
+      857           assign
+      858           p-xmlh::tbl-name = p-dsh:get-buffer-handle(v-ii):name
+      859           p-xmlh::tbl-handle_ = p-dsh:get-buffer-handle(v-ii)
+      860           p-xmlh::table-handle_ = p-dsh:get-buffer-handle(v-ii):table-handle
+      861           p-xmlh::gate-handle_ = p-dsh
+      862           p-xmlh::uniq-gate-rec = p-gate-rec
+      863           p-xmlh::gate-name = p-dsh:name
+      864           p-xmlh::is-parent = not valid-handle(p-dsh:get-buffer-handle(v-ii):parent-relation)
+      865           .
+      866           if lookup(p-xmlh::tbl-name, "thheader,header_") > 0 then do:
+      867             assign
+      868             p-xmlh::order = -3.
+      869           end.
+      870           p-xmlh:buffer-release().
+      871         end.
+      872       end.
+      873   end.
+      874   end procedure.
+      875   procedure get-gate-by-file :
+      876   define input  parameter p-schema-file-name as character no-undo .
+      877   define input  parameter p-gate-rec as character no-undo .
+      878   define output parameter p-dsh as handle no-undo .
+      879   define input-output  parameter p-xmlh as handle no-undo .
+      880   define variable v-ii as integer   no-undo .
+      881   define variable glog as logical   no-undo .
+      882   define variable v-rowid as rowid no-undo .
+      883   define variable v-tbl-name as character no-undo .
+      884   define variable v-longchar as longchar no-undo .
+      885   define variable v-txmlh as handle no-undo .
+      886   main-block:
+      887   do
+      888   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-include-info2, return-value, chr(10), error-status :get-message (1))
+      889   on stop   undo main-block, return error substitute( "&1. stop", vss-include-info2 )
+      890   on endkey undo main-block, return error substitute( "&1. endkey", vss-include-info2 )
+      891   :
+      892       COPY-LOB
+      893       FROM  FILE p-schema-file-name
+      894       TO  OBJECT v-longchar
+      895       no-convert
+      896       NO-ERROR .
+      897       if error-status :error then do:
+      898           undo, return error substitute("Не удалось считать файл схемы &1 в память&2&3"
+      899                                     , p-schema-file-name
+      900                                 , chr(10)
+      901                                 , error-status:get-message(1) ).
+      902       end.
+      903       run fix-schemalocation in this-procedure ( input-output v-longchar) no-error.
+      904       if error-status :error then do:
+      905         undo, return error substitute("Не удалось определить расположение составных частей схемы &1 (&2) из БД&3&4&3&5", p-gate-rec, p-schema-file-name, chr(10), error-status:get-message(1) , return-value ).
+      906       end.
+      907       create dataset p-dsh .
+      908       glog = p-dsh:READ-XMLSCHEMA( "longchar"
+      909                                     , v-longchar
+      910                                     , ?
+      911                                     , ?
+      912                                     , ?
+      913                                     ) no-error.
+      914       v-longchar = ''.
+      915       if error-status :error
+      916       or not glog
+      917       then do:
+      918         undo, return error substitute("Не удалось прочитать XML-схему из файла &1&2&3"
+      919                                      , p-schema-file-name
+      920                                      ,chr(10)
+      921                                      , error-status:get-message(1)
+      922                                      ).
+      923       end.
+      924       if not valid-handle(p-xmlh)
+      925       or not valid-handle(p-xmlh:buffer-field("tbl-name")) then do:
+      926         create temp-table v-txmlh.
+      927         v-txmlh:create-like(buffer temp-xml-tables:handle).
+      928         v-txmlh:temp-table-prepare("temp-xml-tables").
+      929         p-xmlh = v-txmlh:default-buffer-handle.
+      930       end.
+      931       do v-ii = 1 to p-dsh:num-buffers:
+      932         p-xmlh:find-first(substitute(' where tbl-name = "&1" and  uniq-gate-rec = "&2" '
+      933                                      ,p-dsh:get-buffer-handle(v-ii):name
+      934                                      ,p-gate-rec
+      935                                      )) no-error.
+      936         if not p-xmlh:available then do:
+      937           p-xmlh:buffer-create().
+      938           assign
+      939           p-xmlh::tbl-name = p-dsh:get-buffer-handle(v-ii):table
+      940           p-xmlh::uniq-gate-rec = p-gate-rec
+      941           p-xmlh::tbl-handle_ = p-dsh:get-buffer-handle(v-ii)
+      942           p-xmlh::table-handle_ = p-dsh:get-buffer-handle(v-ii):table-handle
+      943           p-xmlh::gate-handle_ = p-dsh
+      944           p-xmlh::gate-name = p-dsh:name
+      945           p-xmlh::is-parent = not valid-handle(p-dsh:get-buffer-handle(v-ii):parent-relation)
+      946           .
+      947           if lookup(p-xmlh::tbl-name, "thheader,header_") > 0 then do:
+      948             assign
+      949             p-xmlh::order = -3.
+      950           end.
+      951           p-xmlh:buffer-release().
+      952         end.
+      953       end.
+      954   end.
+      955   end procedure.
+      956   procedure gate-clear :
+      957   define input  parameter p-dsh as handle no-undo .
+      958   define input  parameter p-xmlh as handle no-undo .
+      959   define variable v-dsh as handle no-undo .
+      960   define variable v-th as handle no-undo .
+      961     do
+      962     on error undo, return error return-value
+      963     :
+      964       if valid-handle(p-dsh) then do:
+      965         delete object p-dsh.
+      966         v-dsh = p-dsh.
+      967         p-dsh = ?.
+      968       end.
+      969       repeat while true:
+      970         p-xmlh:find-first( substitute( " where gate-handle_ = &1 ", v-dsh)
+      971                            , share-lock) no-error.
+      972         if p-xmlh:available then do:
+      973           assign
+      974           v-th = p-xmlh:buffer-field("table-handle_"):buffer-value.
+      975           if valid-handle(p-xmlh:buffer-field("table-handle_"))
+      976           and valid-handle(v-th)
+      977           and v-th:dynamic = yes
+      978           then do:
+      979             delete object p-xmlh:buffer-field("table-handle_"):buffer-value.
+      980             p-xmlh:buffer-field("table-handle_"):buffer-value = ?.
+      981           end.
+      982           p-xmlh:buffer-delete().
+      983         end.
+      984         else do:
+      985           leave.
+      986         end.
+      987       end.
+      988       if p-xmlh:dynamic = yes
+      989       and valid-handle(p-xmlh)
+      990       then do:
+      991         delete object p-xmlh:table-handle.
+      992         p-xmlh = ?.
+      993       end.
+      994       v-dsh = ?.
+      995     end.
+      996   end procedure.
+      997   procedure all-gates-clear :
+      998   define parameter buffer buf_temp-xml-tables for temp-xml-tables.
+      999   do
+     1000   on error undo, return error
+     1001   :
+     1002     for each buf_temp-xml-tables
+     1003     break
+     1004     by buf_temp-xml-tables.uniq-gate-rec
+     1005     on error  undo , return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1006     on stop   undo , return error substitute( "&1. stop", vss-workfile )
+     1007     on endkey undo , return error substitute( "&1. endkey", vss-workfile )
+     1008     :
+     1009         if first-of(buf_temp-xml-tables.uniq-gate-rec) then do:
+     1010           delete object buf_temp-xml-tables.gate-handle_.
+     1011           buf_temp-xml-tables.gate-handle_ = ?.
+     1012         end.
+     1013         if valid-handle(buf_temp-xml-tables.table-handle_)
+     1014         and buf_temp-xml-tables.table-handle_:dynamic = no
+     1015         then do:
+     1016           delete object buf_temp-xml-tables.table-handle_.
+     1017           buf_temp-xml-tables.table-handle_ = ?.
+     1018         end.
+     1019         delete buf_temp-xml-tables.
+     1020     end.
+     1021   end.
+     1022   end procedure.
+     1023   procedure fix-schemalocation :
+     1024   define input-output  parameter p-longchar as longchar no-undo .
+     1025   DEFINE VARIABLE hdoc AS HANDLE.
+     1026   DEFINE VARIABLE hroot AS HANDLE.
+     1027   DEFINE VARIABLE hnode-child AS HANDLE.
+     1028   DEFINE VARIABLE hnode-attr AS HANDLE.
+     1029   define variable v-jj as integer   no-undo .
+     1030   define variable ok as logical   no-undo .
+     1031   define variable v-path1                    as character                no-undo .
+     1032   DEFINE VARIABLE v-full-path1               as character                no-undo .
+     1033   DEFINE VARIABLE v-file-name1               as character                no-undo .
+     1034   DEFINE VARIABLE v-file-name-no-ext1        as character                no-undo .
+     1035   DEFINE VARIABLE v-file-name-ext1           as character                no-undo .
+     1036   define variable v-schema-location          as character                no-undo .
+     1037   do
+     1038   on error undo, return error return-value
+     1039   :
+     1040     CREATE X-DOCUMENT hdoc.
+     1041     CREATE X-noderef hroot.
+     1042     CREATE X-noderef hnode-child.
+     1043     CREATE X-noderef hnode-attr.
+     1044     hdoc:load("longchar", p-longchar, no) no-error.
+     1045     iF ERROR-STATUS:GET-MESSAGE(1) <> '' THEN message ERROR-STATUS:GET-MESSAGE(1) view-as alert-box .
+     1046     hdoc:get-document-element(hroot).
+     1047     _repeat:
+     1048     REPEAT v-jj = 1 TO hroot:NUM-CHILDREN:
+     1049       ok = hroot:GET-CHILD(hNode-Child, v-jj).
+     1050       if not ok then next.
+     1051       if hNode-Child:local-name = "include"
+     1052       then do:
+     1053         ok = hNode-Child:GET-ATTRIBUTE-NODE( hnode-attr, "schemaLocation" ).
+     1054           v-schema-location = hnode-attr:node-value.
+     1055           run gbl/filename.p (
+     1056                           input "exe/" + hnode-attr:node-value
+     1057                         ,output v-full-path1
+     1058                         ,output v-path1
+     1059                         ,output v-file-name1
+     1060                         ,output v-file-name-no-ext1
+     1061                         ,output v-file-name-ext1
+     1062                         ) no-error .
+     1063           if error-status :error then do:
+     1064             delete object hnode-attr.
+     1065             delete object hnode-child.
+     1066             delete object hroot.
+     1067             delete object hdoc.
+     1068             undo, return error substitute("Не удалось определить расположение схемы &1", v-schema-location).
+     1069           end.
+     1070         ok = hNode-Child:sET-ATTRIBUTE(  "schemaLocation", v-full-path1 ).
+     1071         leave  _repeat.
+     1072       end.
+     1073     END.
+     1074     hdoc:save("longchar", p-longchar).
+     1075     delete object hnode-attr.
+     1076     delete object hnode-child.
+     1077     delete object hroot.
+     1078     delete object hdoc.
+     1079   end.
+     1080   end procedure.
+     1081   procedure gate-clb_fill-xml-tables :
+     1082   define input parameter p-dsh as handle no-undo .
+     1083   define input-output parameter p-xmlh as handle no-undo .
+     1084   define variable v-ii as integer no-undo .
+     1085     do
+     1086     on error undo, return error
+     1087     :
+     1088       do v-ii = 1 to p-dsh:num-buffers:
+     1089         p-xmlh:find-first(substitute(' where tbl-name = "&1"', p-dsh:get-buffer-handle(v-ii):name)) no-error.
+     1090         if not p-xmlh:available then do:
+     1091           p-xmlh:buffer-create().
+     1092           assign
+     1093           p-xmlh::tbl-name = p-dsh:get-buffer-handle(v-ii):name
+     1094           p-xmlh::tbl-handle_ = p-dsh:get-buffer-handle(v-ii)
+     1095           p-xmlh::table-handle_ = p-dsh:get-buffer-handle(v-ii):table-handle
+     1096           p-xmlh::gate-handle_ = p-dsh
+     1097           p-xmlh::uniq-gate-rec = entry(2, p-dsh:private-data, chr(4))
+     1098           p-xmlh::gate-name = p-dsh:name
+     1099           p-xmlh::is-parent = not valid-handle(p-dsh:get-buffer-handle(v-ii):parent-relation)
+     1100           .
+     1101           if lookup(p-xmlh::tbl-name, "thheader,header_") > 0 then do:
+     1102             assign
+     1103             p-xmlh::order = -3.
+     1104           end.
+     1105           p-xmlh:buffer-release().
+     1106         end.
+     1107       end.
+     1108     end.
+     1109   end procedure.
+     1110   procedure all-gates-empty :
+     1111   define buffer buf_temp-xml-tables for temp-xml-tables.
+     1112   do
+     1113   on error undo, return error
+     1114   :
+     1115     for each buf_temp-xml-tables
+     1116     break
+     1117     by buf_temp-xml-tables.uniq-gate-rec
+     1118     on error  undo , return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     1119     on stop   undo , return error substitute( "&1. stop", vss-workfile )
+     1120     on endkey undo , return error substitute( "&1. endkey", vss-workfile )
+     1121     :
+     1122       if valid-handle(buf_temp-xml-tables.tbl-handle_) then do:
+     1123         buf_temp-xml-tables.tbl-handle_:empty-temp-table().
+     1124       end.
+     1125     end.
+     1126   end.
+     1127   end procedure.
+     1128   // { bge/tmpcxmlh.i } - 23/VIII-2018 подключается в составе getoxmlh.i
+     1129   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1130   define variable vss-include-info6 as character format "X(65)" no-undo
+     1131   initial "@(#)$Workfile$ $Revision$".
+     1132   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1133   procedure cur-time :
+     1134      define output parameter p-today as date      no-undo .
+     1135      define output parameter p-time  as integer   no-undo .
+     1136     do
+     1137     on error undo, return error
+     1138     :
+     1139       define variable v-date1 as date      no-undo .
+     1140       define variable v-date2 as date      no-undo .
+     1141       define variable v-time  as integer   no-undo .
+     1142       assign
+     1143         v-date1 = today
+     1144         v-time  = time
+     1145         v-date2 = today
+     1146       .
+     1147       if v-date1 <> v-date2
+     1148       then do:
+     1149         assign
+     1150           v-date1 = today
+     1151           v-time  = v-time
+     1152         .
+     1153       end.
+     1154       assign
+     1155         p-today = v-date1
+     1156         p-time  = v-time
+     1157       .
+     1158     end.
+     1159   end.
+     1160   function cur-time-date returns character
+     1161   :
+     1162     return string(today, '99/99/9999':U) .
+     1163   end.
+     1164   function cur-time-mjd returns decimal
+     1165   :
+     1166     define variable v-date as date      no-undo .
+     1167     define variable v-time as integer   no-undo .
+     1168     run cur-time in this-procedure
+     1169       (output v-date
+     1170       ,output v-time
+     1171       ) .
+     1172     return integer(v-date) - 2400002 + (v-time / 86400) .
+     1173   end.
+     1174   function cur-time-get-ending-index returns integer
+     1175   (input p-number as integer
+     1176   )
+     1177   :
+     1178     if p-number < 0
+     1179     or p-number = ?
+     1180     then do:
+     1181       return 1 .
+     1182     end.
+     1183     define variable v-rest as integer   no-undo .
+     1184     assign
+     1185       p-number = p-number modulo 100
+     1186     .
+     1187     if p-number < 20
+     1188     then do:
+     1189       assign
+     1190         v-rest = p-number
+     1191       .
+     1192     end.
+     1193     else do:
+     1194       assign
+     1195         v-rest = p-number modulo 10
+     1196       .
+     1197     end.
+     1198     case v-rest :
+     1199       when 1
+     1200       then do:
+     1201         return 2 .
+     1202       end.
+     1203       when 2 or
+     1204       when 3 or
+     1205       when 4
+     1206       then do:
+     1207         return 3 .
+     1208       end.
+     1209       otherwise do:
+     1210         return 1 .
+     1211       end.
+     1212     end case .
+     1213   end.
+     1214   procedure cur-time-mjd-to-date :
+     1215      define input  parameter i-mjd-diff as decimal no-undo.
+     1216      define output parameter o-Date     as date    no-undo.
+     1217      define output parameter o-Time     as integer no-undo.
+     1218      define variable v-day-number as integer   no-undo .
+     1219      if    i-mjd-diff < 0
+     1220         or i-mjd-diff = ?
+     1221      then do:
+     1222         return "?" .
+     1223      end.
+     1224      assign
+     1225         v-day-number = truncate(i-mjd-diff,0).
+     1226         o-Date = date(v-day-number + 2400002).
+     1227         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+     1228     .
+     1229   end.
+     1230   function cur-time-mjd-to-string returns character
+     1231   (input p-mjd-diff as decimal
+     1232   )
+     1233   :
+     1234     define variable v-day-number as integer   no-undo .
+     1235     define variable v-seconds    as integer   no-undo .
+     1236     define variable v-hour       as integer   no-undo .
+     1237     define variable v-min        as integer   no-undo .
+     1238     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+     1239     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+     1240     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+     1241     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+     1242     if p-mjd-diff < 0
+     1243     or p-mjd-diff = ?
+     1244     then do:
+     1245       return "?" .
+     1246     end.
+     1247     assign
+     1248       v-day-number = integer(truncate(p-mjd-diff,0))
+     1249       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+     1250     .
+     1251     if v-seconds > 86400
+     1252     then do:
+     1253       assign
+     1254         v-seconds = 86400 - 1
+     1255       .
+     1256     end.
+     1257     if v-seconds < 0
+     1258     then do:
+     1259       assign
+     1260         v-seconds = 0
+     1261       .
+     1262     end.
+     1263     assign
+     1264       v-hour = truncate(v-seconds / 3600, 0)
+     1265     .
+     1266     assign
+     1267       v-seconds = v-seconds modulo 3600
+     1268     .
+     1269     assign
+     1270       v-min = truncate(v-seconds / 60, 0)
+     1271     .
+     1272     assign
+     1273       v-seconds = v-seconds modulo 60
+     1274     .
+     1275     return
+     1276         (if v-day-number <> 0
+     1277           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+     1278           else ""
+     1279         )
+     1280       + (if v-day-number <> 0 or v-hour <> 0
+     1281           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+     1282           else ""
+     1283         )
+     1284       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+     1285           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+     1286           else ""
+     1287         )
+     1288       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+     1289       .
+     1290   end.
+     1291   function cur-time-string returns character
+     1292   :
+     1293     define variable v-date as date      no-undo .
+     1294     define variable v-time as integer   no-undo .
+     1295     run cur-time in this-procedure
+     1296       (output v-date
+     1297       ,output v-time
+     1298       ) .
+     1299     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+     1300   end.
+     1301   function cur-time-string-sec returns character
+     1302   :
+     1303     define variable v-date as date      no-undo .
+     1304     define variable v-time as integer   no-undo .
+     1305     run cur-time in this-procedure
+     1306       (output v-date
+     1307       ,output v-time
+     1308       ) .
+     1309     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+     1310   end.
+     1311   function cur-time-custom  returns character
+     1312   (input p-prefix as character
+     1313   ,input p-date-format as character
+     1314   ,input p-delimiter as character
+     1315   ,input p-time-format as character
+     1316   ,input p-suffix as character
+     1317   )
+     1318   :
+     1319     define variable v-date as date      no-undo .
+     1320     define variable v-time as integer   no-undo .
+     1321     run cur-time in this-procedure
+     1322       (output v-date
+     1323       ,output v-time
+     1324       ) .
+     1325     return
+     1326       p-prefix
+     1327       + string(v-date, p-date-format)
+     1328       + p-delimiter
+     1329       + string(v-time, p-time-format)
+     1330       + p-suffix
+     1331       .
+     1332   end.
+     1333   function cur-time-print  returns character
+     1334   :
+     1335     define variable v-date as date      no-undo .
+     1336     define variable v-time as integer   no-undo .
+     1337     run cur-time in this-procedure
+     1338       (output v-date
+     1339       ,output v-time
+     1340       ) .
+     1341     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+     1342   end.
+     1343   function cur-time-datetime returns datetime
+     1344   :
+     1345     define variable v-char as character no-undo .
+     1346     define variable v-datetime as datetime no-undo .
+     1347     v-char = cur-time-string().
+     1348     v-datetime = datetime(v-char).
+     1349     return  v-datetime.
+     1350   end.
+     1351   function cur-time-string-msec returns character
+     1352   :
+     1353     define variable v-date as datetime  no-undo .
+     1354     v-date = now.
+     1355     return string(v-date) .
+     1356   end.
+     1357   define stream stmXMLOut.
+     1358   define stream stmXMLLog.
+     1359   define stream strXMLIn.
+     1360   define temp-table temp_xmllib_rec-list no-undo
+     1361       field recName       as character
+     1362       field recLevel      as integer
+     1363       field recOpenLine   as integer
+     1364       field recCloseLine  as integer
+     1365       field closed        as logical
+     1366       index pi is primary unique
+     1367           recName
+     1368           recLevel
+     1369       index cl
+     1370           closed
+     1371   .
+     1372   define temp-table temp_xmllib_rec-fld-list no-undo
+     1373       field recName       as character
+     1374       field recLevel      as integer
+     1375       field fldName       as character
+     1376       field fldOpenLine   as integer
+     1377       field fldCloseLine  as integer
+     1378       field closed        as logical
+     1379       index pi is primary unique
+     1380           recName
+     1381           recLevel
+     1382           fldName
+     1383       index fn
+     1384           fldName
+     1385       index cl
+     1386           closed
+     1387   .
+     1388   define temp-table temp_xmllib_rec no-undo
+     1389       field rec-key       as integer
+     1390       field recLevel      as integer
+     1391       field recOpenLine   as integer
+     1392       field recCloseLine  as integer
+     1393       field recName       as character
+     1394       field closed        as logical
+     1395       index pi is primary unique
+     1396           rec-key
+     1397       index nm
+     1398           recName
+     1399           closed
+     1400           rec-key
+     1401       index cl
+     1402           closed
+     1403       index rlv
+     1404           recName
+     1405           recLevel
+     1406           closed
+     1407           rec-key
+     1408   .
+     1409   define temp-table temp_xmllib_rec-fld no-undo
+     1410       field fld-key       as integer
+     1411       field rec-key       as integer
+     1412       field fldOpenLine   as integer
+     1413       field fldCloseLine  as integer
+     1414       field fldName       as character
+     1415       field fldValue      as character
+     1416       field closed        as logical
+     1417       index pi is primary unique
+     1418           fld-key
+     1419       index nm
+     1420           rec-key
+     1421           fldName
+     1422           closed
+     1423           fld-key
+     1424       index cl
+     1425           closed
+     1426   .
+     1427   define variable v-xmllib-rec-key            as integer      no-undo .
+     1428   define variable v-xmllib-rec-fld-key        as integer      no-undo .
+     1429   define variable v-xmllib-dirname            as character    no-undo .
+     1430   define variable v-xmllib-filename           as character    no-undo .
+     1431   define variable v-xmllib-log-filename       as character    no-undo .
+     1432   define variable v-xmllib-log-handle         as handle       no-undo .
+     1433   define variable v-xmllib-log-proc-name      as character    no-undo .
+     1434   define variable v-xmllib-error-status       as logical      no-undo .
+     1435   define variable v-xmllib-sax-reader-handle  as handle       no-undo .
+     1436   define variable v-xmllib-prg-bar-handle     as handle       no-undo .
+     1437   define variable v-xmllib-codepage-convert   as logical      no-undo .
+     1438   define variable v-xmllib-codepage-source    as character    no-undo .
+     1439   define variable v-xmllib-codepage-target    as character    no-undo .
+     1440   procedure xmllib-clear-parse-data :
+     1441   do
+     1442   on error undo, return error
+     1443   :
+     1444       empty temp-table temp_xmllib_rec-list.
+     1445       empty temp-table temp_xmllib_rec-fld-list.
+     1446       empty temp-table temp_xmllib_rec.
+     1447       empty temp-table temp_xmllib_rec-fld.
+     1448   end.
+     1449   end procedure.
+     1450   procedure xmllib-add-rec-fld :
+     1451   define input parameter p-rec-name       as character        no-undo.
+     1452   define input parameter p-rec-fld-name   as character        no-undo.
+     1453       define buffer buf_rec-list        for temp_xmllib_rec-list.
+     1454       define buffer buf_rec-fld-list    for temp_xmllib_rec-fld-list.
+     1455   do
+     1456   for buf_rec-list
+     1457     , buf_rec-fld-list
+     1458   on error undo, return error
+     1459   :
+     1460       find first buf_rec-list
+     1461            where buf_rec-list.recName = p-rec-name
+     1462       no-error.
+     1463       if not available buf_rec-list
+     1464       then do:
+     1465           create buf_rec-list.
+     1466           assign
+     1467               buf_rec-list.recName        = p-rec-name
+     1468               buf_rec-list.recOpenLine    = 0
+     1469               buf_rec-list.recCloseLine   = 0
+     1470               buf_rec-list.closed         = yes
+     1471           .
+     1472       end.
+     1473       find first buf_rec-fld-list
+     1474            where buf_rec-fld-list.recName = p-rec-name
+     1475              and buf_rec-fld-list.fldName = p-rec-fld-name
+     1476       no-error.
+     1477       if not available buf_rec-fld-list
+     1478       then do:
+     1479           create buf_rec-fld-list.
+     1480           assign
+     1481               buf_rec-fld-list.recName        = p-rec-name
+     1482               buf_rec-fld-list.fldName        = p-rec-fld-name
+     1483               buf_rec-fld-list.fldOpenLine    = 0
+     1484               buf_rec-fld-list.fldCloseLine   = 0
+     1485               buf_rec-fld-list.closed         = yes
+     1486           .
+     1487       end.
+     1488   end.
+     1489   end procedure.
+     1490   procedure xmllib-tag-open:
+     1491   define input parameter v-tag-level  as integer      no-undo.
+     1492   define input parameter v-tag-name   as character    no-undo.
+     1493   define input parameter v-tag-value  as character    no-undo.
+     1494   do
+     1495   on error undo, return error
+     1496   :
+     1497       assign
+     1498           v-tag-name = trim( v-tag-name )
+     1499       .
+     1500       put stream stmXMLOut unformatted
+     1501           substitute( "&1&2<&3&4&5>"
+     1502               , chr(10)
+     1503               , fill(" ", 4 * v-tag-level)
+     1504               , v-tag-name
+     1505               , ( if v-tag-value = "":U or v-tag-value = ? then "":U else " ":U )
+     1506               , v-tag-value
+     1507           )
+     1508       .
+     1509   end.
+     1510   end procedure.
+     1511   procedure xmllib-tag-put:
+     1512   define input parameter v-tag-level      as integer      no-undo.
+     1513   define input parameter v-tag-name       as character    no-undo.
+     1514   define input parameter v-tag-value      as character    no-undo.
+     1515   define input parameter v-empty-mode     as integer      no-undo.
+     1516   do
+     1517   on error undo, return error
+     1518   :
+     1519       assign
+     1520           v-tag-name = trim( v-tag-name )
+     1521       .
+     1522       if  v-empty-mode = 1
+     1523       or (v-empty-mode = 0 and (v-tag-value <> "":U and v-tag-value <> ?) )
+     1524       or (v-empty-mode = 2 and (v-tag-value <> "":U and v-tag-value <> ? and v-tag-value <> "0":U))
+     1525       or (v-empty-mode = 3 and (v-tag-value <> "":U and v-tag-value <> ? and caps(v-tag-value) <> "no":U))
+     1526       then do:
+     1527           run xmlchar-encode in this-procedure (
+     1528                 input v-tag-value
+     1529               , output v-tag-value
+     1530           ).
+     1531           put stream stmXMLOut unformatted
+     1532               substitute( "&1&2<&3>&4</&3>"
+     1533                   , chr(10)
+     1534                   , fill(" ":U, 4 * v-tag-level)
+     1535                   , v-tag-name
+     1536                   , v-tag-value
+     1537               )
+     1538           .
+     1539       end.
+     1540   end.
+     1541   end procedure.
+     1542   procedure xmllib-tag-put-null :
+     1543   define input parameter p-tag-level  as integer      no-undo.
+     1544   define input parameter p-tag-name   as character    no-undo.
+     1545   do
+     1546   on error undo, return error
+     1547   :
+     1548       assign
+     1549           p-tag-name = trim( p-tag-name )
+     1550       .
+     1551       put stream stmXMLOut unformatted
+     1552           substitute( '&1&2<&3 nil="true" /&3>'
+     1553               , chr(10)
+     1554               , fill(" ":U, 4 * p-tag-level)
+     1555               , p-tag-name
+     1556           )
+     1557       .
+     1558   end.
+     1559   end procedure.
+     1560   procedure xmllib-tag-close:
+     1561   define input parameter v-tag-level as integer      no-undo.
+     1562   define input parameter v-tag-name  as character    no-undo.
+     1563   do
+     1564   on error undo, return error
+     1565   :
+     1566       assign
+     1567           v-tag-name = trim( v-tag-name )
+     1568       .
+     1569       put stream stmXMLOut unformatted
+     1570           substitute( "&1&2</&3>"
+     1571               , chr(10)
+     1572               , fill( " ":U, 4 * v-tag-level)
+     1573               , v-tag-name
+     1574           )
+     1575       .
+     1576   end.
+     1577   end procedure.
+     1578   procedure xmllib-write-log:
+     1579   define input parameter v-filename   as character    no-undo.
+     1580   define input parameter v-log-level  as integer      no-undo.
+     1581   define input parameter v-out-string as character    no-undo.
+     1582   do
+     1583   on error undo, return error
+     1584   :
+     1585       output stream stmXMLLog to value( v-filename ) append.
+     1586       put stream stmXMLLog unformatted
+     1587           chr(10)
+     1588       .
+     1589       put stream stmXMLLog unformatted
+     1590           ( if v-log-level = 0
+     1591             or v-out-string = "&DLine":U
+     1592             or v-out-string = "&Line":U
+     1593             then "":U
+     1594             else cur-time-string-sec() + " ":U )
+     1595       .
+     1596       put stream stmXMLLog unformatted
+     1597           ( if v-out-string = "&Line":U
+     1598             then fill( "-":U, 80 )
+     1599             else if v-out-string = "&DLine":U
+     1600                  then fill( "=":U, 80 )
+     1601                  else v-out-string )
+     1602       .
+     1603       output stream stmXMLLog close.
+     1604   end.
+     1605   end procedure.
+     1606   procedure xmllib-write-edt:
+     1607   define input parameter v-editor-handle    as handle       no-undo.
+     1608   define input parameter v-log-level        as integer      no-undo.
+     1609   define input parameter v-out-string       as character    no-undo.
+     1610   do
+     1611   on error undo, return error
+     1612   :
+     1613       if valid-handle ( v-editor-handle )
+     1614       then do:
+     1615           v-editor-handle :move-to-eof().
+     1616           v-editor-handle :insert-string( ( if v-log-level = 0
+     1617                                             or v-out-string = "&DLine":U
+     1618                                             or v-out-string = "&Line":U
+     1619                                             then "":U
+     1620                                             else cur-time-string-sec() + " ":U
+     1621                                         ) ).
+     1622           v-editor-handle :insert-string( ( if v-out-string = "&Line":U
+     1623                                             then fill( "-":U, 80 )
+     1624                                             else if v-out-string = "&DLine":U then fill("=":U, 80)
+     1625                                             else fill( " ":U, v-log-level) + v-out-string
+     1626                                         ) ).
+     1627           v-editor-handle :insert-string( chr(10) ).
+     1628       end.
+     1629   end.
+     1630   end procedure.
+     1631   procedure xmllib-show-cnt:
+     1632   define input parameter v-fillin-handle     as handle   no-undo.
+     1633   do
+     1634   on error undo, return error
+     1635   :
+     1636       if valid-handle( v-fillin-handle )
+     1637       then do:
+     1638           assign
+     1639               v-fillin-handle :visible = true
+     1640           .
+     1641       end.
+     1642   end.
+     1643   end procedure.
+     1644   procedure xmllib-hide-cnt:
+     1645   define input parameter v-fillin-handle     as handle   no-undo.
+     1646   do
+     1647   on error undo, return error
+     1648   :
+     1649       if valid-handle( v-fillin-handle )
+     1650       then do:
+     1651           assign v-fillin-handle :visible = false.
+     1652       end.
+     1653   end.
+     1654   end procedure.
+     1655   procedure xmllib-write-cnt:
+     1656   define input parameter v-fillin-handle    as handle       no-undo.
+     1657   define input parameter v-fillin-string    as character    no-undo.
+     1658   do
+     1659   on error undo, return error
+     1660   :
+     1661       if valid-handle( v-fillin-handle )
+     1662       then do:
+     1663           assign
+     1664               v-fillin-handle :SCREEN-value = v-fillin-string
+     1665           .
+     1666       end.
+     1667   end.
+     1668   end procedure.
+     1669   procedure xmllib-write-header:
+     1670   define input parameter p-first-file     as logical      no-undo.
+     1671   define input parameter p-xml-file-name  as character    no-undo.
+     1672   define input parameter p-list-file-name as character    no-undo.
+     1673   define input parameter p-file-number    as integer      no-undo.
+     1674   define input parameter p-have-prev      as logical      no-undo.
+     1675   define input parameter p-prev-filename  as character    no-undo.
+     1676   define input parameter p-parameter-list as character    no-undo.
+     1677       define variable v-counter    as integer        no-undo.
+     1678   do
+     1679   on error undo, return error
+     1680   :
+     1681       output stream stmXMLOut to value( p-xml-file-name + "tmp" ) convert target "1251" append.
+     1682       put stream stmXMLOut unformatted
+     1683           "<?xml version='1.0' encoding='windows-1251'?>"
+     1684       .
+     1685       run xmllib-tag-open( input 0, input "root"          , input "":U ).
+     1686       run xmllib-tag-open( input 0, input "THheader"        , input "":U ).
+     1687       run xmllib-tag-put( input 1 , input "THfileName"      , input p-xml-file-name + "xml":U  , input 0 ).
+     1688       run xmllib-tag-put( input 1 , input "THfileNumber"    , input string( p-file-number     ), input 0 ).
+     1689       run xmllib-tag-put( input 1 , input "THhavePrev"      , input string( p-have-prev       ), input 3 ).
+     1690       run xmllib-tag-put( input 1 , input "THprevFileName"  , input p-prev-filename            , input 0 ).
+     1691       do v-counter = 1 to integer( entry( 1, p-parameter-list ) )
+     1692       :
+     1693           run xmllib-tag-put(
+     1694                 input 1
+     1695               , input entry( 2 * v-counter, p-parameter-list )
+     1696               , input entry( 2 * v-counter + 1, p-parameter-list )
+     1697               , input 0
+     1698           ).
+     1699       end.
+     1700       run xmllib-tag-close( input 0, input "THheader" ).
+     1701       output stream stmXMLOut close.
+     1702       if p-list-file-name <> "":U
+     1703       then do:
+     1704           output stream stmXMLOut to value( p-list-file-name + "tmp" ) convert target "1251" append.
+     1705           if p-first-file = yes
+     1706           then do:
+     1707               put stream stmXMLOut unformatted
+     1708                   "<?xml version='1.0' encoding='windows-1251'?>"
+     1709               .
+     1710               run xmllib-tag-open( input 0, input "OpenXML", input "" ).
+     1711           end.
+     1712           run xmllib-tag-open( input 1, input "THfile", input "" ).
+     1713           run xmllib-tag-put( input 2, input "THfileName"       , input p-xml-file-name + "xml":U  , input 0 ).
+     1714           run xmllib-tag-put( input 2, input "THfileNumber"     , input string( p-file-number     ), input 0 ).
+     1715           run xmllib-tag-put( input 2, input "THhavePrev"       , input string( p-have-prev       ), input 3 ).
+     1716           run xmllib-tag-put( input 2, input "THprevFileName"   , input p-prev-filename            , input 0 ).
+     1717           do v-counter = 1 to integer( entry( 1, p-parameter-list ) )
+     1718           :
+     1719               run xmllib-tag-put(
+     1720                   input 2
+     1721                   , input entry( 2 * v-counter, p-parameter-list )
+     1722                   , input entry( 2 * v-counter + 1, p-parameter-list )
+     1723                   , input 0
+     1724               ).
+     1725           end.
+     1726           run xmllib-tag-close( input 1, input "THfile" ).
+     1727           output stream stmXMLOut close.
+     1728       end.
+     1729   end.
+     1730   end procedure.
+     1731   procedure xmllib-write-footer:
+     1732   define input parameter p-last-file      as logical      no-undo.
+     1733   define input parameter p-xml-file-name  as character    no-undo.
+     1734   define input parameter p-list-file-name as character    no-undo.
+     1735   define input parameter p-have-next      as logical      no-undo.
+     1736   define input parameter p-next-file-name as character    no-undo.
+     1737       define variable v-error-num     as integer           no-undo.
+     1738   do
+     1739   on error undo, return error
+     1740   :
+     1741       output stream stmXMLOut to value( p-xml-file-name + "tmp" ) convert target "1251" append.
+     1742       if p-have-next = yes
+     1743       then do:
+     1744           run xmllib-tag-open( input 0, input "footer", "" ).
+     1745           run xmllib-tag-put( input 1, input "haveNext"       , string( p-have-next ) , 3 ).
+     1746           run xmllib-tag-put( input 1, input "nextFileName"   , p-next-file-name      , 0 ).
+     1747           run xmllib-tag-close( input 0, input "footer" ).
+     1748       end.
+     1749       run xmllib-tag-close( input 0, input "root" ).
+     1750       output stream stmXMLOut close.
+     1751       run bge/os_copy.p (
+     1752             input "M"
+     1753           , input p-xml-file-name + "tmp"
+     1754           , input p-xml-file-name + "xml"
+     1755           , output v-error-num
+     1756       ).
+     1757       if p-last-file = yes
+     1758       and p-list-file-name <> "":U
+     1759       then do:
+     1760           output stream stmXMLOut to value( p-list-file-name + "tmp" ) convert target "1251" append.
+     1761               run xmllib-tag-close( input 0, input "OpenXML" ).
+     1762           output stream stmXMLOut close.
+     1763           run bge/os_copy.p (
+     1764                 input "M"
+     1765               , input p-list-file-name + "tmp"
+     1766               , input p-list-file-name + "xml":U
+     1767               , output v-error-num
+     1768           ).
+     1769       end.
+     1770   end.
+     1771   end procedure.
+     1772   procedure xmllib-filename :
+     1773   define input parameter p-subdir             as character        no-undo.
+     1774   define input parameter p-prefix             as character    no-undo.
+     1775   define output parameter p-xml-file-name     as character    no-undo.
+     1776   define output parameter p-log-file-name     as character    no-undo.
+     1777   define output parameter p-list-file-name    as character    no-undo.
+     1778       define variable v-home-dir  as character    no-undo.
+     1779       define variable v-error-num as integer      no-undo.
+     1780   do
+     1781   on error undo, return error
+     1782   :
+     1783       get-key-value section "OXML" key "oxml-dir" value v-home-dir.
+     1784       if v-home-dir = ?
+     1785       then do:
+     1786           message
+     1787             skip "Не найден параметр ini-файла, определяющий каталог экспорта."
+     1788             skip "Нет параметра oxml-dir в секции [OXML]."
+     1789             skip(1)
+     1790             skip "Обратитесь к администратору."
+     1791           view-as alert-box error.
+     1792           undo, return error .
+     1793       end.
+     1794       if p-subdir <> "":U
+     1795       then do:
+     1796           assign
+     1797               v-home-dir = substitute( "&1/out/&2", v-home-dir, p-subdir )
+     1798           .
+     1799       end.
+     1800       run gbl/dir-cre.p (
+     1801           input v-home-dir
+     1802       ) no-error.
+     1803       if error-status :error
+     1804       then do:
+     1805           message
+     1806             skip "Неверно задан каталог экспорта в ini-файле."
+     1807             skip "Не удаётся создать каталог, указанный параметром"
+     1808             skip "oxml-dir в секции [OXML]."
+     1809             skip(1)
+     1810             skip "Обратитесь к администратору."
+     1811           view-as alert-box error.
+     1812           undo, return error .
+     1813       end.
+     1814       run bge/genfname.p (
+     1815             input v-home-dir
+     1816           , input p-prefix
+     1817           , input ""
+     1818           , input "xml"
+     1819           , input "tmp"
+     1820           , output p-xml-file-name
+     1821       ).
+     1822       assign
+     1823           p-xml-file-name     = substring( p-xml-file-name, 1, length( p-xml-file-name ) - 3 )
+     1824           p-log-file-name     = v-home-dir + chr(92) + "actions.log"
+     1825           p-list-file-name    = v-home-dir + chr(92) + "lst":U + substring( p-xml-file-name, length( p-xml-file-name ) - 5, 5 ) + ".":U
+     1826       .
+     1827   end.
+     1828   end procedure.
+     1829   procedure xmllib-check-file-size :
+     1830   define input parameter p-out-filename   as character    no-undo.
+     1831   define output parameter p-is-big        as logical      no-undo.
+     1832       define variable v-current-position    as integer        no-undo.
+     1833   do
+     1834   on error undo, return error
+     1835   :
+     1836       assign
+     1837           v-current-position = seek( stmXMLOut )
+     1838       .
+     1839       if v-current-position / 1024 / 1024  >= 100
+     1840       then do:
+     1841           assign
+     1842               p-is-big = yes
+     1843           .
+     1844       end.
+     1845   end.
+     1846   end procedure.
+     1847   procedure xmllib-parse-file :
+     1848   define input parameter p-full-filename      as character        no-undo.
+     1849       define variable v-num-dirs              as integer      no-undo .
+     1850       define variable v-str                   as character    no-undo .
+     1851       define variable v-str-count             as int64        no-undo .
+     1852   do
+     1853   on error undo, return error
+     1854   :
+     1855       assign
+     1856           v-num-dirs              = num-entries( p-full-filename,"\/":U )
+     1857           v-xmllib-error-status   = no
+     1858       .
+     1859       if v-num-dirs > 1
+     1860       then do:
+     1861           assign
+     1862               v-xmllib-filename = entry( v-num-dirs, p-full-filename, "\/":U )
+     1863               v-xmllib-dirname  = substring( p-full-filename, 1, length( p-full-filename ) - length( v-xmllib-filename ) - 1 )
+     1864           .
+     1865       end.
+     1866       else do:
+     1867           assign
+     1868               v-xmllib-filename = p-full-filename
+     1869               v-xmllib-dirname  = "":U
+     1870           .
+     1871       end.
+     1872       if valid-handle(v-xmllib-prg-bar-handle)
+     1873       then do:
+     1874   if session :set-wait-state( "compiler" ) then.
+     1875         input stream strXMLIn from value(p-full-filename) .
+     1876         repeat
+     1877         :
+     1878           import stream strXMLIn unformatted v-str no-error .
+     1879           assign
+     1880             v-str-count = v-str-count + 1
+     1881           .
+     1882         end.
+     1883         input stream strXMLIn close .
+     1884   if session :set-wait-state( "" ) then.
+     1885         run prg-bar_init-cb-handle in this-procedure ( input v-xmllib-prg-bar-handle ) .
+     1886         run prg-bar_new in this-procedure ( input 1 , input v-str-count) .
+     1887         run prg-bar_show in this-procedure .
+     1888       end.
+     1889       create sax-reader v-xmllib-sax-reader-handle.
+     1890       v-xmllib-sax-reader-handle :set-input-source( "FILE":U, p-full-filename ).
+     1891       v-xmllib-sax-reader-handle :sax-parse( ) no-error.
+     1892       if error-status :error
+     1893       then do:
+     1894           run xmllib-parse-error in this-procedure ( input substitute("&1 &2 &3&4Ошибка обработки XML файла.&4&5&4&5&4&7&4&8"
+     1895                                                                       ,vss-workfile
+     1896                                                                       ,vss-revision
+     1897                                                                       ,vss-description
+     1898                                                                       ,chr(10)
+     1899                                                                       ,return-value
+     1900                                                                       ,trim(error-status :get-message(1))
+     1901                                                                       ,trim(error-status :get-message(2))
+     1902                                                                       ,trim(error-status :get-message(3)))
+     1903                                                     ).
+     1904           undo, return error .
+     1905       end.
+     1906       if v-xmllib-error-status <> no
+     1907       then do:
+     1908           run xmllib-parse-error in this-procedure (
+     1909               input "*** При обработке XML файла были ошибки."
+     1910           ).
+     1911           delete object v-xmllib-sax-reader-handle.
+     1912       end.
+     1913       delete object v-xmllib-sax-reader-handle.
+     1914       if valid-handle(v-xmllib-prg-bar-handle)
+     1915       then do:
+     1916         run prg-bar_delete in this-procedure .
+     1917       end.
+     1918   end.
+     1919   end procedure.
+     1920   procedure xmllib-parse-progressive :
+     1921   define input parameter p-full-filename      as character no-undo .
+     1922   define input parameter p-pack-data          as memptr no-undo .
+     1923   define input parameter p-parse-first        as logical no-undo .
+     1924   define input parameter p-first-err          as logical no-undo .
+     1925   define output parameter p-parse-status as integer no-undo .
+     1926   define variable v-num-dirs              as integer no-undo .
+     1927   define variable glog                    as logical no-undo .
+     1928   define variable v-pack-size             as int64 no-undo .
+     1929   do
+     1930   on error undo, return error
+     1931   :
+     1932     if p-parse-first then do:
+     1933       if valid-handle(v-xmllib-sax-reader-handle)
+     1934       then do:
+     1935       end.
+     1936       assign
+     1937           v-num-dirs              = num-entries( p-full-filename,"\/":U )
+     1938           v-xmllib-error-status   = no
+     1939       .
+     1940       if v-num-dirs > 1
+     1941       then do:
+     1942           assign
+     1943               v-xmllib-filename = entry( v-num-dirs, p-full-filename, "\/":U )
+     1944               v-xmllib-dirname  = substring( p-full-filename, 1, length( p-full-filename ) - length( v-xmllib-filename ) - 1 )
+     1945           .
+     1946       end.
+     1947       else do:
+     1948           assign
+     1949               v-xmllib-filename = p-full-filename
+     1950               v-xmllib-dirname  = "":U
+     1951           .
+     1952       end.
+     1953       create sax-reader v-xmllib-sax-reader-handle.
+     1954       v-pack-size = get-size (p-pack-data) .
+     1955       if v-pack-size > 0 then
+     1956         glog = v-xmllib-sax-reader-handle :set-input-source( "MEMPTR":U, p-pack-data ) no-error.
+     1957       else
+     1958         glog = v-xmllib-sax-reader-handle :set-input-source( "FILE":U, p-full-filename ) no-error.
+     1959       if error-status :error
+     1960       or not glog
+     1961       then do:
+     1962         delete object v-xmllib-sax-reader-handle.
+     1963         run xmllib-parse-error in this-procedure ( input substitute("&1 &2 &3&4Ошибка обработки XML файла.&4&5&4&5&4&7&4&8"
+     1964                                                                     ,vss-workfile
+     1965                                                                     ,vss-revision
+     1966                                                                     ,vss-description
+     1967                                                                     ,chr(10)
+     1968                                                                     ,return-value
+     1969                                                                     ,trim(error-status :get-message(1))
+     1970                                                                     ,trim(error-status :get-message(2))
+     1971                                                                     ,trim(error-status :get-message(3)) )
+     1972                                                   ).
+     1973         undo, return error .
+     1974       end.
+     1975       v-xmllib-sax-reader-handle :sax-parse-first( ) no-error.
+     1976     end.
+     1977     else do:
+     1978       v-xmllib-sax-reader-handle :sax-parse-next( ) no-error.
+     1979     end.
+     1980     if error-status :error
+     1981     then do:
+     1982       delete object v-xmllib-sax-reader-handle.
+     1983       run xmllib-parse-error in this-procedure ( input substitute("&1 &2 &3&4Ошибка обработки XML файла.&4&5&4&5&4&7&4&8"
+     1984                                                                   ,vss-workfile
+     1985                                                                   ,vss-revision
+     1986                                                                   ,vss-description
+     1987                                                                   ,chr(10)
+     1988                                                                   ,return-value
+     1989                                                                   ,trim(error-status :get-message(1))
+     1990                                                                   ,trim(error-status :get-message(2))
+     1991                                                                   ,trim(error-status :get-message(3)) )
+     1992                                                 ).
+     1993       undo, return error .
+     1994     end.
+     1995     if v-xmllib-error-status <> no
+     1996     then do:
+     1997       run xmllib-parse-error in this-procedure (
+     1998           input "*** При обработке XML файла были ошибки."
+     1999       ).
+     2000       if p-first-err then do:
+     2001         delete object v-xmllib-sax-reader-handle.
+     2002       end.
+     2003       else do:
+     2004         v-xmllib-error-status = no.
+     2005       end.
+     2006     end.
+     2007     if v-xmllib-sax-reader-handle:parse-status = SAX-COMPLETE  then do:
+     2008       p-parse-status = SAX-COMPLETE.
+     2009       delete object v-xmllib-sax-reader-handle.
+     2010       return '':U.
+     2011     end.
+     2012     else do:
+     2013       p-parse-status = v-xmllib-sax-reader-handle:parse-status.
+     2014       return '':U.
+     2015     end.
+     2016   end.
+     2017   end procedure.
+     2018   procedure StartElement :
+     2019   define input parameter p-name-space     as character        no-undo.
+     2020   define input parameter p-local-name     as character        no-undo.
+     2021   define input parameter p-q-name         as character        no-undo.
+     2022   define input parameter p-attributes     as handle           no-undo.
+     2023       define buffer buf_rec             for temp_xmllib_rec.
+     2024       define buffer buf_rec-fld         for temp_xmllib_rec-fld.
+     2025       define buffer buf_rec-list        for temp_xmllib_rec-list.
+     2026       define buffer buf_rec-fld-list    for temp_xmllib_rec-fld-list.
+     2027   do
+     2028   for buf_rec
+     2029     , buf_rec-fld
+     2030     , buf_rec-list
+     2031     , buf_rec-fld-list
+     2032   on error undo, return error
+     2033   :
+     2034       if valid-handle(v-xmllib-prg-bar-handle)
+     2035       then do:
+     2036         run prg-bar_stepto in this-procedure ( input SELF:LOCATOR-LINE-NUMBER ) .
+     2037       end.
+     2038       find first buf_rec-list
+     2039            where buf_rec-list.recName = p-q-name
+     2040       no-error.
+     2041       if available buf_rec-list
+     2042       then do:
+     2043           if buf_rec-list.closed = no
+     2044           then do:
+     2045               find first buf_rec-fld-list
+     2046                    where buf_rec-fld-list.recName = buf_rec-list.recName
+     2047                      and buf_rec-fld-list.fldName = p-q-name
+     2048               no-error.
+     2049               if available buf_rec-fld-list
+     2050               and buf_rec-list.recName = buf_rec-fld-list.recName
+     2051               then do:
+     2052                   if buf_rec-fld-list.closed = no
+     2053                   then do:
+     2054                       run xmllib-parse-error in this-procedure (
+     2055                           input substitute( "Ошибка 1 открытия поля <&1> записи <&2>: Поле с этим именем уже открыто на строке &3."
+     2056                                           , p-q-name
+     2057                                           , p-q-name
+     2058                                           , buf_rec-fld-list.fldOpenLine
+     2059                                           )
+     2060                       ).
+     2061                   end.
+     2062                   else do:
+     2063                       run xmllib-parse-rec-fld-open in this-procedure (
+     2064                             input buf_rec-list.recName
+     2065                           , input buf_rec-list.recLevel
+     2066                           , input buf_rec-fld-list.fldName
+     2067                       ).
+     2068                       assign
+     2069                           buf_rec-fld-list.closed         = no
+     2070                           buf_rec-fld-list.fldOpenLine    = v-xmllib-sax-reader-handle :locator-line-number
+     2071                           buf_rec-fld-list.fldCloseLine   = 0
+     2072                       .
+     2073                   end.
+     2074               end.
+     2075               else do:
+     2076                   assign
+     2077                       buf_rec-list.recLevel = buf_rec-list.recLevel + 1
+     2078                   .
+     2079                   run xmllib-parse-rec-open in this-procedure (
+     2080                         input buf_rec-list.recName
+     2081                       , input buf_rec-list.recLevel
+     2082                   ).
+     2083                   assign
+     2084                       buf_rec-list.closed         = no
+     2085                       buf_rec-list.recOpenLine    = v-xmllib-sax-reader-handle :locator-line-number
+     2086                       buf_rec-list.recCloseLine   = 0
+     2087                   .
+     2088               end.
+     2089           end.
+     2090           else do:
+     2091               run xmllib-parse-rec-open in this-procedure (
+     2092                     input buf_rec-list.recName
+     2093                   , input buf_rec-list.recLevel
+     2094               ).
+     2095               assign
+     2096                   buf_rec-list.closed         = no
+     2097                   buf_rec-list.recOpenLine    = v-xmllib-sax-reader-handle :locator-line-number
+     2098                   buf_rec-list.recCloseLine   = 0
+     2099               .
+     2100           end.
+     2101       end.
+     2102       else do:
+     2103           open-record:
+     2104           for each buf_rec-fld-list
+     2105              where buf_rec-fld-list.fldName = p-q-name
+     2106           :
+     2107               find first buf_rec-list
+     2108                    where buf_rec-list.recName = buf_rec-fld-list.recName
+     2109                      and buf_rec-list.closed  = no
+     2110               no-error.
+     2111               if available buf_rec-list
+     2112               then do:
+     2113                   run xmllib-parse-rec-fld-open in this-procedure (
+     2114                         input buf_rec-list.recName
+     2115                       , input buf_rec-list.recLevel
+     2116                       , input buf_rec-fld-list.fldName
+     2117                   ).
+     2118                   assign
+     2119                       buf_rec-fld-list.recLevel       = buf_rec-list.recLevel
+     2120                       buf_rec-fld-list.closed         = no
+     2121                       buf_rec-fld-list.fldOpenLine    = v-xmllib-sax-reader-handle :locator-line-number
+     2122                       buf_rec-fld-list.fldCloseLine   = 0
+     2123                   .
+     2124                   leave open-record.
+     2125               end.
+     2126           end.
+     2127       end.
+     2128   end.
+     2129   end procedure.
+     2130   procedure Characters :
+     2131   define input parameter p-char-data  as memptr.
+     2132   define input parameter p-numchars   as integer.
+     2133       define variable v-data-string    as character    no-undo.
+     2134       define variable v-cp-utf8           as integer no-undo init 65001 .
+     2135       define variable v-cp-windows1251    as integer no-undo init 1251 .
+     2136       define buffer buf_xmllib_rec             for temp_xmllib_rec.
+     2137       define buffer buf_xmllib_rec-fld         for temp_xmllib_rec-fld.
+     2138       define buffer buf_xmllib_rec-list        for temp_xmllib_rec-list.
+     2139       define buffer buf_xmllib_rec-fld-list    for temp_xmllib_rec-fld-list.
+     2140   do
+     2141   for buf_xmllib_rec
+     2142     , buf_xmllib_rec-fld
+     2143     , buf_xmllib_rec-list
+     2144     , buf_xmllib_rec-fld-list
+     2145   on error undo, return error
+     2146   :
+     2147       find first buf_xmllib_rec-list
+     2148            where buf_xmllib_rec-list.closed = no
+     2149       no-error.
+     2150       if available buf_xmllib_rec-list
+     2151       then do:
+     2152           find first buf_xmllib_rec-fld-list
+     2153                where buf_xmllib_rec-fld-list.closed = no
+     2154           no-error.
+     2155           if available buf_xmllib_rec-fld-list
+     2156           and buf_xmllib_rec-fld-list.recName  = buf_xmllib_rec-list.recName
+     2157           and buf_xmllib_rec-fld-list.recLevel = buf_xmllib_rec-list.recLevel
+     2158           then do:
+     2159               find last buf_xmllib_rec
+     2160                   where buf_xmllib_rec.recName  = buf_xmllib_rec-list.recName
+     2161                     and buf_xmllib_rec.recLevel = buf_xmllib_rec-list.recLevel
+     2162                     and buf_xmllib_rec.closed   = no
+     2163               use-index nm
+     2164               no-error.
+     2165               if available buf_xmllib_rec
+     2166               then do:
+     2167                   find last buf_xmllib_rec-fld
+     2168                       where buf_xmllib_rec-fld.rec-key = buf_xmllib_rec.rec-key
+     2169                         and buf_xmllib_rec-fld.fldName = buf_xmllib_rec-fld-list.fldName
+     2170                         and buf_xmllib_rec-fld.closed = no
+     2171                   use-index nm
+     2172                   no-error.
+     2173                   if available buf_xmllib_rec-fld
+     2174                   then do:
+     2175                       assign
+     2176                           v-data-string = get-string( p-char-data, 1, get-size( p-char-data ) )
+     2177                       .
+     2178                       if v-xmllib-codepage-convert = yes
+     2179                       then do:
+     2180                         assign
+     2181                             v-data-string = codepage-convert( v-data-string , v-xmllib-codepage-target , v-xmllib-codepage-source )
+     2182                         .
+     2183                       end.
+     2184                       run xmlchar-decode in this-procedure (
+     2185                           input v-data-string
+     2186                           , output v-data-string
+     2187                       ).
+     2188                       assign
+     2189                           buf_xmllib_rec-fld.fldValue = trim( substitute( "&1&2", buf_xmllib_rec-fld.fldValue, v-data-string ) )
+     2190                       .
+     2191                   end.
+     2192               end.
+     2193           end.
+     2194       end.
+     2195   end.
+     2196   end procedure.
+     2197   procedure EndElement :
+     2198   define input parameter p-name-space     as character        no-undo.
+     2199   define input parameter p-local-name     as character        no-undo.
+     2200   define input parameter p-q-name         as character        no-undo.
+     2201       define buffer buf_rec             for temp_xmllib_rec.
+     2202       define buffer buf_rec-fld         for temp_xmllib_rec-fld.
+     2203       define buffer buf_rec-list        for temp_xmllib_rec-list.
+     2204       define buffer buf_rec-fld-list    for temp_xmllib_rec-fld-list.
+     2205   do
+     2206   for buf_rec
+     2207     , buf_rec-fld
+     2208     , buf_rec-list
+     2209     , buf_rec-fld-list
+     2210   on error undo, return error
+     2211   :
+     2212       find last buf_rec-list
+     2213           where buf_rec-list.recName = p-q-name
+     2214       use-index pi
+     2215       no-error.
+     2216       if available buf_rec-list
+     2217       then do:
+     2218           if buf_rec-list.closed = yes
+     2219           then do:
+     2220               run xmllib-parse-error in this-procedure (
+     2221                   input substitute( "Ошибка закрытия записи или поля <&1>: Нет метки открытой записи."
+     2222                                   , p-q-name
+     2223                                   )
+     2224               ).
+     2225           end.
+     2226           else do:
+     2227               find last buf_rec
+     2228                   where buf_rec.recName  = buf_rec-list.recName
+     2229                     and buf_rec.recLevel = buf_rec-list.recLevel
+     2230                     and buf_rec.closed   = no
+     2231               use-index nm
+     2232               no-error.
+     2233               if not available buf_rec
+     2234               then do:
+     2235                   run xmllib-parse-error in this-procedure (
+     2236                       input substitute( "Ошибка закрытия записи или поля <&1> уровня &2: Нет открытой записи."
+     2237                                       , p-q-name
+     2238                                       , buf_rec-list.recLevel
+     2239                                       )
+     2240                   ).
+     2241               end.
+     2242               else do:
+     2243                   find first buf_rec-fld-list
+     2244                        where buf_rec-fld-list.recName  = buf_rec.recName
+     2245                          and buf_rec-fld-list.recLevel = buf_rec.recLevel
+     2246                          and buf_rec-fld-list.fldName  = p-q-name
+     2247                          and buf_rec-fld-list.closed   = no
+     2248                   no-error.
+     2249                   if not available buf_rec-fld-list
+     2250                   then do:
+     2251                       if buf_rec.recName <> p-q-name
+     2252                       then do:
+     2253                           run xmllib-parse-error in this-procedure (
+     2254                               input substitute( "Ошибка закрытия записи <&1>: Имя открытой записи не совпадает с именем метки."
+     2255                                               , buf_rec.recName
+     2256                                               )
+     2257                           ).
+     2258                       end.
+     2259                       else do:
+     2260                           assign
+     2261                               buf_rec.closed              = yes
+     2262                               buf_rec.recCloseLine        = v-xmllib-sax-reader-handle :locator-line-number
+     2263                               buf_rec-list.recCloseLine   = v-xmllib-sax-reader-handle :locator-line-number
+     2264                           .
+     2265                           if buf_rec-list.recLevel > 0
+     2266                           then do:
+     2267                               assign
+     2268                                   buf_rec-list.recLevel = buf_rec-list.recLevel - 1
+     2269                               .
+     2270                               for each buf_rec-fld-list
+     2271                                  where buf_rec-fld-list.recName = buf_rec-list.recName
+     2272                               :
+     2273                                   assign
+     2274                                       buf_rec-fld-list.recLevel = buf_rec-fld-list.recLevel - 1
+     2275                                   .
+     2276                               end.
+     2277                           end.
+     2278                           else do:
+     2279                               assign
+     2280                                   buf_rec-list.closed         = yes
+     2281                               .
+     2282                           end.
+     2283                       end.
+     2284                   end.
+     2285                   else do:
+     2286                       find last buf_rec-fld
+     2287                           where buf_rec-fld.rec-key = buf_rec.rec-key
+     2288                             and buf_rec-fld.fldName = buf_rec-fld-list.fldName
+     2289                             and buf_rec-fld.closed  = no
+     2290                       use-index nm
+     2291                       no-error.
+     2292                       if not available buf_rec-fld
+     2293                       then do:
+     2294                           run xmllib-parse-error in this-procedure (
+     2295                               input substitute( "Ошибка 2 закрытия поля <&1>: Не найдено открытое поле с этим именем в записи <&2> уровня &3."
+     2296                                               , buf_rec-fld-list.fldName
+     2297                                               , buf_rec.recName
+     2298                                               , buf_rec.recLevel
+     2299                                               )
+     2300                           ).
+     2301                       end.
+     2302                       else do:
+     2303                           assign
+     2304                               buf_rec-fld.closed              = yes
+     2305                               buf_rec-fld-list.closed         = yes
+     2306                               buf_rec-fld.fldCloseLine        = v-xmllib-sax-reader-handle :locator-line-number
+     2307                               buf_rec-fld-list.fldCloseLine   = v-xmllib-sax-reader-handle :locator-line-number
+     2308                           .
+     2309                       end.
+     2310                   end.
+     2311               end.
+     2312           end.
+     2313       end.
+     2314       else do:
+     2315           close-field-rec:
+     2316           for each buf_rec-fld-list
+     2317              where buf_rec-fld-list.fldName = p-q-name
+     2318           :
+     2319               find first buf_rec-list
+     2320                    where buf_rec-list.recName  = buf_rec-fld-list.recName
+     2321                      and buf_rec-list.recLevel = buf_rec-fld-list.recLevel
+     2322                      and buf_rec-list.closed   = no
+     2323               no-error.
+     2324               if available buf_rec-list
+     2325               then do:
+     2326                   find last buf_rec
+     2327                       where buf_rec.recName  = buf_rec-list.recName
+     2328                         and buf_rec.recLevel = buf_rec-list.recLevel
+     2329                         and buf_rec.closed   = no
+     2330                   use-index nm
+     2331                   no-error.
+     2332                   if not available buf_rec
+     2333                   then do:
+     2334                       run xmllib-parse-error in this-procedure (
+     2335                           input substitute( "Ошибка закрытия поля <&1>: Нет открытой записи."
+     2336                                           , p-q-name
+     2337                                           )
+     2338                       ).
+     2339                   end.
+     2340                   else do:
+     2341                       find last buf_rec-fld
+     2342                           where buf_rec-fld.rec-key = buf_rec.rec-key
+     2343                             and buf_rec-fld.fldName = buf_rec-fld-list.fldName
+     2344                             and buf_rec-fld.closed  = no
+     2345                       use-index nm
+     2346                       no-error.
+     2347                       if not available buf_rec-fld
+     2348                       then do:
+     2349                           run xmllib-parse-error in this-procedure (
+     2350                               input substitute( "Ошибка 1 закрытия поля <&1>: Не найдено открытое поле с этим именем в записи <&2> уровня &3."
+     2351                                               , buf_rec-fld-list.fldName
+     2352                                               , buf_rec.recName
+     2353                                               , buf_rec.recLevel
+     2354                                               )
+     2355                           ).
+     2356                       end.
+     2357                       else do:
+     2358                           assign
+     2359                               buf_rec-fld.closed              = yes
+     2360                               buf_rec-fld-list.closed         = yes
+     2361                               buf_rec-fld.fldCloseLine        = v-xmllib-sax-reader-handle :locator-line-number
+     2362                               buf_rec-fld-list.fldCloseLine   = v-xmllib-sax-reader-handle :locator-line-number
+     2363                           .
+     2364                       end.
+     2365                   end.
+     2366                   leave close-field-rec.
+     2367               end.
+     2368           end.
+     2369       end.
+     2370   end.
+     2371   end procedure.
+     2372   procedure Error :
+     2373   define input parameter p-error-message     as character        no-undo.
+     2374   do
+     2375   on error undo, return error
+     2376   :
+     2377       run xmllib-parse-error in this-procedure (
+     2378           input p-error-message
+     2379       ).
+     2380       assign
+     2381           v-xmllib-error-status = yes
+     2382       .
+     2383   end.
+     2384   end procedure.
+     2385   procedure xmllib-parse-error :
+     2386   define input parameter p-err-message    as character        no-undo.
+     2387   do
+     2388   on error undo, return error
+     2389   :
+     2390       if valid-handle(v-xmllib-log-handle) then do:
+     2391         run value(v-xmllib-log-proc-name) in  v-xmllib-log-handle
+     2392                  (input substitute("&1Файл:    &2 &3&1Строка &4&1&5"
+     2393                                    ,chr(10)
+     2394                                    ,v-xmllib-dirname
+     2395                                    ,v-xmllib-filename
+     2396                                    ,(if valid-handle(v-xmllib-sax-reader-handle)
+     2397                                      then v-xmllib-sax-reader-handle :locator-line-number
+     2398                                      else ?)
+     2399                                    ,p-err-message)).
+     2400       end.
+     2401       else do:
+     2402         if v-xmllib-log-filename = "":U
+     2403         then do:
+     2404             message
+     2405                     vss-workfile vss-revision vss-description
+     2406                 skip "Файл:   " v-xmllib-dirname v-xmllib-filename
+     2407                 skip "Строка: " (if valid-handle(v-xmllib-sax-reader-handle)
+     2408                                  then v-xmllib-sax-reader-handle :locator-line-number
+     2409                                  else ?)
+     2410                 skip(1)
+     2411                 skip p-err-message
+     2412                 skip return-value
+     2413                 skip trim( error-status :get-message( 1 ) )
+     2414                     trim( error-status :get-message( 2 ) )
+     2415                     trim( error-status :get-message( 3 ) )
+     2416             view-as alert-box error.
+     2417             undo, return error.
+     2418         end.
+     2419         else do:
+     2420           output to value( v-xmllib-log-filename ).
+     2421           put unformatted
+     2422               substitute( "&1&2", chr(10), p-err-message )
+     2423           .
+     2424           output close.
+     2425         end.
+     2426       end.
+     2427   end.
+     2428   end procedure.
+     2429   procedure xmllib-set-log-filename :
+     2430   define input parameter p-log-filename   as character        no-undo.
+     2431   do
+     2432   on error undo, return error
+     2433   :
+     2434       run gbl/fileapnd.p (
+     2435             input p-log-filename
+     2436           , input "":U
+     2437           , input 10
+     2438       ) no-error.
+     2439       if error-status :error
+     2440       then do:
+     2441           assign
+     2442               v-xmllib-log-filename = "":U
+     2443           .
+     2444       end.
+     2445       else do:
+     2446           assign
+     2447               v-xmllib-log-filename = p-log-filename
+     2448           .
+     2449       end.
+     2450   end.
+     2451   end procedure.
+     2452   procedure xmllib-set-log-handle :
+     2453   define input parameter p-log-handle    as handle        no-undo.
+     2454   define input parameter p-log-proc-name as character no-undo .
+     2455   do
+     2456   on error undo, return error
+     2457   :
+     2458       if valid-handle(p-log-handle)
+     2459       and lookup(p-log-proc-name, p-log-handle:internal-entries) > 0
+     2460       then do:
+     2461         assign
+     2462         v-xmllib-log-handle    = p-log-handle
+     2463         v-xmllib-log-proc-name = p-log-proc-name
+     2464         .
+     2465       end.
+     2466       else do:
+     2467         assign
+     2468         v-xmllib-log-handle    = ?
+     2469         v-xmllib-log-proc-name = '':U
+     2470         .
+     2471       end.
+     2472   end.
+     2473   end procedure.
+     2474   procedure xmllib-set-prg-bar-handle :
+     2475   define input parameter p-handle    as handle        no-undo.
+     2476   do
+     2477   on error undo, return error
+     2478   :
+     2479       if valid-handle(p-handle)
+     2480       then do:
+     2481         assign
+     2482           v-xmllib-prg-bar-handle = p-handle
+     2483         .
+     2484       end.
+     2485       else do:
+     2486         assign
+     2487           v-xmllib-prg-bar-handle = ?
+     2488         .
+     2489       end.
+     2490   end.
+     2491   end procedure.
+     2492   procedure xmllib-set-codepage-convert :
+     2493     define input  parameter p-codepage-source as character no-undo .
+     2494     define input  parameter p-codepage-target as character no-undo .
+     2495   do
+     2496   on error undo, return error return-value
+     2497   :
+     2498     if ( p-codepage-source <> "" and p-codepage-target <> "" )
+     2499     then do:
+     2500       assign
+     2501         v-xmllib-codepage-convert = yes
+     2502         v-xmllib-codepage-source  = p-codepage-source
+     2503         v-xmllib-codepage-target  = p-codepage-target
+     2504       .
+     2505     end.
+     2506     else do:
+     2507       assign
+     2508         v-xmllib-codepage-convert = no
+     2509         v-xmllib-codepage-source  = ""
+     2510         v-xmllib-codepage-target  = ""
+     2511       .
+     2512     end.
+     2513   end.
+     2514   end procedure.
+     2515   procedure xmllib-parse-rec-open :
+     2516   define input parameter p-rec-name   as character        no-undo.
+     2517   define input parameter p-rec-level  as integer          no-undo.
+     2518       define buffer buf_temp_xmllib_rec       for temp_xmllib_rec.
+     2519   do
+     2520   for buf_temp_xmllib_rec
+     2521   on error undo, return error
+     2522   :
+     2523        find first buf_temp_xmllib_rec
+     2524            where buf_temp_xmllib_rec.recName = p-rec-name
+     2525              and buf_temp_xmllib_rec.recLevel = p-rec-level
+     2526              and buf_temp_xmllib_rec.closed  = no
+     2527       use-index nm
+     2528       no-error.
+     2529       if available buf_temp_xmllib_rec
+     2530       then do:
+     2531           run xmllib-parse-error in this-procedure (
+     2532               input substitute( "Ошибка 2 открытия записи <&1>: Запись с этим именем и уровнем &2 уже открыта на строке &3."
+     2533                               , p-rec-name
+     2534                               , p-rec-level
+     2535                               , buf_temp_xmllib_rec.recOpenLine
+     2536                               )
+     2537           ).
+     2538       end.
+     2539       else do:
+     2540           assign
+     2541               v-xmllib-rec-key    = v-xmllib-rec-key + 1
+     2542           .
+     2543           create buf_temp_xmllib_rec.
+     2544           assign
+     2545               buf_temp_xmllib_rec.rec-key         = v-xmllib-rec-key
+     2546               buf_temp_xmllib_rec.recOpenLine     = v-xmllib-sax-reader-handle :locator-line-number
+     2547               buf_temp_xmllib_rec.recCloseLine    = 0
+     2548               buf_temp_xmllib_rec.recName         = p-rec-name
+     2549               buf_temp_xmllib_rec.recLevel        = p-rec-level
+     2550               buf_temp_xmllib_rec.closed          = no
+     2551           .
+     2552       end.
+     2553   end.
+     2554   end procedure.
+     2555   procedure xmllib-parse-rec-fld-open :
+     2556   define input parameter p-rec-name   as character        no-undo.
+     2557   define input parameter p-rec-level  as integer          no-undo.
+     2558   define input parameter p-fld-name   as character        no-undo.
+     2559       define buffer buf_temp_xmllib_rec       for temp_xmllib_rec.
+     2560       define buffer buf_temp_xmllib_rec-fld   for temp_xmllib_rec-fld.
+     2561   do
+     2562   for buf_temp_xmllib_rec
+     2563     , buf_temp_xmllib_rec-fld
+     2564   on error undo, return error substitute( "Ошибка в xmllib-parse-rec-fld-open. &1. &2. &3"
+     2565                                           , return-value
+     2566                                           , trim( error-status :get-message( 1 ) )
+     2567                                           , trim( error-status :get-message( 2 ) ) )
+     2568   :
+     2569       find last buf_temp_xmllib_rec
+     2570           where buf_temp_xmllib_rec.recName   = p-rec-name
+     2571             and buf_temp_xmllib_rec.recLevel  = p-rec-level
+     2572             and buf_temp_xmllib_rec.closed    = no
+     2573       use-index nm
+     2574       no-error.
+     2575       if not available buf_temp_xmllib_rec
+     2576       then do:
+     2577           run xmllib-parse-error in this-procedure (
+     2578               input substitute( "Ошибка 2 открытия поля <&2> в записи <&1> уровня &3: Нет открытой записи."
+     2579                               , p-rec-name
+     2580                               , p-fld-name
+     2581                               , p-rec-level
+     2582                               )
+     2583           ).
+     2584       end.
+     2585       else do:
+     2586           find last buf_temp_xmllib_rec-fld
+     2587               where buf_temp_xmllib_rec-fld.rec-key  = buf_temp_xmllib_rec.rec-key
+     2588                 and buf_temp_xmllib_rec-fld.fldName  = p-fld-name
+     2589                 and buf_temp_xmllib_rec-fld.closed   = no
+     2590           use-index nm
+     2591           no-error.
+     2592           if available buf_temp_xmllib_rec-fld
+     2593           then do:
+     2594               run xmllib-parse-error in this-procedure (
+     2595                   input substitute( "Ошибка 3 открытия поля <&2> в записи <&1>: Поле с этим именем уже открыто на строке &3."
+     2596                                   , p-rec-name
+     2597                                   , p-fld-name
+     2598                                   , buf_temp_xmllib_rec-fld.fldOpenLine
+     2599                                   )
+     2600               ).
+     2601           end.
+     2602           else do:
+     2603               assign
+     2604                   v-xmllib-rec-fld-key    = v-xmllib-rec-fld-key + 1
+     2605               .
+     2606               create buf_temp_xmllib_rec-fld.
+     2607               assign
+     2608                   buf_temp_xmllib_rec-fld.fld-key         = v-xmllib-rec-fld-key
+     2609                   buf_temp_xmllib_rec-fld.rec-key         = buf_temp_xmllib_rec.rec-key
+     2610                   buf_temp_xmllib_rec-fld.fldOpenLine     = v-xmllib-sax-reader-handle :locator-line-number
+     2611                   buf_temp_xmllib_rec-fld.fldCloseLine    = 0
+     2612                   buf_temp_xmllib_rec-fld.fldName         = p-fld-name
+     2613                   buf_temp_xmllib_rec-fld.closed          = no
+     2614               .
+     2615           end.
+     2616       end.
+     2617   end.
+     2618   end procedure.
+     2619   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2620   define temp-table THpck-sent no-undo
+     2621   field THfilename as character field THcrc-pack as character field THcredate as date field THcrenum as integer  field THcretimeint as integer field THcretime as character   field THrcvddate  as date field THpack-num  as integer  field THrcvdtimeint as integer field THrcvdtime  as character   field THrcvd  as logical      field THsendtxtdate as date field THsendtxttimeint as integer field THsendtxttime as character  field THtotal-recs  as integer  field THesys-id  as integer     index pi is unique primary THesys-id                  THpack-num                 index ircvd                THesys-id                  THrcvd
+     2622   .
+     2623   define temp-table THcurr-pack no-undo
+     2624   field THfilename as character field THcrc-pack as character field THcredate as date field THcrenum as integer  field THcretimeint as integer field THcretime as character   field THrcvddate  as date field THpack-num  as integer  field THrcvdtimeint as integer field THrcvdtime  as character   field THrcvd  as logical      field THsendtxtdate as date field THsendtxttimeint as integer field THsendtxttime as character  field THtotal-recs  as integer  field THesys-id  as integer     index pi is unique primary THesys-id                  THpack-num                 index ircvd                THesys-id                  THrcvd
+     2625   .
+     2626   define temp-table THpck-rcvd no-undo
+     2627   field THfilename as character
+     2628   field THesys-id  as integer
+     2629   field THcrc-pack as character
+     2630   field THpack-num  as integer
+     2631   field THrcvd-recs  as integer
+     2632   field THrcvd as logical
+     2633   field THtotal-recs  as integer
+     2634   field THrcvddate  as date
+     2635   field THrcvdtimeint as integer
+     2636   field THrcvdtime  as character
+     2637   index pi is unique primary
+     2638   THesys-id
+     2639   THpack-num
+     2640   index rcvd
+     2641   THesys-id
+     2642   THrcvd
+     2643   .
+     2644   procedure get-header-by-rec :
+     2645   define input  parameter p-gate-rec as character no-undo .
+     2646   define output parameter p-tth as handle no-undo .
+     2647   define variable v-ii as integer   no-undo .
+     2648   define variable glog as logical   no-undo .
+     2649   define variable v-rowid as rowid no-undo .
+     2650   define variable v-tbl-name as character no-undo .
+     2651   define variable v-longchar as longchar no-undo .
+     2652   define variable v-txmlh as handle no-undo .
+     2653   define buffer buf_clob-data for ub.clob-data.
+     2654   main-block:
+     2655   do
+     2656   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-include-info8, return-value, chr(10), error-status :get-message (1))
+     2657   on stop   undo main-block, return error substitute( "&1. stop", vss-include-info8 )
+     2658   on endkey undo main-block, return error substitute( "&1. endkey", vss-include-info8 )
+     2659   :
+     2660     run gen-row-keyr in  this-procedure  (
+     2661                                           input  p-gate-rec
+     2662                                           ,input  ?
+     2663                                           ,input  "ub"
+     2664                                           ,input  ?
+     2665                                           ,input  NO-LOCK
+     2666                                           ,output v-rowid
+     2667                                           ,output v-tbl-name   ) no-error.
+     2668       find first buf_clob-data no-lock where
+     2669                 rowid(buf_clob-data) = v-rowid  no-error.
+     2670       if not available buf_clob-data then do:
+     2671         undo, return error substitute("Не найден CLOB  &1"
+     2672                                         , p-gate-rec
+     2673                                         ).
+     2674       end.
+     2675       assign
+     2676       v-longchar = buf_clob-data.cdata
+     2677       .
+     2678       run fix-schemalocation in this-procedure ( input-output v-longchar) no-error.
+     2679       if error-status :error then do:
+     2680         undo, return error substitute("Не удалось определить расположение составных частей схемы &1 (&2) из БД&3&4&3&5", p-gate-rec, buf_clob-data.file-name_, chr(10), error-status:get-message(1) , return-value ).
+     2681       end.
+     2682       create temp-table p-tth .
+     2683       glog = p-tth:READ-XMLSCHEMA( "LONGCHAR"
+     2684                                     , v-longchar
+     2685                                     , ?
+     2686                                     , ?
+     2687                                     , ?
+     2688                                     ) no-error.
+     2689       v-longchar = '':U.
+     2690       define variable v-esm as character no-undo .
+     2691       v-esm = error-status:get-message(1).
+     2692       if error-status :error
+     2693       or not glog
+     2694       then do:
+     2695         delete object p-tth no-error.
+     2696         undo, return error substitute("Не удалось прочитать XML-схему &1 (&2) из БД&3&4"
+     2697                                    , p-gate-rec
+     2698                                    , buf_clob-data.file-name_
+     2699                                    , chr(10)
+     2700                                    , v-esm
+     2701                                     ).
+     2702       end.
+     2703   end.
+     2704   end procedure.
+     2705   procedure getoxmlh :
+     2706   define input parameter p-xml-file-name as character no-undo .
+     2707   define input parameter p-pack-data     as memptr no-undo .
+     2708   define input parameter p-headerh as handle no-undo .
+     2709   define input parameter p-delivery-method as integer no-undo .
+     2710   define variable v-parse-status as integer no-undo .
+     2711   define buffer buf_rec for temp_xmllib_rec.
+     2712   define buffer buf_rec-fld for temp_xmllib_rec-fld.
+     2713   define variable v-end-of-header as logical   no-undo .
+     2714   define variable v-ii as integer   no-undo .
+     2715   define variable v-root-name as character no-undo .
+     2716   define buffer buf_temp_xmllib_rec for temp_xmllib_rec.
+     2717   do
+     2718   on error undo, return error return-value
+     2719   :
+     2720     run xmllib-clear-parse-data in this-procedure.
+     2721     if valid-handle(p-headerh) then do:
+     2722     do v-ii = 1 to p-headerh:num-fields:
+     2723       run xmllib-add-rec-fld  in this-procedure (
+     2724                                                    input p-headerh:table
+     2725                                                   ,input (p-headerh:buffer-field(v-ii):name)
+     2726                                                 )  .
+     2727     end.
+     2728     end.
+     2729     case p-delivery-method:
+     2730       when integer('3':U) then do:
+     2731         v-root-name = "Oracle_Retail".
+     2732         run xmllib-add-rec-fld  in this-procedure (
+     2733                                                       input v-root-name
+     2734                                                     ,input ""
+     2735                                                   )  .
+     2736       end.
+     2737       when integer('5':U) then do:
+     2738         run xmllib-add-rec-fld  in this-procedure (
+     2739                                                       input "ORDER_"
+     2740                                                     ,input ""
+     2741                                                   )  .
+     2742         run xmllib-add-rec-fld  in this-procedure (
+     2743                                                       input "STATUS__"
+     2744                                                     ,input ""
+     2745                                                   )  .
+     2746         run xmllib-add-rec-fld  in this-procedure (
+     2747                                                       input "ORDRSP_"
+     2748                                                     ,input ""
+     2749                                                   )  .
+     2750         run xmllib-add-rec-fld  in this-procedure (
+     2751                                                       input "DESADV_"
+     2752                                                     ,input ""
+     2753                                                   )  .
+     2754         run xmllib-add-rec-fld  in this-procedure (
+     2755                                                       input "RECADV_"
+     2756                                                     ,input ""
+     2757                                                   )  .
+     2758       end.
+     2759       when integer('9':U) then do:
+     2760               run xmllib-add-rec-fld  in this-procedure (
+     2761                                                       input "statusReport"
+     2762                                                     ,input ""
+     2763                                                   )  .
+     2764       end.
+     2765       when integer('11':U) then do:
+     2766         v-root-name = "".
+     2767         run xmllib-add-rec-fld  in this-procedure (
+     2768                                                       input "ERPRN-GC"
+     2769                                                     ,input ""
+     2770                                                   )  .
+     2771       end.
+     2772       otherwise do:
+     2773         v-root-name = "".
+     2774         run xmllib-add-rec-fld  in this-procedure (
+     2775                                                   input v-root-name
+     2776                                                  ,input ""
+     2777                                               )  .
+     2778       end.
+     2779     end case.
+     2780     run xmllib-parse-progressive ( input p-xml-file-name
+     2781                                   ,input p-pack-data
+     2782                                   ,input yes
+     2783                                   ,input no
+     2784                                   ,output v-parse-status) no-error .
+     2785     repeat while not (error-status:error
+     2786                       or
+     2787                       v-parse-status = sax-complete
+     2788                       or available buf_temp_xmllib_rec
+     2789                       ):
+     2790       if valid-handle(p-headerh)  then do:
+     2791       find first buf_temp_xmllib_rec where
+     2792                 buf_temp_xmllib_rec.recname = p-headerh:table
+     2793             and buf_temp_xmllib_rec.closed = yes no-error.
+     2794       end.
+     2795       else do:
+     2796         find first buf_temp_xmllib_rec no-error.
+     2797       end.
+     2798       error-status:error = no .
+     2799       run xmllib-parse-progressive ( input p-xml-file-name
+     2800                                     ,input p-pack-data
+     2801                                     ,input no
+     2802                                     ,input no
+     2803                                     ,output v-parse-status) no-error .
+     2804     end.
+     2805   end.
+     2806   end procedure.
+     2807   define variable vss-include-info9 as character format "X(65)" no-undo
+     2808   initial "@(#)$Workfile$ $Revision$".
+     2809   procedure xmlchar-test :
+     2810   define input parameter p-in-string          as character        no-undo.
+     2811   define output parameter p-out-string-enc    as character        no-undo.
+     2812   define output parameter p-out-string-dec    as character        no-undo.
+     2813   do
+     2814   on error undo, return error
+     2815   :
+     2816          run xmlchar-encode in this-procedure
+     2817       (
+     2818             input p-in-string
+     2819           , output p-out-string-enc
+     2820       ).
+     2821          run xmlchar-decode in this-procedure
+     2822       (
+     2823             input p-out-string-enc
+     2824           , output p-out-string-dec
+     2825       ).
+     2826   end.
+     2827   end .
+     2828   procedure xmlchar-encode :
+     2829   define input parameter p-in-string      as character        no-undo.
+     2830   define output parameter p-out-string    as character        no-undo.
+     2831       define variable v-position      as integer      no-undo.
+     2832       define variable v-current-char  as character    no-undo.
+     2833   do
+     2834   on error undo, return error
+     2835   :
+     2836       assign
+     2837           p-out-string = "":U
+     2838       .
+     2839       case p-in-string
+     2840       :
+     2841           when ?
+     2842           then do:
+     2843               assign
+     2844                   p-out-string = "?":U
+     2845               .
+     2846           end.
+     2847           when "?":U
+     2848           then do:
+     2849               assign
+     2850                   p-out-string = "&#63;":U
+     2851               .
+     2852           end.
+     2853           otherwise do:
+     2854               do v-position = 1 to length( p-in-string )
+     2855               :
+     2856                   assign
+     2857                       v-current-char = substring( p-in-string, v-position, 1 )
+     2858                   .
+     2859                   case v-current-char
+     2860                   :
+     2861                       when "&":U
+     2862                       then do:
+     2863                           assign
+     2864                               p-out-string = p-out-string + "&amp;":U
+     2865                           .
+     2866                       end.
+     2867                       when ">":U
+     2868                       then do:
+     2869                           assign
+     2870                               p-out-string = p-out-string + "&gt;":U
+     2871                           .
+     2872                       end.
+     2873                       when "<":U
+     2874                       then do:
+     2875                           assign
+     2876                               p-out-string = p-out-string + "&lt;":U
+     2877                           .
+     2878                       end.
+     2879                       when "'":U
+     2880                       then do:
+     2881                           assign
+     2882                               p-out-string = p-out-string + "&apos;":U
+     2883                           .
+     2884                       end.
+     2885                       when '"':U
+     2886                       then do:
+     2887                           assign
+     2888                               p-out-string = p-out-string + "&quot;":U
+     2889                           .
+     2890                       end.
+     2891                       when chr(1)
+     2892                       then do:
+     2893                           assign
+     2894                               p-out-string = p-out-string + "":U
+     2895                           .
+     2896                       end.
+     2897                       when chr(2)
+     2898                       then do:
+     2899                           assign
+     2900                               p-out-string = p-out-string + "":U
+     2901                           .
+     2902                       end.
+     2903                       when chr(3)
+     2904                       then do:
+     2905                           assign
+     2906                               p-out-string = p-out-string + "":U
+     2907                           .
+     2908                       end.
+     2909                       when chr(4)
+     2910                       then do:
+     2911                           assign
+     2912                               p-out-string = p-out-string + "":U
+     2913                           .
+     2914                       end.
+     2915                       when chr(5)
+     2916                       then do:
+     2917                           assign
+     2918                               p-out-string = p-out-string + "":U
+     2919                           .
+     2920                       end.
+     2921                       when chr(6)
+     2922                       then do:
+     2923                           assign
+     2924                               p-out-string = p-out-string + "":U
+     2925                           .
+     2926                       end.
+     2927                       when chr(7)
+     2928                       then do:
+     2929                           assign
+     2930                               p-out-string = p-out-string + "":U
+     2931                           .
+     2932                       end.
+     2933                       when chr(8)
+     2934                       then do:
+     2935                           assign
+     2936                               p-out-string = p-out-string + "":U
+     2937                           .
+     2938                       end.
+     2939                       when chr(9)
+     2940                       then do:
+     2941                           assign
+     2942                               p-out-string = p-out-string + "":U
+     2943                           .
+     2944                       end.
+     2945                       when chr(29)
+     2946                       then do:
+     2947                           assign
+     2948                               p-out-string = p-out-string + "":U
+     2949                           .
+     2950                       end.
+     2951                       when chr(10)
+     2952                       then do:
+     2953                           assign
+     2954                               p-out-string = p-out-string + "&#10;":U
+     2955                           .
+     2956                       end.
+     2957                       when chr(13)
+     2958                       then do:
+     2959                           assign
+     2960                               p-out-string = p-out-string + "&#13;":U
+     2961                           .
+     2962                       end.
+     2963                       otherwise do:
+     2964                           assign
+     2965                               p-out-string = p-out-string + v-current-char
+     2966                           .
+     2967                       end.
+     2968                   end case.
+     2969               end.
+     2970           end.
+     2971       end case.
+     2972   end.
+     2973   end .
+     2974   procedure xmlchar-encode-1c :
+     2975   define input parameter p-in-string      as character        no-undo.
+     2976   define output parameter p-out-string    as character        no-undo.
+     2977       define variable v-position      as integer      no-undo.
+     2978       define variable v-current-char  as character    no-undo.
+     2979   do
+     2980   on error undo, return error
+     2981   :
+     2982       assign
+     2983           p-out-string = "":U
+     2984       .
+     2985       case p-in-string
+     2986       :
+     2987           when ?
+     2988           then do:
+     2989               assign
+     2990                   p-out-string = "?":U
+     2991               .
+     2992           end.
+     2993           otherwise do:
+     2994               do v-position = 1 to length( p-in-string )
+     2995               :
+     2996                   assign
+     2997                       v-current-char = substring( p-in-string, v-position, 1 )
+     2998                   .
+     2999                   case v-current-char
+     3000                   :
+     3001                       when chr(1)
+     3002                       then do:
+     3003                           assign
+     3004                               p-out-string = p-out-string + " ":U
+     3005                           .
+     3006                       end.
+     3007                       when chr(2)
+     3008                       then do:
+     3009                           assign
+     3010                               p-out-string = p-out-string + " ":U
+     3011                           .
+     3012                       end.
+     3013                       when chr(3)
+     3014                       then do:
+     3015                           assign
+     3016                               p-out-string = p-out-string + " ":U
+     3017                           .
+     3018                       end.
+     3019                       when chr(4)
+     3020                       then do:
+     3021                           assign
+     3022                               p-out-string = p-out-string + " ":U
+     3023                           .
+     3024                       end.
+     3025                       when chr(5)
+     3026                       then do:
+     3027                           assign
+     3028                               p-out-string = p-out-string + " ":U
+     3029                           .
+     3030                       end.
+     3031                       when chr(6)
+     3032                       then do:
+     3033                           assign
+     3034                               p-out-string = p-out-string + " ":U
+     3035                           .
+     3036                       end.
+     3037                       when chr(7)
+     3038                       then do:
+     3039                           assign
+     3040                               p-out-string = p-out-string + " ":U
+     3041                           .
+     3042                       end.
+     3043                       when chr(8)
+     3044                       then do:
+     3045                           assign
+     3046                               p-out-string = p-out-string + " ":U
+     3047                           .
+     3048                       end.
+     3049                       when chr(9)
+     3050                       then do:
+     3051                           assign
+     3052                               p-out-string = p-out-string + " ":U
+     3053                           .
+     3054                       end.
+     3055                       when chr(29)
+     3056                       then do:
+     3057                           assign
+     3058                               p-out-string = p-out-string + " ":U
+     3059                           .
+     3060                       end.
+     3061                       when chr(10)
+     3062                       then do:
+     3063                           assign
+     3064                               p-out-string = p-out-string + " ":U
+     3065                           .
+     3066                       end.
+     3067                       when chr(13)
+     3068                       then do:
+     3069                           assign
+     3070                               p-out-string = p-out-string + " ":U
+     3071                           .
+     3072                       end.
+     3073                       otherwise do:
+     3074                           assign
+     3075                               p-out-string = p-out-string + v-current-char
+     3076                           .
+     3077                       end.
+     3078                   end case.
+     3079               end.
+     3080           end.
+     3081       end case.
+     3082   end.
+     3083   end .
+     3084   procedure xmlchar-decode :
+     3085   define input parameter p-in-string      as character        no-undo.
+     3086   define output parameter p-out-string    as character        no-undo.
+     3087       define variable v-position      as integer      no-undo.
+     3088       define variable v-last-position as integer      no-undo.
+     3089       define variable v-temp-integer  as integer      no-undo.
+     3090       define variable v-current-char  as character    no-undo.
+     3091       define variable v-next-char     as character    no-undo.
+     3092       define variable v-success       as logical      no-undo.
+     3093   do
+     3094   on error undo, return error
+     3095   :
+     3096       assign
+     3097           p-out-string = "":U
+     3098           v-position   = 0
+     3099       .
+     3100       replace-cycle:
+     3101       do while yes
+     3102       on error undo, return error
+     3103       :
+     3104           assign
+     3105               v-last-position = index( p-in-string, "&":U, v-position + 1 )
+     3106           .
+     3107           if v-last-position <= v-position
+     3108           then do:
+     3109               if v-position = 0
+     3110               then do:
+     3111                   assign
+     3112                       p-out-string = p-in-string
+     3113                   .
+     3114               end.
+     3115               else do:
+     3116                   assign
+     3117                       p-out-string = p-out-string + substring( p-in-string, v-position + 1 )
+     3118                   .
+     3119               end.
+     3120               leave replace-cycle.
+     3121           end.
+     3122           else do:
+     3123               assign
+     3124                   p-out-string    = p-out-string + substring( p-in-string, v-position + 1, v-last-position - v-position - 1 )
+     3125                   v-position      = v-last-position
+     3126                   v-current-char  = substring( p-in-string, v-position + 1, 1 )
+     3127               .
+     3128               if v-current-char = "#":U
+     3129               then do:
+     3130                   assign
+     3131                       v-last-position = index( p-in-string, ";":U, v-position + 2 )
+     3132                   .
+     3133                   if v-last-position > 0
+     3134                   then do:
+     3135                       run xmlchar-read-integer in this-procedure
+     3136                        (
+     3137                             input substring( p-in-string, v-position + 2, v-last-position - v-position - 2 )
+     3138                           , output v-temp-integer
+     3139                           , output v-success
+     3140                       ).
+     3141                       if v-success = yes
+     3142                       and v-temp-integer >= 1
+     3143                       and v-temp-integer <= 255
+     3144                       then do:
+     3145                           assign
+     3146                               p-out-string = p-out-string + chr( v-temp-integer )
+     3147                               v-position   = v-last-position + 1
+     3148                           .
+     3149                       end.
+     3150                       else do:
+     3151                           assign
+     3152                               p-out-string = p-out-string + "&":U
+     3153                               v-position   = v-position   + 1
+     3154                           .
+     3155                       end.
+     3156                   end.
+     3157                   else do:
+     3158                       assign
+     3159                           p-out-string = p-out-string + "&":U
+     3160                           v-position   = v-position   + 1
+     3161                       .
+     3162                   end.
+     3163               end.
+     3164               else do:
+     3165                   case substring( p-in-string, v-position + 1, 3 )
+     3166                   :
+     3167                       when "lt;":U
+     3168                       then do:
+     3169                           assign
+     3170                               p-out-string = p-out-string + "<":U
+     3171                               v-position   = v-position   + 3
+     3172                           .
+     3173                       end.
+     3174                       when "gt;":U
+     3175                       then do:
+     3176                           assign
+     3177                               p-out-string = p-out-string + ">":U
+     3178                               v-position   = v-position   + 3
+     3179                           .
+     3180                       end.
+     3181                       otherwise do:
+     3182                           if substring( p-in-string, v-position + 1, 4 ) = "amp;":U
+     3183                           then do:
+     3184                               assign
+     3185                                   p-out-string = p-out-string + "&":U
+     3186                                   v-position   = v-position   + 4
+     3187                               .
+     3188                           end.
+     3189                           else do:
+     3190                               case substring( p-in-string, v-position + 1, 5 )
+     3191                               :
+     3192                                   when "quot;":U
+     3193                                   then do:
+     3194                                       assign
+     3195                                           p-out-string = p-out-string + '"':U
+     3196                                           v-position   = v-position   + 5
+     3197                                       .
+     3198                                   end.
+     3199                                   when "apos;":U
+     3200                                   then do:
+     3201                                       assign
+     3202                                           p-out-string = p-out-string + "'":U
+     3203                                           v-position   = v-position   + 5
+     3204                                       .
+     3205                                   end.
+     3206                                   otherwise do:
+     3207                                       assign
+     3208                                           p-out-string = p-out-string + "&":U
+     3209                                       .
+     3210                                   end.
+     3211                               end case.
+     3212                           end.
+     3213                       end.
+     3214                   end case.
+     3215               end.
+     3216           end.
+     3217       end.
+     3218   end.
+     3219   end .
+     3220   procedure xmlchar-read-integer :
+     3221   define input parameter p-input-string      as character        no-undo.
+     3222   define output parameter p-output-integer   as integer          no-undo.
+     3223   define output parameter p-success       as logical          no-undo.
+     3224   do
+     3225   on error undo, return error
+     3226   :
+     3227       assign
+     3228           p-output-integer = integer( p-input-string )
+     3229       no-error.
+     3230       if error-status :error
+     3231       then do:
+     3232           assign
+     3233               p-success           = no
+     3234               p-output-integer    = 0
+     3235           .
+     3236       end.
+     3237       else do:
+     3238           assign
+     3239               p-success           = yes
+     3240           .
+     3241       end.
+     3242   end.
+     3243   end.
+     3244   define variable vss-include-info10 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     3245   define temp-table temp-rel-handle no-undo
+     3246   field dh as handle
+     3247   field ii as integer
+     3248   field active_ as logical
+     3249   field child-buffer_ as character
+     3250   field parent-buffer_ as character
+     3251   field child-buffer-handle as handle
+     3252   field parent-buffer-handle as handle
+     3253   field name_ as character
+     3254   field nested_ as logical
+     3255   field relation-fields_ as character
+     3256   field reposition_ as logical
+     3257   field type_ as character
+     3258   field query_ as handle
+     3259   field where-string_ as character
+     3260   field tbl-handle_ as handle
+     3261   index pi is unique primary
+     3262   ii
+     3263   index iparentname parent-buffer_ child-buffer_
+     3264   index iparenthandle parent-buffer-handle child-buffer-handle
+     3265   .
+     3266   procedure tmpreldf_get-relations :
+     3267   define input parameter p-dataseth as handle no-undo .
+     3268   define variable v-ii as integer no-undo .
+     3269   define buffer buf_temp-rel-handle for temp-rel-handle.
+     3270   do
+     3271   on error undo, return error
+     3272   :
+     3273     if not valid-handle(p-dataseth)
+     3274     or p-dataseth:type <> "DATASET"
+     3275     then do:
+     3276       return error substitute("Не определен dataset с handle &1", p-dataseth).
+     3277     end.
+     3278     for each buf_temp-rel-handle where
+     3279             buf_temp-rel-handle.dh = p-dataseth:
+     3280       delete buf_temp-rel-handle.
+     3281     end.
+     3282     do v-ii = 1 to p-dataseth:num-relations:
+     3283       create buf_temp-rel-handle.
+     3284       assign
+     3285       buf_temp-rel-handle.ii = v-ii
+     3286       buf_temp-rel-handle.dh = p-dataseth
+     3287       buf_temp-rel-handle.active_ = p-dataseth:get-relation(v-ii):active
+     3288       buf_temp-rel-handle.child-buffer_ = p-dataseth:get-relation(v-ii):child-buffer:name
+     3289       buf_temp-rel-handle.parent-buffer_ = p-dataseth:get-relation(v-ii):parent-buffer:name
+     3290       buf_temp-rel-handle.child-buffer-handle = p-dataseth:get-relation(v-ii):child-buffer
+     3291       buf_temp-rel-handle.tbl-handle_ = buf_temp-rel-handle.child-buffer-handle
+     3292       buf_temp-rel-handle.parent-buffer-handle = p-dataseth:get-relation(v-ii):parent-buffer
+     3293       buf_temp-rel-handle.name_ = p-dataseth:get-relation(v-ii):name
+     3294       buf_temp-rel-handle.nested_ = p-dataseth:get-relation(v-ii):nested
+     3295       buf_temp-rel-handle.relation-fields_ = p-dataseth:get-relation(v-ii):relation-fields
+     3296       buf_temp-rel-handle.reposition_ = p-dataseth:get-relation(v-ii):reposition
+     3297       buf_temp-rel-handle.type_ = p-dataseth:get-relation(v-ii):type
+     3298       buf_temp-rel-handle.query_ = p-dataseth:get-relation(v-ii):query
+     3299       buf_temp-rel-handle.where-string_ = p-dataseth:get-relation(v-ii):where-string
+     3300       .
+     3301     end.
+     3302   end.
+     3303   end procedure.
+     3304   procedure tmpreldf_set-relations :
+     3305   define input parameter p-srcdataseth as handle no-undo .
+     3306   define input parameter p-trgdataseth as handle no-undo .
+     3307   define variable gh as handle no-undo .
+     3308   define buffer buf_temp-rel-handle for temp-rel-handle.
+     3309   do
+     3310   on error undo, return error
+     3311   :
+     3312     if not valid-handle(p-srcdataseth)
+     3313     or p-srcdataseth:type <> "DATASET"
+     3314     then do:
+     3315       return error substitute("Не определен dataset-источник с handle &1", p-srcdataseth).
+     3316     end.
+     3317     if not valid-handle(p-trgdataseth)
+     3318     or p-trgdataseth:type <> "DATASET"
+     3319     then do:
+     3320       return error substitute("Не определен dataset-приемник с handle &1", p-trgdataseth).
+     3321     end.
+     3322     for each buf_temp-rel-handle no-lock where
+     3323             buf_temp-rel-handle.dh = p-srcdataseth
+     3324     on error  undo , return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     3325     on stop   undo , return error substitute( "&1. stop", vss-workfile )
+     3326     on endkey undo , return error substitute( "&1. endkey", vss-workfile )
+     3327     :
+     3328       gh = p-trgdataseth:ADD-RELATION ( buf_temp-rel-handle.parent-buffer-handle
+     3329                                         , buf_temp-rel-handle.child-buffer-handle
+     3330                                         , buf_temp-rel-handle.relation-fields_
+     3331                                         , buf_temp-rel-handle.reposition_
+     3332                                         , buf_temp-rel-handle.nested_).
+     3333      if error-status:error
+     3334      or not valid-handle(gh) then do:
+     3335        undo, return error substitute("Ошибка при добавлении relation &1 в dataset &2", buf_temp-rel-handle.name, p-trgdataseth:name).
+     3336      end.
+     3337     end.
+     3338   end.
+     3339   end procedure.
+     3340   define variable glog as logical no-undo .
+     3341   define variable v-ok as logical no-undo .
+     3342   define variable v-headerh as handle no-undo .
+     3343   define variable v-header-th as handle no-undo .
+     3344   define variable v_locdataseth as handle no-undo .
+     3345   define variable v-schema-name as character no-undo .
+     3346   define variable v-esys-id as integer no-undo .
+     3347   define variable v-pack-num as integer no-undo .
+     3348   define variable v-schema-tmp-file as character no-undo .
+     3349   define variable v-gate-rec as character no-undo .
+     3350   define variable v-part-num as integer no-undo init 1.
+     3351   define variable v-clob-db-num as integer no-undo .
+     3352   define variable v-int64-id as int64 no-undo .
+     3353   define variable v-path                    as character                no-undo .
+     3354   DEFINE VARIABLE v-full-path               as character                no-undo .
+     3355   DEFINE VARIABLE v-file-name               as character                no-undo .
+     3356   DEFINE VARIABLE v-file-name-no-ext        as character                no-undo .
+     3357   DEFINE VARIABLE v-file-name-ext           as character                no-undo .
+     3358   define variable v-pck-num                 as integer                  no-undo .
+     3359   define variable v-rec-cnt     as integer   no-undo.
+     3360   define variable v-xml-err as character no-undo .
+     3361   define variable v-header-schema-name as character no-undo .
+     3362   define variable v-header-name as character no-undo .
+     3363   define variable v-header-rec as character no-undo .
+     3364   define buffer buf_temp-xml-tables for temp-xml-tables.
+     3365   define buffer buf_clob-data for ub.clob-data.
+     3366   define buffer buf_temp_xmllib_rec for temp_xmllib_rec.
+     3367   define buffer buf_temp_xmllib_rec-fld for temp_xmllib_rec-fld.
+     3368   define frame imp-pck
+     3369   p-xml-file-name label "Файл пакета" format "x(50)" skip
+     3370   v-rec-cnt       label "Основных записей" format ">>>>>>>>>9" skip
+     3371   with view-as dialog-box side-labels 1 columns three-d title "** Разбор пакета"
+     3372   .
+     3373   main-block:
+     3374   do
+     3375   on error undo, return error return-value
+     3376   :
+     3377     assign
+     3378     v-xmlh = buffer buf_temp-xml-tables:handle:table-handle:default-buffer-handle
+     3379     .
+     3380     run gbl/filename.p (
+     3381                     input p-xml-file-name
+     3382                   ,output v-full-path
+     3383                   ,output v-path
+     3384                   ,output v-file-name
+     3385                   ,output v-file-name-no-ext
+     3386                   ,output v-file-name-ext
+     3387                   ) no-error .
+     3388     if error-status :error then do:
+     3389       run write-log in p-log-handle (           input 2         , input substitute("Файл пакета &1 не найден"                                  , p-xml-file-name                                   ) ).
+     3390       undo, return error substitute("Файл пакета &1 не найден"                                  , p-xml-file-name                                   ).
+     3391     end.
+     3392     v-header-schema-name = "exe/ThHeader.xsd".
+     3393     v-header-name = "ThHeader".
+     3394     run get-gate-rec in this-procedure ( input v-header-schema-name
+     3395                                         ,output v-header-rec) no-error.
+     3396     if error-status:error then do:
+     3397       undo, return error substitute("Не найдено описание xsd-схемы &1 в БД", v-header-schema-name).
+     3398     end.
+     3399     run get-header-by-rec in this-procedure ( input v-header-rec
+     3400                                           ,output v-header-th
+     3401                                           ) no-error.
+     3402     if error-status:error then do:
+     3403           run write-log in p-log-handle (           input 2         , input substitute("Ошибка при создании структуры заголовка поакета согласно гейту:&1&2"                               , v-header-rec                               , chr(10), error-status:get-message(1) ) ).
+     3404       undo, return error '':U.
+     3405     end.
+     3406     v-headerh = v-header-th:default-buffer-handle.
+     3407     run getoxmlh in this-procedure ( input v-full-path
+     3408                                     ,input ? // или передать memptr в который загружен xml-файл
+     3409                                     ,input v-headerh
+     3410                                     ,input -1
+     3411                                      ) no-error.
+     3412     define buffer buf_rec for temp_xmllib_rec.
+     3413     define buffer buf_rec-fld for temp_xmllib_rec-fld.
+     3414     for first buf_temp_xmllib_rec where
+     3415             buf_temp_xmllib_rec.recname = "THheader",
+     3416           each buf_temp_xmllib_rec-fld where
+     3417            buf_temp_xmllib_rec-fld.rec-key = buf_temp_xmllib_rec.rec-key:
+     3418       case buf_temp_xmllib_rec-fld.fldname:
+     3419          when "THfilename" then do:
+     3420          end.
+     3421          when "THschema-name" then do:
+     3422            v-schema-name = buf_temp_xmllib_rec-fld.fldvalue.
+     3423          end.
+     3424          when "THimport-esys-id" then do:
+     3425            v-esys-id = integer(buf_temp_xmllib_rec-fld.fldvalue).
+     3426          end.
+     3427          when "THpack-num" then do:
+     3428            v-pack-num = integer(buf_temp_xmllib_rec-fld.fldvalue).
+     3429          end.
+     3430       end case.
+     3431     end.
+     3432     if p-esys-id <> 0
+     3433     and v-esys-id <> p-esys-id then do:
+     3434       run write-log in p-log-handle (           input 2         , input substitute("Ожидался файл от ВС &1, в файле импорта указана ВС &2"                                  , p-esys-id                                  , v-esys-id                                   ) ).
+     3435       return error substitute("Ожидался файл от ВС &1, в файле импорта указана ВС &2"                                  , p-esys-id                                  , v-esys-id                                   ).
+     3436     end.
+     3437     if p-pack-num <> 0
+     3438     and v-pack-num <> p-pack-num then do:
+     3439       run write-log in p-log-handle (           input 2         , input substitute("Читается пакет № &1, в файле импорта у№ пакета указан как &2"                                  , p-pack-num                                  , v-pack-num                                   ) ).
+     3440       return error substitute("Читается пакет № &1, в файле импорта у№ пакета указан как &2"                                  , p-pack-num                                  , v-pack-num                                   ).
+     3441     end.
+     3442     if v-schema-name <> p-xsd-file then do:
+     3443       run write-log in p-log-handle (           input 2         , input substitute("В профайле &1 нет обработки данных по схеме &2"                                  , p-profile-id                                  , v-schema-name                                   ) ).
+     3444       return error substitute("В профайле &1 нет обработки данных по схеме &2"                                  , p-profile-id                                  , v-schema-name                                   ).
+     3445     end.
+     3446     assign
+     3447     v-pck-num = 0.
+     3448     run get-gate-rec in this-procedure ( v-schema-name
+     3449                                         ,output v-gate-rec) no-error.
+     3450     if error-status:error then do:
+     3451       undo, return error substitute("Не найдено описание xsd-схемы &1 в БД", v-schema-name).
+     3452     end.
+     3453     define variable v-longchar as longchar no-undo .
+     3454     v-longchar = ?.
+     3455     run get-gate-by-rec in this-procedure ( input v-gate-rec
+     3456                                           ,output v_locdataseth
+     3457                                           ,input-output v-xmlh
+     3458                                           ,input-output  v-longchar
+     3459                                           ) no-error.
+     3460     if error-status:error then do:
+     3461           run write-log in p-log-handle (           input 2         , input substitute("Ошибка при создании структуры маршрутизируемых данных согласно гейту:&1&2"                                , v-gate-rec                                , chr(10), error-status:get-message(1) ) ).
+     3462       undo, return error substitute("Ошибка при создании структуры маршрутизируемых данных согласно гейту:&1&2"                                , v-gate-rec                                , chr(10), error-status:get-message(1) ).
+     3463     end.
+     3464     create buf_temp-xml-tables.
+     3465     assign
+     3466     buf_temp-xml-tables.tbl-name = v-headerh:table
+     3467     buf_temp-xml-tables.tbl-handle_ = v-headerh
+     3468     buf_temp-xml-tables.table-handle_ = v-headerh:table-handle
+     3469     buf_temp-xml-tables.order = -3
+     3470     buf_temp-xml-tables.gate-handle = v_locdataseth
+     3471     buf_temp-xml-tables.gate-name = v-schema-name
+     3472     buf_temp-xml-tables.uniq-gate-rec = v-gate-rec
+     3473     .
+     3474     run tmpreldf_get-relations in this-procedure ( input v_locdataseth).
+     3475     for each buf_temp-xml-tables
+     3476     break
+     3477     by buf_temp-xml-tables.order
+     3478     on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     3479     on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     3480     on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     3481     :
+     3482      if first(buf_temp-xml-tables.order) then do:
+     3483        glog = v_locdataseth:set-buffers ( buf_temp-xml-tables.tbl-handle_) no-error.
+     3484      end.
+     3485      else do:
+     3486        glog = v_locdataseth:add-buffer ( buf_temp-xml-tables.tbl-handle_) no-error.
+     3487      end.
+     3488      if error-status:error
+     3489      or not glog
+     3490      then do:
+     3491               run write-log in p-log-handle (           input 2         , input substitute("Ошибка при создании заголовка XML файла:&1&2", chr(10), error-status:get-message(1) ) ).
+     3492         run gate-clear in this-procedure ( input v_locdataseth, input v-xmlh).
+     3493         undo, return error substitute("Ошибка при создании заголовка XML файла:&1&2", chr(10), error-status:get-message(1) ).
+     3494       end.
+     3495     end.
+     3496     run tmpreldf_set-relations in this-procedure ( input v_locdataseth, input v_locdataseth).
+     3497     run gbl/_tmpfile.p (
+     3498                         input ""
+     3499                       , input "xml"
+     3500                       , output v-schema-tmp-file) .
+     3501     assign
+     3502     glog = v_locdataseth:WRITE-XMLSCHEMA( "FILE"
+     3503                                      , v-schema-tmp-file
+     3504                                      , yes
+     3505                                      , ?
+     3506                                      , no
+     3507                                      ) no-error .
+     3508     if error-status :error then do:
+     3509               run write-log in p-log-handle (           input 2         , input substitute("Ошибка при создании временного файла xsd со схемой &1:&2&3"                                     , v_locdataseth:name                                     , chr(10)                                       , error-status:get-message(1) ) ).
+     3510       run gate-clear in this-procedure ( input v_locdataseth, input v-xmlh).
+     3511       undo, return error substitute("Ошибка при создании временного файла xsd со схемой &1:&2&3"                                     , v_locdataseth:name                                     , chr(10)                                       , error-status:get-message(1) ).
+     3512     end.
+     3513     assign
+     3514     v-rec-cnt = 0
+     3515     .
+     3516     run gate-clear in this-procedure ( input v_locdataseth, input v-xmlh).
+     3517     for each buf_temp-xml-tables:
+     3518       delete buf_temp-xml-tables.
+     3519     end.
+     3520     run get-gate-by-file in this-procedure ( input v-schema-tmp-file
+     3521                                           ,input v-gate-rec
+     3522                                           ,output v_dataseth
+     3523                                           ,input-output v-xmlh) no-error.
+     3524     if error-status:error then do:
+     3525           run write-log in p-log-handle (           input 2         , input substitute("Ошибка при создании структуры маршрутизируемых данных согласно файлу схемы:&1&2&3&2&4"                                , v-schema-tmp-file                                , chr(10), error-status:get-message(1), return-value  ) ).
+     3526       undo, return error substitute("Ошибка при создании структуры маршрутизируемых данных согласно файлу схемы:&1&2&3&2&4"                                , v-schema-tmp-file                                , chr(10), error-status:get-message(1), return-value  ).
+     3527     end.
+     3528     ASSIGN
+     3529     glog = v_dataseth:read-xml( "file"
+     3530                               ,p-xml-file-name
+     3531                               ,"merge"
+     3532                               ,v-schema-tmp-file
+     3533                               ,?
+     3534                               ,?
+     3535                               ,"strict"
+     3536                               ) no-error .
+     3537     if error-status:error
+     3538     then do:
+     3539       run write-log in p-log-handle (           input 2         , input substitute("Ошибка при чтении XML файла &1 данными через гейт &2:&3&4"                                     , p-xml-file-name                                     , v-schema-name                                     , chr(10)                                       , error-status:get-message(1)) ).
+     3540       run gate-clear in this-procedure ( input v_dataseth, input v-xmlh).
+     3541       undo, return error substitute("Ошибка при чтении XML файла &1 данными через гейт &2:&3&4"                                     , p-xml-file-name                                     , v-schema-name                                     , chr(10)                                       , error-status:get-message(1)).
+     3542     end.
+     3543     if not glog then do:
+     3544       v-xml-err = error-status:get-message(1) + chr(10) + error-status:get-message(2).
+     3545           run write-log in p-log-handle (           input 2         , input substitute("Не прошел верификацию с помощью схемы &1 XML файл &2:&3&4&3&5"                                     , v-schema-name                                     , p-xml-file-name                                     , chr(10)                                       , v-xml-err ) ).
+     3546       run gate-clear in this-procedure ( input v_dataseth, input v-xmlh).
+     3547       os-delete value(v-schema-tmp-file).
+     3548       undo, return error substitute("Не прошел верификацию с помощью схемы &1 XML файл &2:&3&4&3&5"                                     , v-schema-name                                     , p-xml-file-name                                     , chr(10)                                       , v-xml-err ).
+     3549     end.
+     3550     find first buf_temp-xml-tables where
+     3551               buf_temp-xml-tables.tbl-name = "THheader"
+     3552           and buf_temp-xml-tables.gate-handle_ = v_dataseth
+     3553               no-error.
+     3554     if not available buf_temp-xml-tables then do:
+     3555       run write-log in p-log-handle (           input 2         , input substitute("Не найден THHEADER в XML файлe &1:&2&3"                                     , p-xml-file-name                                     , chr(10)                                       , error-status:get-message(1)) ).
+     3556       run gate-clear in this-procedure ( input v_dataseth, input v-xmlh).
+     3557       os-delete value(v-schema-tmp-file).
+     3558       undo, return error substitute("Не найден THHEADER в XML файлe &1:&2&3"                                     , p-xml-file-name                                     , chr(10)                                       , error-status:get-message(1)).
+     3559     end.
+     3560     glog = buf_temp-xml-tables.tbl-handle_:find-first( "where true") no-error.
+     3561     if error-status:error
+     3562     or not glog
+     3563     or buf_temp-xml-tables.tbl-handle_:available = no then do:
+     3564       run write-log in p-log-handle (           input 2         , input substitute("Не найдена запись THHEADER в XML файлe &1:&2&3"                                     , p-xml-file-name                                     , chr(10)                                       , error-status:get-message(1)) ).
+     3565       run gate-clear in this-procedure ( input v_dataseth, input v-xmlh).
+     3566       os-delete value(v-schema-tmp-file).
+     3567       undo, return error substitute("Не найдена запись THHEADER в XML файлe &1:&2&3"                                     , p-xml-file-name                                     , chr(10)                                       , error-status:get-message(1)).
+     3568     end.
+     3569     assign
+     3570     v-rec-cnt = v-rec-cnt + 1
+     3571     .
+     3572     os-delete value(v-schema-tmp-file).
+     3573     v-xmlh = buffer buf_temp-xml-tables:handle:table-handle:default-buffer-handle.
+     3574   end.

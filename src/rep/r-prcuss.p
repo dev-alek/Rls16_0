@@ -1,0 +1,1373 @@
+block-level on error undo, throw.
+/*
+
+$Revision: caa5562b367b, 1893, rls $
+$Author: EShklyar $
+$Date: Fri Jun 07 16:26:45 2019 +0300 $
+$Workfile: r-prcuss.p $
+$Archive: rep/r-prcuss.p $
+
+Отчет Отчет по прайс-листам
+
+Автор: Морозов Александр Сергеевич
+Дата создания: 05/31/11
+Author: Morozov Alexandr
+Creation date: 05/31/11
+
+*/
+
+define input  parameter p-par1 as character no-undo . /* recid в таблице групп */
+define input  parameter v-curr-code as integer   no-undo .
+define input  parameter v-clas as character no-undo .
+define input  parameter v-sort as character no-undo .
+
+
+define variable vss-revision    as character no-undo init "$Revision: caa5562b367b, 1893, rls $":U .
+define variable vss-author      as character no-undo init "$Author: EShklyar $":U .
+define variable vss-date        as character no-undo init "$Date: Fri Jun 07 16:26:45 2019 +0300 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: r-prcuss.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: rep/r-prcuss.p $":U .
+define variable vss-description as character no-undo init "Отчет Отчет по прайс-листам".
+{ cmp/vssrevis.i }
+{ cmp/str-glbl.i }
+{ gbl/cur-time.i }
+{ cmp/r-pril.i   }
+{ cmp/r-page1.i  }
+{ rep/f-fdec.i   }
+{ gbl/paramls.i  }
+{ rep/repfrm.i def }   /* Показать окно информации о текущем процессе */
+{ rep/repfrm.i on 100 } /* Показать окно информации о текущем процессе */
+{ rep/r-sym.i   }
+{ rep/rep-bt.i  }
+{ trg/factord.i }
+{ rep/lkp-font.i }
+{ str/lib-trn.i    }
+{ str/get-pr.i def }
+
+define variable v-curr-abbr  as character no-undo .
+define variable v-Reportname as character no-undo .
+define variable v-strline    as character no-undo init "---".
+
+define variable v-type as integer   no-undo .
+define variable v-fact-order as decimal   no-undo .
+define variable new-curr-code as integer   no-undo .
+define variable f-price-roz as logical no-undo.
+run factord-end-day in this-procedure
+   (input x-date-alone ,
+    output v-fact-order) .
+
+/* v-type = {&bef-mpl-cust}.  */
+
+ define buffer buf_buyer-group for ub.buyer-group  .
+
+v-Reportname = "О Т Ч Е Т  П О  П Р А Й С - Л И С Т А М"  .
+define stream  OutStream  .
+define stream  macr_excel .
+
+define variable v-file-name as character no-undo .
+define variable v-ind       as integer   no-undo .
+define variable num#col#    as integer no-undo .
+define variable C-c    as integer no-undo .
+define variable C-str  as character no-undo .
+define variable str--1 as character Format "x(60)" no-undo.
+define variable str--2 as integer no-undo .
+define variable C-i    as integer no-undo .
+define variable p-var  as integer no-undo .
+define variable var-1  as integer no-undo .
+define variable var-2  as integer no-undo .
+define buffer this_object for  ub.clients .
+
+define variable num-ln as integer   no-undo .
+
+define variable i as integer no-undo.
+define variable j as integer no-undo.
+define variable Counter1 as integer init 0  no-undo .
+
+define variable LineBuf       as char    no-undo.
+define variable Line       as char    no-undo.
+define variable UndLine    as char    no-undo.
+
+define variable     Lines_Counter as   integer  init 0  no-undo.
+define variable     Tmp_Counter   as   integer  init 0  no-undo.
+
+define variable vv0 as character no-undo .
+define variable vv1 as character no-undo .
+define variable vv2 as character no-undo .
+define variable vv3 as character no-undo .
+define variable vv4 as character no-undo .
+define variable vv5 as character no-undo .
+define variable vv6 as character no-undo .
+define variable vv7 as character no-undo .
+
+define variable t-1 as character no-undo .
+define variable t-2 as character no-undo .
+define variable t-3 as character no-undo .
+define variable t-4 as character no-undo .
+define variable t-5 as character no-undo .
+
+define buffer buf_gds-obj for ub.gds-obj  .
+define buffer buf_goods for ub.goods  .
+
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+define temp-table temp-header no-undo
+field id as integer
+field bgr-id  as integer
+field bgr-db-num   as integer
+field name    as character
+index pi
+ bgr-id
+ bgr-db-num
+.
+
+define temp-table temp-price no-undo
+field plt-id     as int
+field plt-db-num as int
+field b-code   as integer
+field gds-code as integer
+field id as decimal   /* Номер колонки*/
+field price-sale as decimal
+.
+
+define temp-table temp-pdf no-undo
+field gds-code  as integer
+field grp-code  as integer
+field prod-typecode as char
+field artic     as char
+field unit-cli  as char
+field price-roz as decimal
+field gds-name  as char
+field grp-name  as char
+field prod-name as char
+field b-code as integer
+field prior  as integer
+field date1  as date
+field date2  as date
+field plt-id     as int
+field plt-db-num as int
+field nul        as int
+
+
+index pi
+b-code
+prior
+plt-id
+plt-db-num
+
+index pi2
+gds-code
+prior
+plt-id
+plt-db-num
+
+index pi3
+artic
+prior
+plt-id
+plt-db-num
+
+index pi4
+gds-name
+prior
+plt-id
+plt-db-num
+.
+
+
+define variable v-kol-price as integer   no-undo .
+
+DEFINE FRAME plan-menu
+    HEADER
+    string( "Лист " + string( PAGE-NUMBER(OutStream) , ">>>>9") ) AT 80 format "X(13)" SKIP
+    UndLine format "X(80)" AT 1
+    with width {&DOS_CW} down stream-io use-text NO-UNDERLINE  NO-BOX no-labels.
+
+  if session:set-wait-state("compiler") then.
+    { cmp/open-out.i STREAM OutStream " " ReportPageHeight }
+  define variable v-prn0 as character no-undo .
+
+  assign
+    Line    = fill("-", 230)
+    UndLine = fill("_", 230)
+    LineBuf = fill("_", 240)
+  .
+
+define variable v-is-base as logical no-undo .
+{ gbl/rbisbase.i    v-is-base  }
+
+if v-is-base = true then do:
+end.
+else do:
+end.
+
+/*-----------------------------------------------------------------------------------------------------------------------*/
+v-ind = 0    .
+run make-header in this-procedure ( output v-kol-price ).
+FORM with frame plan-menu .
+ /* создаем временный файл */
+
+    num#str# = 0 .
+    for each obj-list:
+      Output stream Macr_Excel  close .
+      run gbl/_tmpfile.p ( "wb", ".txt", output v-file-name) .
+      output stream macr_excel to value(v-file-name) .
+
+      run make-tt in this-procedure (obj-list.obj-type , obj-list.obj-code) .
+      v-ind = v-ind + 1.
+      find clients      where clients.obj-type = {&cmp}                and
+                              clients.obj-code = v-cntxt-host-code-obj no-lock .
+      run PrintTitul in this-procedure .
+
+      /* по строкам -------------------------------------------------------------------------------------------- */
+
+define variable p-sort-pole as character no-undo .
+define variable p-sort-pole2 as character no-undo .
+define variable p-sort-pole-a as character no-undo .
+define variable p-query-prepare as character no-undo .
+define variable p-table-name as character no-undo .
+
+p-table-name = "temp-pdf" .
+
+/* порядок сортировки - самый низ */
+case v-sort :
+  when "sort-code":U  then do:
+    p-sort-pole-a = "temp-pdf.b-code" .
+  end.
+  when "sort-artic":U then do:
+      p-sort-pole-a = "temp-pdf.artic" .
+  end.
+  when "sort-name":U then do:
+      p-sort-pole-a = "temp-pdf.gds-name" .
+  end.
+end case.
+
+case v-clas:
+    when "no-classify":U then do:
+       p-query-prepare  = substitute( "for each temp-pdf by &1 " , p-sort-pole-a ).
+       p-sort-pole   = "nul" .
+       p-sort-pole2  = "nul" .
+    end.
+    when "prod":U        then do:
+       p-query-prepare  = substitute( "for each temp-pdf by &1 by &2 " , "temp-pdf.prod-typecode" , p-sort-pole-a).
+       p-sort-pole   = "prod-typecode" .
+       p-sort-pole2  = "nul" .
+    end.
+    when "grp-goods":U   then do:
+       p-query-prepare  = substitute( "for each temp-pdf by &1 by &2 " , "temp-pdf.grp-code" , p-sort-pole-a).
+       p-sort-pole   = "grp-code" .
+       p-sort-pole2  = "nul" .
+    end.
+    when "prod/grp-goods":U then do:
+       p-query-prepare  = substitute( "for each temp-pdf by &1 by &2 by &3 " , "temp-pdf.prod-typecode" , "temp-pdf.grp-code" , p-sort-pole-a) .
+       p-sort-pole   = "prod-typecode" .
+       p-sort-pole2  = "grp-code" .
+    end.
+    when "grp-goods/prod":U then do:
+       p-query-prepare  = substitute( "for each temp-pdf by &1 by &2 by &3 " , "temp-pdf.grp-code" , "temp-pdf.prod-typecode" , p-sort-pole-a) .
+       p-sort-pole   = "grp-code" .
+       p-sort-pole2  = "prod-typecode" .
+    end.
+end case.
+
+
+     run din-tt-go (
+          p-table-name    ,
+          P-query-prepare ,
+          p-sort-pole ,
+          p-sort-pole2
+          ).
+
+
+      run print-all-itog in this-procedure .
+      /* ... Подвал. --- */
+      run on-same-page in this-procedure (input 1) .
+      run PrintPodval in this-procedure .
+      run paramls-write in this-procedure
+      (input "file"
+      ,input string(v-ind) + obj-list.obj-name
+      ,input v-file-name
+      ) .
+      page stream OutStream .
+    end.
+
+HIDE STREAM OutStream FRAME plan-menu.
+HIDE stream OutStream FRAME BottomFrame .
+HIDE stream OutStream FRAME BottomFrame2 .
+output stream OutStream CLOSE .
+Output stream Macr_Excel  close .
+
+{ rep/repfrm.i off } /* Показать окно информации о текущем процессе */
+
+    run paramls-write in this-procedure
+        (input "charcol"
+        ,input ""
+        ,input "1,2,3"
+        ) .
+
+
+  define variable v-user-action as character no-undo .
+  define variable v-printed as logical   no-undo .
+  define variable DisabledOptions as integer   no-undo .
+
+  run end-proc in this-procedure .
+  define variable v-orient-page as character no-undo .
+  run How-name in this-procedure (
+      input ReportPageHeight,
+      input ReportPageWidth,
+      output v-orient-page )
+      .
+  if v-orient-page = "A4-lans":U then DisabledOptions = 8 .
+                                 else DisabledOptions = 0 .
+
+
+  run gbl/prnfilen.w
+    (input  ""
+    ,input  DisabledOptions
+    ,input  string(session :temp-directory) + {&DF_Name} + string( g#report-num )
+    ,input ReportFontNum
+    ,output v-user-action
+    ,output v-printed
+    ) .
+
+
+procedure print-line :
+do on error undo, return error return-value :
+define input  parameter p-recid as recid no-undo .
+define buffer buf_temp-pdf for temp-pdf  .
+
+find first buf_temp-pdf where recid(buf_temp-pdf) = p-recid no-error .
+
+define variable  p-code       as character no-undo .
+define variable  p-artic      as character no-undo .
+define variable  p-name       as character no-undo .
+define variable  p-prod-name  as character no-undo .
+define variable  p-unit-cli   as character no-undo .
+define variable  p-plt-id     as decimal   no-undo .
+define variable  p-price-roz  as decimal   no-undo .
+p-code      = string(buf_temp-pdf.b-code) .
+p-artic     = buf_temp-pdf.artic   .
+p-name      = buf_temp-pdf.gds-name .
+p-prod-name = buf_temp-pdf.prod-name .
+p-unit-cli  = buf_temp-pdf.unit-cli .
+p-plt-id    = buf_temp-pdf.plt-id .
+p-price-roz = buf_temp-pdf.price-roz .
+
+  assign
+     Lines_Counter = Lines_Counter + 1
+    .
+
+  if line-counter( OutStream ) + 2 > page-size( OutStream ) then do:
+     run p-line in this-procedure.
+     page stream OutStream.
+     PUT STREAM OutStream UNFORMATTED
+         string( "Лист " + string( PAGE-NUMBER(OutStream) , ">>>>9") ) AT 100 format "X(13)" SKIP .
+     run print-1 in this-procedure.
+     end.
+
+  if line-counter( OutStream ) < Tmp_Counter then
+    assign
+    .
+
+  assign
+    Tmp_Counter  = line-counter( OutStream )
+    num-ln = num-ln + 1
+  .
+
+  if line-counter( OutStream ) + j > page-size( OutStream ) then  PAGE STREAM OutStream.
+
+
+
+define variable ii as integer   no-undo .
+define variable v-price-sale as decimal   no-undo .
+
+/*    PUT STREAM OutStream UNFORMATTED*/
+/*        sym1                format "X(1)" space(0)*/
+/*        p-code              format "X(10)" space(0)*/
+/*        sym2                format "X(1)" space(0)*/
+/*        p-artic             format "X(16)" space(0)*/
+/*        sym3                format "X(1)" space(0)*/
+/*        p-name              format "X(30)" space(0)*/
+/*        sym4                format "X(1)" space(0)*/
+/*        p-prod-name         format "X(30)" space(0)*/
+/*        sym5                format "X(1)" space(0)*/
+/*        p-unit-cli          format "X(7)" space(0)*/
+/*        sym6                format "X(1)" space(0)*/
+/*        p-plt-id            format ">>>>>>9"   space(0)*/
+/*        sym7                format "X(1)" space(0)*/
+/*        p-price-roz         format ">>>>>>>>>>>>>9.99" space(0)*/
+/*        sym8                format "X(1)" space(0)*/
+/*    .*/
+    num#col# = 1.
+    num#str# = num#str# + 1.
+    run macr_excel_char in this-procedure(p-code      , num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+    run macr_excel_char in this-procedure(p-artic     , num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+    run macr_excel_char in this-procedure(p-name      , num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+    run macr_excel_char in this-procedure(p-prod-name , num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+    run macr_excel_char in this-procedure(p-unit-cli  , num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+    run macr_excel_char in this-procedure(p-plt-id    , num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+    if p-price-roz = 0 or p-price-roz = ?
+    then do:
+      PUT STREAM OutStream UNFORMATTED
+          sym1                format "X(1)" space(0)
+          p-code              format "X(10)" space(0)
+          sym2                format "X(1)" space(0)
+          p-artic             format "X(16)" space(0)
+          sym3                format "X(1)" space(0)
+          p-name              format "X(30)" space(0)
+          sym4                format "X(1)" space(0)
+          p-prod-name         format "X(30)" space(0)
+          sym5                format "X(1)" space(0)
+          p-unit-cli          format "X(7)" space(0)
+          sym6                format "X(1)" space(0)
+          p-plt-id            format ">>>>>>9"   space(0)
+          sym7                format "X(1)" space(0)
+          v-strline           format "x(17)" space(0)
+      .
+      run macr_excel_char in this-procedure(v-strline, num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+      assign
+        f-price-roz = true
+      .
+    end.
+    else do:
+      PUT STREAM OutStream UNFORMATTED
+          sym1                format "X(1)" space(0)
+          p-code              format "X(10)" space(0)
+          sym2                format "X(1)" space(0)
+          p-artic             format "X(16)" space(0)
+          sym3                format "X(1)" space(0)
+          p-name              format "X(30)" space(0)
+          sym4                format "X(1)" space(0)
+          p-prod-name         format "X(30)" space(0)
+          sym5                format "X(1)" space(0)
+          p-unit-cli          format "X(7)" space(0)
+          sym6                format "X(1)" space(0)
+          p-plt-id            format ">>>>>>9"   space(0)
+          sym7                format "X(1)" space(0)
+          p-price-roz         format ">>>>>>>>>>>>>9.99" space(0)
+      .
+      run macr_excel_dec in this-procedure(p-price-roz, num#str# , num#col#   ) . assign    num#col# = num#col# + 1 .
+      assign
+        f-price-roz = false
+      .
+    end.
+      repeat ii = 1 to v-kol-price :
+        find first  temp-price where
+                    temp-price.plt-id     = buf_temp-pdf.plt-id     and
+                    temp-price.plt-db-num = buf_temp-pdf.plt-db-num and
+                    temp-price.gds-code = int(p-code) and
+                    temp-price.id = ii no-error .
+                    if available temp-price then  v-price-sale = temp-price.price-sale .
+                                            else v-price-sale = 0 .
+        put stream outstream unformatted
+            sym1                                        format "x(1)"  space(0)
+            .
+        if v-price-sale = 0 or v-price-sale = ?
+        then do:
+          put stream outstream unformatted
+              v-strline                                   format "x(19)" space(0)
+              .
+          run macr_excel_char in this-procedure( v-strline , num#str# , num#col# ) .
+        end.
+        else do:
+          put stream outstream unformatted
+          v-price-sale         format ">>>>>>>>>>>>>>>9.99" space(0)
+/*              string(v-price-sale,">>>>>>>9.99")          format "x(19)" space(0)*/
+              .
+          run macr_excel_dec in this-procedure( v-price-sale , num#str# , num#col# ) .
+          if f-price-roz then do:
+            run macr_cell_format in this-procedure
+            ( ?     ,    /* p-size     */
+              ?     ,    /* p-bold     */
+              ?     ,    /* p-italic   */
+              38    ,    /* p-color-bg */
+              num#str# ,    /* p-row      */
+              num#col# ,    /* p-col      */
+              ?        , /* p-row-2    */
+              ?        ) .      /* p-col-2    */
+          end.
+        end.
+                assign  num#col# = num#col# + 1 .
+      end.
+
+    PUT STREAM OutStream UNFORMATTED skip.
+
+end.
+end procedure. /* print-line */
+
+
+
+procedure print-all-itog :
+  /* Итоговые суммы */
+end procedure. /* print-all-itog */
+
+
+procedure PrintTitul :
+  do  on error undo, return error return-value  :
+  define variable cc as integer no-undo .
+  define variable tt as integer no-undo .
+  define variable pp as integer no-undo .
+  define variable ii as integer   no-undo .
+
+/* ---------------- Создание заголовка :--------------------------------------------------------------------------- */
+
+if v-curr-code = ? then
+   find first ub.currency no-lock where ub.currency.curr-code = new-curr-code no-error .
+else find first ub.currency no-lock where ub.currency.curr-code = v-curr-code no-error .
+
+ if available ub.currency then v-curr-abbr = ub.currency.curr-abbr .
+
+PUT STREAM OutStream UNFORMATTED
+space(0)
+   v-ReportNAme skip
+   "Отчет сформирован: " + cur-time-date() skip
+   "На дату:  "  + string (x-date-alone, "99/99/9999") skip
+   "Детализация цен:  "  + if entry (1, p-par1) = "bgl" then "По группам покупателей" else "По покупателям" skip
+   "Валюта: " + v-curr-abbr skip
+      .
+
+  define variable i as integer no-undo .
+  Repeat i = 1 to NUM-ENTRIES(ReportHeader,chr(10)) :
+    PUT STREAM OutStream UNFORMATTED  Entry(i,ReportHeader,chr(10))  AT 1 format "X(90)" SKIP.
+  End.
+
+    num#str# = 1.
+    num#col# = 1.
+    run macr_cell_format in this-procedure
+    ( 14    ,    /* p-size     */
+      true  ,    /* p-bold     */
+      false ,    /* p-italic   */
+      ?     ,    /* p-color-bg */
+      1     ,    /* p-row      */
+      1     ,    /* p-col      */
+      num#str# , /* p-row-2    */
+      num#col# ) .      /* p-col-2    */
+    run macr_excel_char in this-procedure( v-Reportname , num#str# , num#col#   ) .
+    num#str# = num#str# + 2.
+/*    run macr_excel_char in this-procedure( "по фирме " + CAPS( clients.obj-name)   , num#str# , num#col#   ) .*/
+/*    num#str# = num#str# + 1.*/
+    run macr_cell_format in this-procedure
+    ( 10    ,    /* p-size     */
+      false ,    /* p-bold     */
+      false ,    /* p-italic   */
+      ?     ,    /* p-color-bg */
+      num#str# ,    /* p-row      */
+      num#col# ,    /* p-col      */
+      ?     , /* p-row-2    */
+      ?     ) .      /* p-col-2    */
+    run macr_excel_char in this-procedure( "Отчет сформирован: " + cur-time-date() , num#str# , num#col#   ) .
+    num#str# = num#str# + 1.
+    run macr_cell_format in this-procedure
+    ( 10    ,    /* p-size     */
+      false ,    /* p-bold     */
+      false ,    /* p-italic   */
+      ?     ,    /* p-color-bg */
+      num#str# ,    /* p-row      */
+      num#col# ,    /* p-col      */
+      ?     , /* p-row-2    */
+      ?     ) .      /* p-col-2    */
+    run macr_excel_char in this-procedure("Детализация цен:  "  + if entry (1, p-par1) = "bgl" then "По группам покупателей" else "По покупателям" , num#str# , num#col#   ) .
+    num#str# = num#str# + 1.
+    run macr_cell_format in this-procedure
+    ( 10    ,    /* p-size     */
+      true  ,    /* p-bold     */
+      true  ,    /* p-italic   */
+      ?     ,    /* p-color-bg */
+      num#str# ,    /* p-row      */
+      num#col# ,    /* p-col      */
+      ?     , /* p-row-2    */
+      ?     ) .      /* p-col-2    */
+    run macr_excel_char in this-procedure("На дату:  "  + string (x-date-alone, "99/99/9999")  , num#str# , num#col#   ) .
+    num#str# = num#str# + 1.
+    run macr_cell_format in this-procedure
+    ( 10    ,    /* p-size     */
+      false ,    /* p-bold     */
+      false ,    /* p-italic   */
+      ?     ,    /* p-color-bg */
+      num#str# ,    /* p-row      */
+      num#col# ,    /* p-col      */
+      ?     , /* p-row-2    */
+      ?     ) .      /* p-col-2    */
+    run macr_excel_char in this-procedure("Валюта:  " + v-curr-abbr   , num#str# , num#col#   ) .
+/* шапка */
+    num#str# = num#str# + 1.
+    run macr_excel_char in this-procedure("Код"  , num#str# , num#col#   ) .    run macr_cell_size ( 10 , ? , num#str# , num#col# , ?, ? ) .
+    num#col# = 2.
+    run macr_excel_char in this-procedure("Артикул"  , num#str# , num#col#   ) .  run macr_cell_size ( 16 , ? , num#str# , num#col# , ?, ? ) .
+    num#col# = 3.
+    run macr_excel_char in this-procedure("Наименование"  , num#str# , num#col#   ) . run macr_cell_size ( 30 , ? , num#str# , num#col# , ?, ? ) .
+    num#col# = 4.
+    run macr_excel_char in this-procedure("Производитель"  , num#str# , num#col#   ) . run macr_cell_size ( 30 , ? , num#str# , num#col# , ?, ? ) .
+    num#col# = 5.
+    run macr_excel_char in this-procedure("Ед.изм."  , num#str# , num#col#   ) . run macr_cell_size ( 10 , ? , num#str# , num#col# , ?, ? ) .
+    num#col# = 6.
+    run macr_excel_char in this-procedure("Код ТПЛ"  , num#str# , num#col#   ) . run macr_cell_size ( 10 , ? , num#str# , num#col# , ?, ? ) .
+    num#col# = 7.
+    run macr_excel_char in this-procedure("Цена за ед."  , num#str# , num#col#   ) . run macr_cell_size ( 10 , ? , num#str# , num#col# , ?, ? ) .
+    repeat ii = 1 to num#col# :
+      run macr_cell_format in this-procedure
+      ( 10    ,    /* p-size     */
+        true  ,    /* p-bold     */
+        false ,    /* p-italic   */
+        34    ,    /* p-color-bg */
+        num#str# ,    /* p-row      */
+        ii       ,    /* p-col      */
+        ?        , /* p-row-2    */
+        ?        ) .      /* p-col-2    */
+    end.
+    run print-1 in this-procedure .
+    repeat ii = 1 to v-kol-price :
+      find first  temp-header where temp-header.id = ii no-error .
+      num#col# = num#col# + 1.
+      run macr_excel_char in this-procedure( temp-header.name , num#str# , num#col#   ) .
+      run macr_cell_format in this-procedure
+      ( 10    ,    /* p-size     */
+        true  ,    /* p-bold     */
+        false ,    /* p-italic   */
+        34    ,    /* p-color-bg */
+        num#str# ,    /* p-row      */
+        num#col# ,    /* p-col      */
+        ?        , /* p-row-2    */
+        ?        ) .      /* p-col-2    */
+    end.
+    put  stream macr_excel unformatted
+       substitute('select("r&1c&2:r&3c&4 ")' , num#str# , 1 , num#str# ,  num#col# ) + {&new-line}  +
+       'BORDER( 2 , 2 , 2 , 2 , 2 , ,0,0,0,0,0) '  + {&new-line} +
+       'ALIGNMENT(3 , , 4 , 4 ,)'  + {&new-line}
+       .
+    put  stream macr_excel unformatted
+       substitute('select("r&1c&2:r&3c&4 ")' , num#str# , 1 , num#str# ,  3 ) + {&new-line}  +
+       'BORDER( 2, , , , , , , , , , ) '  + {&new-line} .
+
+    /* ... конец создания заголовка. --- */
+  end.
+end procedure. /* PrintTitul */
+
+
+procedure PrintPodval :
+  do on error undo, return error return-value  :
+  define variable pp as integer no-undo .
+  define variable rr as integer no-undo .
+    run p-line in this-procedure.
+
+    /* ... конец создания Подвал. --- */
+  end.
+end procedure. /* PrintPodval */
+
+
+
+PROCEDURE on-same-page :
+  define input parameter p-line-number as integer  no-undo .
+  if p-line-number > page-size( OutStream ) then return .
+  if line-counter( OutStream ) + p-line-number > page-size( OutStream ) then do:
+
+    run p-line in this-procedure.
+    page stream OutStream .
+    end.
+end procedure. /* on-same-page */
+
+
+procedure print-1 :
+define variable ii as integer   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run p-line in this-procedure.
+    PUT STREAM OutStream UNFORMATTED  ":Код"  AT 1 format "X(11)" .
+    PUT STREAM OutStream UNFORMATTED  ":Артикул"  format "X(17)" .
+    PUT STREAM OutStream UNFORMATTED  ":Наименование"  format "X(31)" .
+    PUT STREAM OutStream UNFORMATTED  ":Производитель"  format "X(31)" .
+    PUT STREAM OutStream UNFORMATTED  ":Ед.изм."  format "X(8)" .
+    PUT STREAM OutStream UNFORMATTED  ":Код ТПЛ:"  format "X(8)" .
+    PUT STREAM OutStream UNFORMATTED  ":Цена за ед. руб."  format "X(18)" .
+
+      repeat ii = 1 to v-kol-price :
+        find first  temp-header where temp-header.id = ii no-error .
+        put stream outstream unformatted   ":" + string(temp-header.name)    format "x(20)" space(0)  .
+      end.
+    put stream outstream unformatted skip .
+    run p-line in this-procedure.
+  end.
+
+end procedure. /* print-1 */
+
+procedure p-line :
+define variable ii as integer   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    PUT STREAM OutStream UNFORMATTED  fill("-",11)  AT 1 format "X(11)" .
+    PUT STREAM OutStream UNFORMATTED  fill("-",17)  format "X(17)" .
+    PUT STREAM OutStream UNFORMATTED  fill("-",31)  format "X(31)" .
+    PUT STREAM OutStream UNFORMATTED  fill("-",31)  format "X(31)" .
+    PUT STREAM OutStream UNFORMATTED  fill("-",8)  format "X(8)" .
+    PUT STREAM OutStream UNFORMATTED  fill("-",8)  format "X(8)" .
+    PUT STREAM OutStream UNFORMATTED  fill("-",18)  format "X(18)" .
+
+      repeat ii = 1 to v-kol-price :
+        put stream outstream unformatted   fill("-",21)  format "x(21)" space(0)  .
+      end.
+    PUT STREAM OutStream UNFORMATTED  skip .
+
+  end.
+
+end procedure. /* p-line */
+
+
+procedure make-header :
+
+define output parameter ii as integer   no-undo  .
+  do
+  on error undo, return error return-value
+  :
+    define variable ix as integer   no-undo  .
+    define buffer buf_clients for ub.clients .
+    define buffer buf_buyer-in-buyer-group for ub.buyer-in-buyer-group .
+    ii = 0 .
+    if entry (1, p-par1) = "bgl"
+    then do:
+      repeat ix = 2 to num-entries (p-par1) :
+        for buf_buyer-group no-lock where recid (buf_buyer-group) = int (entry (ix, p-par1) )
+                  :
+            ii = ii + 1.
+            create  temp-header.
+            assign
+              temp-header.id     = ii
+              temp-header.name   = buf_buyer-group.name
+              temp-header.bgr-id     = buf_buyer-group.bgr-id
+              temp-header.bgr-db-num = buf_buyer-group.bgr-db-num
+            .
+        end.
+      end.
+    end.
+    else do:
+      repeat ix = 2 to num-entries (p-par1) :
+        for buf_clients no-lock where recid (buf_clients) = int (entry (ix, p-par1) )
+                  :
+            find first buf_buyer-in-buyer-group no-lock
+              where buf_clients.obj-code = buf_buyer-in-buyer-group.bbg-obj-code
+              and buf_clients.obj-type = buf_buyer-in-buyer-group.bbg-obj-type 
+              and buf_buyer-in-buyer-group.stts <> 1 no-error
+            .
+            find first buf_buyer-group no-lock
+              where buf_buyer-group.bgr-id = buf_buyer-in-buyer-group.bgr-id
+              and buf_buyer-group.bgr-db-num = buf_buyer-in-buyer-group.bgr-db-num 
+              and buf_buyer-group.stts <> 1 no-error
+            .
+            if available buf_buyer-group
+            then do:
+              ii = ii + 1.
+              create  temp-header.
+              assign
+                temp-header.id     = ii
+                temp-header.name   = buf_clients.obj-name
+                temp-header.bgr-id     = buf_buyer-group.bgr-id
+                temp-header.bgr-db-num = buf_buyer-group.bgr-db-num
+              .
+            end.
+        end.
+      end.
+    end.
+
+  end.
+end procedure. /* make-header */
+
+
+procedure make-tt :
+define input  parameter p-obj-type as character no-undo .
+define input  parameter p-obj-code as integer no-undo .
+define buffer buf_bar-code for ub.bar-code  .
+define buffer buf_clients  for ub.clients  .
+define variable v-i as integer   no-undo .
+
+  do
+  on error undo, return error return-value
+  :
+  define buffer buf_price-all for ub.price-all.
+  v-i = 0.
+  for each temp-price : delete temp-price. end.
+  for each temp-pdf   : delete temp-pdf  . end.
+
+
+  case x-SelectGood :
+    when 1 then do:
+
+      for each temp-header no-lock,
+          each buf_price-all no-lock where
+              (buf_price-all.obj-type = p-obj-type and
+              buf_price-all.obj-code = p-obj-code and
+              /* buf_price-all.main-indication = v-type and */
+              buf_price-all.bgr-id > 0 and
+              (( buf_price-all.fact-order-sys-from = 0 ) or (buf_price-all.fact-order-sys-from <= v-fact-order)) and
+              (( buf_price-all.fact-order-sys-to = 0 )   or (buf_price-all.fact-order-sys-to >= v-fact-order)) and
+              (( v-curr-code = ?) or (buf_price-all.curr-code = v-curr-code ))) and
+              (temp-header.bgr-id        = buf_price-all.bgr-id and
+              temp-header.bgr-db-num    = buf_price-all.bgr-db-num)
+
+              by buf_price-all.fact-order desc :
+              if buf_price-all.bgr-id <> 0 then do:
+                find first buf_bar-code no-lock where buf_bar-code.b-code = buf_price-all.b-code no-error .
+                find first buf_goods    no-lock where buf_goods.gds-code = buf_bar-code.gds-code no-error .
+                find first buf_clients  no-lock where buf_clients.obj-type = buf_goods.prod-type and
+                                                      buf_clients.obj-code = buf_goods.prod-code no-error.
+                  v-i = v-i + 1.
+                { str/get-pr.i calc p-obj-type p-obj-code buf_goods.gds-code buf_bar-code.node-code " " v-fact-order}
+                { rep/repfrm.i disp v-i buf_goods.gds-name }
+                new-curr-code = buf_price-all.curr-code.
+                create temp-price .
+                assign
+                    temp-price.b-code     = buf_price-all.b-code
+                    temp-price.gds-code   = buf_bar-code.gds-code
+                    temp-price.id         = temp-header.id
+                    temp-price.price-sale = buf_price-all.price-sale
+                    temp-price.plt-id     = buf_price-all.plt-id
+                    temp-price.plt-db-num = buf_price-all.plt-db-num
+
+                .
+                find first temp-pdf where
+                          temp-pdf.b-code     = buf_price-all.b-code     and
+                          temp-pdf.plt-id     = buf_price-all.plt-id     and
+                          temp-pdf.plt-db-num = buf_price-all.plt-db-num  no-error .
+                if not available temp-pdf then do:
+                    create temp-pdf.
+                    assign
+                        temp-pdf.gds-code   = buf_bar-code.gds-code
+                        temp-pdf.prior      = buf_price-all.plt-priority
+                        temp-pdf.date1      = buf_price-all.start-date
+                        temp-pdf.date2      = buf_price-all.end-date
+                        temp-pdf.b-code     = buf_price-all.b-code
+                        temp-pdf.plt-id     = buf_price-all.plt-id
+                        temp-pdf.plt-db-num = buf_price-all.plt-db-num
+                        temp-pdf.gds-name   = buf_goods.gds-name
+                        temp-pdf.unit-cli   = buf_goods.unit-cli
+                        temp-pdf.price-roz  = gp-price-sale
+                        temp-pdf.artic      = buf_goods.artic
+                        temp-pdf.prod-typecode  = buf_goods.prod-type + string(buf_goods.prod-code)
+                        temp-pdf.prod-name  = buf_clients.obj-name
+                        temp-pdf.grp-code   = buf_goods.grp-code
+                        temp-pdf.grp-name   = buf_goods.grp-name
+                    .
+                end.
+              end.
+      end.
+    end.
+
+
+
+    when 2 then do:
+
+      for each tmp#grp no-lock ,
+          each buf_goods /*field (gds-name grp-name grp-code unit-base)*/ where
+                  buf_goods.grp-code  = tmp#grp.node-code no-lock :
+        for each buf_bar-code no-lock where buf_goods.gds-code = buf_bar-code.gds-code :
+          for each temp-header no-lock,
+              each buf_price-all no-lock where
+                  (buf_price-all.obj-type = p-obj-type and
+                  buf_price-all.obj-code = p-obj-code and
+                  /* buf_price-all.main-indication = v-type and */
+                  buf_price-all.bgr-id > 0 and
+                  (( buf_price-all.fact-order-sys-from = 0 ) or (buf_price-all.fact-order-sys-from <= v-fact-order)) and
+                  (( buf_price-all.fact-order-sys-to = 0 )   or (buf_price-all.fact-order-sys-to >= v-fact-order)) and
+                  (( v-curr-code = ?) or (buf_price-all.curr-code = v-curr-code ))) and
+                  (temp-header.bgr-id        = buf_price-all.bgr-id and
+                  temp-header.bgr-db-num    = buf_price-all.bgr-db-num) and
+                  buf_bar-code.b-code = buf_price-all.b-code
+
+                  by buf_price-all.fact-order desc :
+                  if buf_price-all.bgr-id <> 0 then do:
+                    find first buf_clients  no-lock where buf_clients.obj-type = buf_goods.prod-type and
+                                                          buf_clients.obj-code = buf_goods.prod-code no-error.
+                      v-i = v-i + 1.
+                    { str/get-pr.i calc p-obj-type p-obj-code buf_goods.gds-code buf_bar-code.node-code " " v-fact-order}
+                    { rep/repfrm.i disp v-i buf_goods.gds-name }
+                    new-curr-code = buf_price-all.curr-code.
+                    create temp-price .
+                    assign
+                        temp-price.b-code     = buf_price-all.b-code
+                        temp-price.gds-code   = buf_bar-code.gds-code
+                        temp-price.id         = temp-header.id
+                        temp-price.price-sale = buf_price-all.price-sale
+                        temp-price.plt-id     = buf_price-all.plt-id
+                        temp-price.plt-db-num = buf_price-all.plt-db-num
+
+                    .
+                    find first temp-pdf where
+                              temp-pdf.b-code     = buf_price-all.b-code     and
+                              temp-pdf.plt-id     = buf_price-all.plt-id     and
+                              temp-pdf.plt-db-num = buf_price-all.plt-db-num  no-error .
+                    if not available temp-pdf then do:
+                        create temp-pdf.
+                        assign
+                            temp-pdf.gds-code   = buf_bar-code.gds-code
+                            temp-pdf.prior      = buf_price-all.plt-priority
+                            temp-pdf.date1      = buf_price-all.start-date
+                            temp-pdf.date2      = buf_price-all.end-date
+                            temp-pdf.b-code     = buf_price-all.b-code
+                            temp-pdf.plt-id     = buf_price-all.plt-id
+                            temp-pdf.plt-db-num = buf_price-all.plt-db-num
+                            temp-pdf.gds-name   = buf_goods.gds-name
+                            temp-pdf.unit-cli   = buf_goods.unit-cli
+                            temp-pdf.price-roz  = gp-price-sale
+                            temp-pdf.artic      = buf_goods.artic
+                            temp-pdf.prod-typecode  = buf_goods.prod-type + string(buf_goods.prod-code)
+                            temp-pdf.prod-name  = buf_clients.obj-name
+                            temp-pdf.grp-code   = buf_goods.grp-code
+                            temp-pdf.grp-name   = buf_goods.grp-name
+                        .
+                    end.
+                  end.
+          end.
+        end.
+      end.
+    end.
+
+    when 3 then do:
+
+/*    field obj-type like ub.clients.obj-type*/
+/*    field obj-code like ub.clients.obj-code*/
+/*    field obj-name like ub.clients.obj-name*/
+/*    index pi is unique primary obj-type obj-code.*/
+
+
+      for each g#cli :
+        for each temp-header no-lock,
+            each buf_price-all no-lock where
+                (buf_price-all.obj-type = p-obj-type and
+                buf_price-all.obj-code = p-obj-code and
+                /* buf_price-all.main-indication = v-type and */
+                buf_price-all.bgr-id > 0 and
+                (( buf_price-all.fact-order-sys-from = 0 ) or (buf_price-all.fact-order-sys-from <= v-fact-order)) and
+                (( buf_price-all.fact-order-sys-to = 0 )   or (buf_price-all.fact-order-sys-to >= v-fact-order)) and
+                (( v-curr-code = ?) or (buf_price-all.curr-code = v-curr-code ))) and
+                              (temp-header.bgr-id        = buf_price-all.bgr-id and
+                              temp-header.bgr-db-num    = buf_price-all.bgr-db-num)
+
+                by buf_price-all.fact-order desc :
+                if buf_price-all.bgr-id <> 0 then do:
+                  find first buf_bar-code no-lock where buf_bar-code.b-code = buf_price-all.b-code no-error .
+                  find first buf_goods    no-lock
+                    where buf_goods.gds-code = buf_bar-code.gds-code and
+                          buf_goods.prod-code = g#cli.obj-code  and buf_goods.prod-type = g#cli.obj-type
+                    no-error .
+                  if not available buf_goods then next.
+                  find first buf_clients  no-lock where buf_clients.obj-type = buf_goods.prod-type and
+                                                        buf_clients.obj-code = buf_goods.prod-code no-error.
+                    v-i = v-i + 1.
+                  { str/get-pr.i calc p-obj-type p-obj-code buf_goods.gds-code buf_bar-code.node-code " " v-fact-order}
+                  { rep/repfrm.i disp v-i buf_goods.gds-name }
+                  new-curr-code = buf_price-all.curr-code.
+                  create temp-price .
+                  assign
+                      temp-price.b-code     = buf_price-all.b-code
+                      temp-price.gds-code   = buf_bar-code.gds-code
+                      temp-price.id         = temp-header.id
+                      temp-price.price-sale = buf_price-all.price-sale
+                      temp-price.plt-id     = buf_price-all.plt-id
+                      temp-price.plt-db-num = buf_price-all.plt-db-num
+
+                  .
+                  find first temp-pdf where
+                            temp-pdf.b-code     = buf_price-all.b-code     and
+                            temp-pdf.plt-id     = buf_price-all.plt-id     and
+                            temp-pdf.plt-db-num = buf_price-all.plt-db-num  no-error .
+                  if not available temp-pdf then do:
+                      create temp-pdf.
+                      assign
+                          temp-pdf.gds-code   = buf_bar-code.gds-code
+                          temp-pdf.prior      = buf_price-all.plt-priority
+                          temp-pdf.date1      = buf_price-all.start-date
+                          temp-pdf.date2      = buf_price-all.end-date
+                          temp-pdf.b-code     = buf_price-all.b-code
+                          temp-pdf.plt-id     = buf_price-all.plt-id
+                          temp-pdf.plt-db-num = buf_price-all.plt-db-num
+                          temp-pdf.gds-name   = buf_goods.gds-name
+                          temp-pdf.unit-cli   = buf_goods.unit-cli
+                          temp-pdf.price-roz  = gp-price-sale
+                          temp-pdf.artic      = buf_goods.artic
+                          temp-pdf.prod-typecode  = buf_goods.prod-type + string(buf_goods.prod-code)
+                          temp-pdf.prod-name  = buf_clients.obj-name
+                          temp-pdf.grp-code   = buf_goods.grp-code
+                          temp-pdf.grp-name   = buf_goods.grp-name
+                      .
+                  end.
+                end.
+        end.
+      end.
+    end.
+
+
+    when 4 then do:
+
+      for each temp-header no-lock,
+          each buf_price-all no-lock where
+              (buf_price-all.obj-type = p-obj-type and
+              buf_price-all.obj-code = p-obj-code and
+              /* buf_price-all.main-indication = v-type and */
+              buf_price-all.bgr-id > 0 and
+              (( buf_price-all.fact-order-sys-from = 0 ) or (buf_price-all.fact-order-sys-from <= v-fact-order)) and
+              (( buf_price-all.fact-order-sys-to = 0 )   or (buf_price-all.fact-order-sys-to >= v-fact-order)) and
+              (( v-curr-code = ?) or (buf_price-all.curr-code = v-curr-code ))) and
+                            (temp-header.bgr-id        = buf_price-all.bgr-id and
+                            temp-header.bgr-db-num    = buf_price-all.bgr-db-num)
+
+              by buf_price-all.fact-order desc :
+              if buf_price-all.bgr-id <> 0 then do:
+                find first buf_bar-code no-lock where buf_bar-code.b-code = buf_price-all.b-code no-error .
+                find first buf_goods    no-lock
+                  where buf_goods.gds-code = buf_bar-code.gds-code
+                  no-error .
+                find first gds-list no-lock where buf_goods.gds-code = gds-list.gds-code no-error .
+                if not available gds-list then next.
+                find first buf_clients  no-lock where buf_clients.obj-type = buf_goods.prod-type and
+                                                      buf_clients.obj-code = buf_goods.prod-code no-error.
+                  v-i = v-i + 1.
+                { str/get-pr.i calc p-obj-type p-obj-code buf_goods.gds-code buf_bar-code.node-code " " v-fact-order}
+                { rep/repfrm.i disp v-i buf_goods.gds-name }
+                new-curr-code = buf_price-all.curr-code.
+                create temp-price .
+                assign
+                    temp-price.b-code     = buf_price-all.b-code
+                    temp-price.gds-code   = buf_bar-code.gds-code
+                    temp-price.id         = temp-header.id
+                    temp-price.price-sale = buf_price-all.price-sale
+                    temp-price.plt-id     = buf_price-all.plt-id
+                    temp-price.plt-db-num = buf_price-all.plt-db-num
+
+                .
+                find first temp-pdf where
+                          temp-pdf.b-code     = buf_price-all.b-code     and
+                          temp-pdf.plt-id     = buf_price-all.plt-id     and
+                          temp-pdf.plt-db-num = buf_price-all.plt-db-num  no-error .
+                if not available temp-pdf then do:
+                    create temp-pdf.
+                    assign
+                        temp-pdf.gds-code   = buf_bar-code.gds-code
+                        temp-pdf.prior      = buf_price-all.plt-priority
+                        temp-pdf.date1      = buf_price-all.start-date
+                        temp-pdf.date2      = buf_price-all.end-date
+                        temp-pdf.b-code     = buf_price-all.b-code
+                        temp-pdf.plt-id     = buf_price-all.plt-id
+                        temp-pdf.plt-db-num = buf_price-all.plt-db-num
+                        temp-pdf.gds-name   = buf_goods.gds-name
+                        temp-pdf.unit-cli   = buf_goods.unit-cli
+                        temp-pdf.price-roz  = gp-price-sale
+                        temp-pdf.artic      = buf_goods.artic
+                        temp-pdf.prod-typecode  = buf_goods.prod-type + string(buf_goods.prod-code)
+                        temp-pdf.prod-name  = buf_clients.obj-name
+                        temp-pdf.grp-code   = buf_goods.grp-code
+                        temp-pdf.grp-name   = buf_goods.grp-name
+                    .
+                end.
+              end.
+      end.
+    end.
+
+
+    when 5 then do:
+
+      for each temp-header no-lock,
+          each buf_price-all no-lock where
+              (buf_price-all.obj-type = p-obj-type and
+              buf_price-all.obj-code = p-obj-code and
+              /* buf_price-all.main-indication = v-type and */
+              buf_price-all.bgr-id > 0 and
+              (( buf_price-all.fact-order-sys-from = 0 ) or (buf_price-all.fact-order-sys-from <= v-fact-order)) and
+              (( buf_price-all.fact-order-sys-to = 0 )   or (buf_price-all.fact-order-sys-to >= v-fact-order)) and
+              (( v-curr-code = ?) or (buf_price-all.curr-code = v-curr-code ))) and
+                            (temp-header.bgr-id        = buf_price-all.bgr-id and
+                            temp-header.bgr-db-num    = buf_price-all.bgr-db-num)
+
+              by buf_price-all.fact-order desc :
+              if buf_price-all.bgr-id <> 0 then do:
+                find first buf_bar-code no-lock where buf_bar-code.b-code = buf_price-all.b-code no-error .
+                find first buf_goods    no-lock
+                  where buf_goods.gds-code = buf_bar-code.gds-code
+                  no-error .
+                find first gds-list no-lock where buf_goods.gds-code = gds-list.gds-code no-error .
+                if not available gds-list then next.
+                find first buf_clients  no-lock where buf_clients.obj-type = buf_goods.prod-type and
+                                                      buf_clients.obj-code = buf_goods.prod-code no-error.
+                  v-i = v-i + 1.
+                { str/get-pr.i calc p-obj-type p-obj-code buf_goods.gds-code buf_bar-code.node-code " " v-fact-order}
+                { rep/repfrm.i disp v-i buf_goods.gds-name }
+                new-curr-code = buf_price-all.curr-code.
+                create temp-price .
+                assign
+                    temp-price.b-code     = buf_price-all.b-code
+                    temp-price.gds-code   = buf_bar-code.gds-code
+                    temp-price.id         = temp-header.id
+                    temp-price.price-sale = buf_price-all.price-sale
+                    temp-price.plt-id     = buf_price-all.plt-id
+                    temp-price.plt-db-num = buf_price-all.plt-db-num
+
+                .
+                find first temp-pdf where
+                          temp-pdf.b-code     = buf_price-all.b-code     and
+                          temp-pdf.plt-id     = buf_price-all.plt-id     and
+                          temp-pdf.plt-db-num = buf_price-all.plt-db-num  no-error .
+                if not available temp-pdf then do:
+                    create temp-pdf.
+                    assign
+                        temp-pdf.gds-code   = buf_bar-code.gds-code
+                        temp-pdf.prior      = buf_price-all.plt-priority
+                        temp-pdf.date1      = buf_price-all.start-date
+                        temp-pdf.date2      = buf_price-all.end-date
+                        temp-pdf.b-code     = buf_price-all.b-code
+                        temp-pdf.plt-id     = buf_price-all.plt-id
+                        temp-pdf.plt-db-num = buf_price-all.plt-db-num
+                        temp-pdf.gds-name   = buf_goods.gds-name
+                        temp-pdf.unit-cli   = buf_goods.unit-cli
+                        temp-pdf.price-roz  = gp-price-sale
+                        temp-pdf.artic      = buf_goods.artic
+                        temp-pdf.prod-typecode  = buf_goods.prod-type + string(buf_goods.prod-code)
+                        temp-pdf.prod-name  = buf_clients.obj-name
+                        temp-pdf.grp-code   = buf_goods.grp-code
+                        temp-pdf.grp-name   = buf_goods.grp-name
+                    .
+                end.
+              end.
+      end.
+    end.
+
+    when 7 then do:
+
+      for each temp-header no-lock,
+          each buf_price-all no-lock where
+              (buf_price-all.obj-type = p-obj-type and
+              buf_price-all.obj-code = p-obj-code and
+              /* buf_price-all.main-indication = v-type and */
+              buf_price-all.bgr-id > 0 and
+              (( buf_price-all.fact-order-sys-from = 0 ) or (buf_price-all.fact-order-sys-from <= v-fact-order)) and
+              (( buf_price-all.fact-order-sys-to = 0 )   or (buf_price-all.fact-order-sys-to >= v-fact-order)) and
+              (( v-curr-code = ?) or (buf_price-all.curr-code = v-curr-code ))) and
+                            (temp-header.bgr-id        = buf_price-all.bgr-id and
+                            temp-header.bgr-db-num    = buf_price-all.bgr-db-num)
+
+              by buf_price-all.fact-order desc :
+              if buf_price-all.bgr-id <> 0 then do:
+                find first buf_bar-code no-lock where buf_bar-code.b-code = buf_price-all.b-code no-error .
+                find first buf_goods    no-lock
+                  where buf_goods.gds-code = buf_bar-code.gds-code
+                  no-error .
+                find first tmp#grp no-lock where buf_goods.grp-code  = tmp#grp.node-code no-error .
+                find first g#cli no-lock where buf_goods.prod-code = g#cli.obj-code and buf_goods.prod-type = g#cli.obj-type no-error .
+                if not available tmp#grp or not available g#cli then next.
+                find first buf_clients  no-lock where buf_clients.obj-type = buf_goods.prod-type and
+                                                      buf_clients.obj-code = buf_goods.prod-code no-error.
+                  v-i = v-i + 1.
+                { str/get-pr.i calc p-obj-type p-obj-code buf_goods.gds-code buf_bar-code.node-code " " v-fact-order}
+                { rep/repfrm.i disp v-i buf_goods.gds-name }
+                new-curr-code = buf_price-all.curr-code.
+                create temp-price .
+                assign
+                    temp-price.b-code     = buf_price-all.b-code
+                    temp-price.gds-code   = buf_bar-code.gds-code
+                    temp-price.id         = temp-header.id
+                    temp-price.price-sale = buf_price-all.price-sale
+                    temp-price.plt-id     = buf_price-all.plt-id
+                    temp-price.plt-db-num = buf_price-all.plt-db-num
+
+                .
+                find first temp-pdf where
+                          temp-pdf.b-code     = buf_price-all.b-code     and
+                          temp-pdf.plt-id     = buf_price-all.plt-id     and
+                          temp-pdf.plt-db-num = buf_price-all.plt-db-num  no-error .
+                if not available temp-pdf then do:
+                    create temp-pdf.
+                    assign
+                        temp-pdf.gds-code   = buf_bar-code.gds-code
+                        temp-pdf.prior      = buf_price-all.plt-priority
+                        temp-pdf.date1      = buf_price-all.start-date
+                        temp-pdf.date2      = buf_price-all.end-date
+                        temp-pdf.b-code     = buf_price-all.b-code
+                        temp-pdf.plt-id     = buf_price-all.plt-id
+                        temp-pdf.plt-db-num = buf_price-all.plt-db-num
+                        temp-pdf.gds-name   = buf_goods.gds-name
+                        temp-pdf.unit-cli   = buf_goods.unit-cli
+                        temp-pdf.price-roz  = gp-price-sale
+                        temp-pdf.artic      = buf_goods.artic
+                        temp-pdf.prod-typecode  = buf_goods.prod-type + string(buf_goods.prod-code)
+                        temp-pdf.prod-name  = buf_clients.obj-name
+                        temp-pdf.grp-code   = buf_goods.grp-code
+                        temp-pdf.grp-name   = buf_goods.grp-name
+                    .
+                end.
+              end.
+      end.
+    end.
+
+
+  end case.
+end.
+end procedure. /* make-tt */
+
+
+procedure din-tt-go :
+define input  parameter p-table-name    as character no-undo .     /* имя таблицы, где будем искать */
+define input  parameter P-query-prepare as character no-undo .     /* описание выборки - query  */
+define input  parameter p-sort-pole  as character no-undo .        /* поле сортировки - break первого уровня */
+define input  parameter p-sort-pole2 as character no-undo .        /* поле сортировки - break второго уровня */
+
+define variable qh as widget-handle no-undo .
+define variable bh as widget-handle no-undo .
+
+define variable old-sort-pole as character no-undo .
+define variable new-sort-pole as character no-undo .
+define variable old-sort-pole2 as character no-undo .
+define variable new-sort-pole2 as character no-undo .
+
+  do
+  on error undo, return error return-value
+  :
+    create buffer bh for table p-table-name.
+    create query qh.
+
+      qh:set-buffers (bh).
+      qh:query-prepare (p-query-prepare).
+      qh:query-open ().
+      /* Обработка первой записи */
+      qh:get-first ().
+      if bh:available <> true then do: /* если первая запись не доступна - выходим */
+         qh:query-close() .
+         delete object qh.
+         delete object bh.
+         return.
+       end.
+       old-sort-pole  = bh:buffer-field ( p-sort-pole  ):buffer-value .   /* значение поля */
+       old-sort-pole2 = bh:buffer-field ( p-sort-pole2 ):buffer-value .
+       run print-grp-header  ( bh:recid , old-sort-pole ) .
+       run print-grp-header2 ( bh:recid , old-sort-pole2 ) .
+
+      /* Обработка остальной выборки */
+      do while qh:query-off-end = false :
+          new-sort-pole  = bh:buffer-field ( p-sort-pole ):buffer-value .
+          new-sort-pole2 = bh:buffer-field ( p-sort-pole2):buffer-value .
+          /* первый уровень классификации */
+          if old-sort-pole <> new-sort-pole then do:
+            run print-grp-header ( bh:recid , new-sort-pole ) .
+          end.
+              /* второй уровень классификации */
+              if old-sort-pole2 <> new-sort-pole2 or old-sort-pole <> new-sort-pole
+              then do:
+                run print-grp-header2 ( bh:recid , new-sort-pole2 ) .
+              end.
+
+          /* Печать строки */
+          run print-line ( bh:recid ) .
+
+          qh:get-next().
+          old-sort-pole  = new-sort-pole.
+          old-sort-pole2 = new-sort-pole2.
+      end.
+
+    qh:query-close() .
+    delete object qh.
+    delete object bh.
+
+  end.
+end procedure. /* din-tt-go */
+
+
+procedure print-grp-header :
+define input  parameter p-recid as recid no-undo .
+define input  parameter p-sort-pole as character no-undo .
+define buffer buf_temp-pdf for temp-pdf  .
+define variable v-name as character no-undo .
+define variable v-val as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    find first buf_temp-pdf where recid(buf_temp-pdf) = p-recid no-error .
+    case v-clas:
+        when "no-classify":U then do:
+            return.
+        end.
+        when "prod":U        then do:
+          v-name = "По производителю " .
+          if available buf_temp-pdf then v-val = buf_temp-pdf.prod-name .
+          else      v-val = p-sort-pole.
+        end.
+        when "grp-goods":U   then do:
+/*          v-name = "По группе " .*/
+          if available buf_temp-pdf then v-val = buf_temp-pdf.grp-name .
+          else      v-val = p-sort-pole.
+        end.
+        when "prod/grp-goods":U then do:
+          v-name = "По производителю " .
+          if available buf_temp-pdf then v-val = buf_temp-pdf.prod-name .
+          else      v-val = p-sort-pole.
+        end.
+        when "grp-goods/prod":U then do:
+          v-name = "По группе " .
+          if available buf_temp-pdf then v-val = buf_temp-pdf.grp-name .
+          else      v-val = p-sort-pole.
+        end.
+    end case.
+
+
+    put stream outstream unformatted  ( v-name + v-val ) at 1 skip .
+    num#col# = 2 .
+    num#str# = num#str# + 1 .
+
+    run macr_cell_format in this-procedure
+        ( 10    ,            /* p-size     */
+          true  ,            /* p-bold     */
+          false ,            /* p-italic   */
+          ?     ,            /* p-color-bg */
+          num#str# ,         /* p-row      */
+          num#col# ,         /* p-col      */
+          num#str# ,         /* p-row-2    */
+          num#col# ) .       /* p-col-2    */
+    run macr_excel_char in this-procedure( v-name + v-val  , num#str# , num#col#   ) .
+  end.
+end procedure. /* print-grp-header */
+
+
+procedure print-grp-header2 :
+define input  parameter p-recid as recid no-undo .
+define input  parameter p-sort-pole as character no-undo .
+define buffer buf_temp-pdf for temp-pdf  .
+define variable v-name as character no-undo .
+define variable v-val as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    find first buf_temp-pdf where recid(buf_temp-pdf) = p-recid no-error .
+    case v-clas:
+        when "no-classify":U then do:
+            return.
+        end.
+        when "prod":U        then do:
+           return.
+        end.
+        when "grp-goods":U   then do:
+           return.
+        end.
+        when "prod/grp-goods":U then do:
+          v-name = "По группе " .
+          if available buf_temp-pdf then v-val = buf_temp-pdf.grp-name .
+                                    else v-val = p-sort-pole.
+        end.
+        when "grp-goods/prod":U then do:
+          v-name = "По производителю " .
+          if available buf_temp-pdf then v-val = buf_temp-pdf.prod-name .
+                                    else v-val = p-sort-pole.
+        end.
+    end case.
+
+    put stream outstream unformatted  ( v-name + v-val ) at 10 skip .
+    num#col# = 2 .
+    num#str# = num#str# + 1 .
+
+    run macr_cell_format in this-procedure
+        ( 10    ,            /* p-size     */
+          true  ,            /* p-bold     */
+          false ,            /* p-italic   */
+          ?     ,            /* p-color-bg */
+          num#str# ,       /* p-row      */
+          num#col# ,            /* p-col      */
+          num#str# ,         /* p-row-2    */
+          num#col# ) .       /* p-col-2    */
+    run macr_excel_char in this-procedure ( v-name + v-val  , num#str# , num#col# ) .
+  end.
+end procedure. /* print-grp-header */
+
+{ rep/r-libmcr.i macr_excel }

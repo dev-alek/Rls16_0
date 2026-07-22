@@ -1,0 +1,3476 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: dbfe23dd76e1, 1141, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: SMMolotkov $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Thu Dec 14 02:13:54 2017 +0300 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: fbrlib.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: str/fbrlib.p $":U .
+        7   define variable vss-description as character no-undo init "Создание рецептов, действия с рецептами".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define new global shared variable g#library  as handle no-undo .
+       13   define new global shared variable g#library2 as handle no-undo .
+       14   define variable vss-include-info0 as character format "X(65)" no-undo
+       15   initial "@(#)$Workfile$ $Revision$".
+       16   define temp-table temp_fbrcode-doc-code no-undo
+       17       field rec-type      as character
+       18       field doc-code      as character
+       19       field obj-type      as character
+       20       field obj-code      as integer
+       21       field cli-type      as character
+       22       field cli-code      as integer
+       23       field ext-doc-type  as character
+       24       field doc-type      as character
+       25       field order         as integer
+       26       index pi is primary unique rec-type doc-code
+       27       index od order
+       28   .
+       29   procedure fbrcode-gen-recipe-code :
+       30   do
+       31   on error undo, return error
+       32   :
+       33   define input parameter p-obj-type           as character    no-undo.
+       34   define input parameter p-obj-code           as integer      no-undo.
+       35   define output parameter p-recipe-code       as character    no-undo.
+       36       assign
+       37           p-recipe-code   = string( next-value( s-recipe, ub ) )
+       38                               + "-"
+       39                               + trim( string( p-obj-code, ">>>>9" ) )
+       40                               + substring( p-obj-type, ( if g#language = "RUS" then 1 else 2 ), 1 )
+       41       .
+       42   end.
+       43   end procedure.
+       44   procedure fbrcode-is-from-object :
+       45   do
+       46   on error undo, return error
+       47   :
+       48   define input parameter p-doc-code           as character    no-undo.
+       49   define input parameter p-obj-type           as character    no-undo.
+       50   define input parameter p-obj-code           as integer      no-undo.
+       51   define output parameter p-is-from-object    as logical      no-undo.
+       52       if num-entries( p-doc-code, "-" ) < 2
+       53       or entry( 2, p-doc-code, "-" ) <> trim (string (p-obj-code, ">>>>9"))
+       54                                       + substring( p-obj-type, ( if g#language = "RUS" then 1 else 2 ), 1 )
+       55       then do:
+       56           assign
+       57               p-is-from-object = no
+       58           .
+       59       end.
+       60       else do:
+       61           assign
+       62               p-is-from-object = yes
+       63           .
+       64       end.
+       65   end.
+       66   end procedure.
+       67   procedure fbrcode-trn-doc :
+       68   do
+       69   on error undo, return error
+       70   :
+       71       define input parameter p-out-doc-type       as character    no-undo.
+       72       define input parameter p-out-code           as character    no-undo.
+       73       define input parameter p-trn-doc-out-type   as character    no-undo.
+       74       define output parameter p-trn-doc-doc-code  as character   no-undo.
+       75       case p-out-doc-type:
+       76           when 'производство':U
+       77           then do:
+       78               case p-trn-doc-out-type :
+       79                   when 'рас':U
+       80                   then do:
+       81                       assign
+       82                           p-trn-doc-doc-code = p-out-code
+       83                       .
+       84                   end.
+       85                   when 'при':U
+       86                   then do:
+       87                       assign
+       88                           p-trn-doc-doc-code = replace ( p-out-code, "-", "=" )
+       89                       .
+       90                   end.
+       91                   when 'спи':U
+       92                   then do:
+       93                       assign
+       94                           p-trn-doc-doc-code = replace ( p-out-code, "-", "*" )
+       95                       .
+       96                   end.
+       97                   otherwise do:
+       98                       assign
+       99                           p-trn-doc-doc-code = ""
+      100                       .
+      101                       undo, return error "Не может быть обработан тип складского документа '"
+      102                                           + p-trn-doc-out-type + "' во входных параметрах".
+      103                   end.
+      104               end case.
+      105           end.
+      106           otherwise do:
+      107               assign
+      108                   p-trn-doc-doc-code = ""
+      109               .
+      110               undo, return error "Не может быть обработан тип внешнего документа '"
+      111                                   + p-out-doc-type + "' во входных параметрах".
+      112           end.
+      113       end case.
+      114   end.
+      115   end procedure.
+      116   procedure fbrcode-fill-fbr-by-sale-or-pln :
+      117   define input parameter p-main-doc-code      as character        no-undo.
+      118       define variable v-order    as integer      no-undo.
+      119       define buffer buf_fbr-doc               for ub.fbr-doc.
+      120       define buffer buf_trn-doc               for ub.trn-doc.
+      121       define buffer buf_temp_fbrcode-doc-code for temp_fbrcode-doc-code.
+      122   do
+      123   for buf_fbr-doc
+      124     , buf_trn-doc
+      125     , buf_temp_fbrcode-doc-code
+      126   on error undo, return error
+      127   :
+      128       for each buf_temp_fbrcode-doc-code
+      129       on error undo, return error
+      130       :
+      131           delete buf_temp_fbrcode-doc-code.
+      132       end.
+      133       assign
+      134           v-order = 0
+      135       .
+      136       for each buf_fbr-doc no-lock
+      137          where buf_fbr-doc.out-code = p-main-doc-code
+      138       on error undo, return error
+      139       :
+      140           create buf_temp_fbrcode-doc-code.
+      141           assign
+      142               buf_temp_fbrcode-doc-code.rec-type      = 'производство':U
+      143               buf_temp_fbrcode-doc-code.doc-code      = buf_fbr-doc.doc-code
+      144               buf_temp_fbrcode-doc-code.ext-doc-type  = "":U
+      145               buf_temp_fbrcode-doc-code.obj-type      = buf_fbr-doc.obj-type
+      146               buf_temp_fbrcode-doc-code.obj-code      = buf_fbr-doc.obj-code
+      147               buf_temp_fbrcode-doc-code.cli-type      = buf_fbr-doc.obj-type
+      148               buf_temp_fbrcode-doc-code.cli-code      = buf_fbr-doc.obj-code
+      149               buf_temp_fbrcode-doc-code.doc-type      = buf_fbr-doc.doc-type
+      150           .
+      151           for each buf_trn-doc no-lock
+      152              where buf_trn-doc.out-code = buf_fbr-doc.doc-code
+      153           by buf_trn-doc.fact-order
+      154           on error undo, return error
+      155           :
+      156               if buf_trn-doc.ext-doc-type = 'em':U
+      157               or buf_trn-doc.ext-doc-type = 'im':U
+      158               or buf_trn-doc.ext-doc-type = 'wm':U
+      159               or buf_trn-doc.ext-doc-type = 'ev':U
+      160               then do:
+      161                   assign
+      162                       v-order = v-order + 1
+      163                   .
+      164                   create buf_temp_fbrcode-doc-code.
+      165                   assign
+      166                       buf_temp_fbrcode-doc-code.doc-code      = buf_trn-doc.doc-code
+      167                       buf_temp_fbrcode-doc-code.rec-type      = 'скл':U
+      168                       buf_temp_fbrcode-doc-code.ext-doc-type  = buf_trn-doc.ext-doc-type
+      169                       buf_temp_fbrcode-doc-code.obj-type      = buf_trn-doc.obj-type
+      170                       buf_temp_fbrcode-doc-code.obj-code      = buf_trn-doc.obj-code
+      171                       buf_temp_fbrcode-doc-code.cli-type      = buf_trn-doc.cli-type
+      172                       buf_temp_fbrcode-doc-code.cli-code      = buf_trn-doc.cli-code
+      173                       buf_temp_fbrcode-doc-code.doc-type      = buf_trn-doc.doc-type
+      174                       buf_temp_fbrcode-doc-code.order         = v-order
+      175                   .
+      176               end.
+      177           end.
+      178           assign
+      179               v-order  = v-order + 1
+      180           .
+      181           find first buf_temp_fbrcode-doc-code
+      182                where buf_temp_fbrcode-doc-code.rec-type = 'производство':U
+      183                  and buf_temp_fbrcode-doc-code.doc-code = buf_fbr-doc.doc-code
+      184           .
+      185           assign
+      186               buf_temp_fbrcode-doc-code.order = v-order
+      187           .
+      188       end.
+      189       for each buf_trn-doc no-lock
+      190          where buf_trn-doc.out-code = p-main-doc-code
+      191       by buf_trn-doc.fact-order
+      192       on error undo, return error
+      193       :
+      194           assign
+      195               v-order = v-order + 1
+      196           .
+      197           create buf_temp_fbrcode-doc-code.
+      198           assign
+      199               buf_temp_fbrcode-doc-code.doc-code      = buf_trn-doc.doc-code
+      200               buf_temp_fbrcode-doc-code.rec-type      = 'маг':U
+      201               buf_temp_fbrcode-doc-code.ext-doc-type  = buf_trn-doc.ext-doc-type
+      202               buf_temp_fbrcode-doc-code.obj-type      = buf_trn-doc.obj-type
+      203               buf_temp_fbrcode-doc-code.obj-code      = buf_trn-doc.obj-code
+      204               buf_temp_fbrcode-doc-code.cli-type      = buf_trn-doc.cli-type
+      205               buf_temp_fbrcode-doc-code.cli-code      = buf_trn-doc.cli-code
+      206               buf_temp_fbrcode-doc-code.doc-type      = buf_trn-doc.doc-type
+      207               buf_temp_fbrcode-doc-code.order         = v-order
+      208           .
+      209       end.
+      210   end.
+      211   end procedure.
+      212   procedure fbrcode-get-final-doc :
+      213   define input parameter p-main-doc-code      as character        no-undo.
+      214   define output parameter p-income-doc-code   as character        no-undo.
+      215       define variable v-main-obj-type    as character    no-undo.
+      216       define variable v-main-obj-code    as integer      no-undo.
+      217       define buffer buf_trn-doc               for ub.trn-doc.
+      218       define buffer buf_temp_fbrcode-doc-code for temp_fbrcode-doc-code.
+      219   do
+      220   for buf_trn-doc
+      221   on error undo, return error
+      222   :
+      223       run fbrcode-fill-fbr-by-sale-or-pln in this-procedure (
+      224           input p-main-doc-code
+      225       ).
+      226       find first buf_trn-doc no-lock
+      227            where buf_trn-doc.doc-code = p-main-doc-code
+      228       .
+      229       assign
+      230           v-main-obj-type = buf_trn-doc.obj-type
+      231           v-main-obj-code = buf_trn-doc.obj-code
+      232       .
+      233       find first buf_temp_fbrcode-doc-code
+      234            where buf_temp_fbrcode-doc-code.ext-doc-type = 'ev':U
+      235              and buf_temp_fbrcode-doc-code.cli-type     = v-main-obj-type
+      236              and buf_temp_fbrcode-doc-code.cli-code     = v-main-obj-code
+      237       no-error.
+      238       if available buf_temp_fbrcode-doc-code
+      239       then do:
+      240           find first buf_trn-doc no-lock
+      241                where buf_trn-doc.out-code     = buf_temp_fbrcode-doc-code.doc-code
+      242                  and buf_trn-doc.ext-doc-type = 'iv':U
+      243           .
+      244           assign
+      245               p-income-doc-code = buf_trn-doc.doc-code
+      246           .
+      247       end.
+      248       else do:
+      249           find first buf_temp_fbrcode-doc-code
+      250                where buf_temp_fbrcode-doc-code.ext-doc-type = 'im':U
+      251                  and buf_temp_fbrcode-doc-code.obj-type     = v-main-obj-type
+      252                  and buf_temp_fbrcode-doc-code.obj-code     = v-main-obj-code
+      253           no-error.
+      254           if available buf_temp_fbrcode-doc-code
+      255           then do:
+      256               assign
+      257                   p-income-doc-code = buf_temp_fbrcode-doc-code.doc-code
+      258               .
+      259           end.
+      260           else do:
+      261               assign
+      262                   p-income-doc-code = "":U
+      263               .
+      264           end.
+      265       end.
+      266   end.
+      267   end procedure.
+      268   define variable vss-include-info1 as character format "X(65)" no-undo
+      269   initial "@(#)$Workfile$ $Revision$".
+      270   def var objSrv as class ibs.th.gbl.sys.objsrv no-undo.
+      271   run gbl/getobjsrvhndl.p (input-output ObjSrv).
+      272   define temp-table temp_fbrlib_recipe no-undo
+      273       field recipe-code                   as character
+      274       field fbr-doc-code                  as character
+      275       field income-goods-doc-code         as character
+      276       field count-income                  as integer
+      277       field qnty-income                   as decimal
+      278       field sum-income-sale               as decimal
+      279       field sum-income-cost-base          as decimal
+      280       field sum-income-cost-rubl          as decimal
+      281       field sum-income-vat-cost-base      as decimal
+      282       field sum-income-vat-cost-rubl      as decimal
+      283       field write-off-goods-doc-code      as character
+      284       field write-off-office-doc-code     as character
+      285       field count-write-off               as integer
+      286       field qnty-write-off                as decimal
+      287       field sum-write-off-sale            as decimal
+      288       field sum-write-off-cost-base       as decimal
+      289       field sum-write-off-cost-rubl       as decimal
+      290       field sum-write-off-vat-cost-base   as decimal
+      291       field sum-write-off-vat-cost-rubl   as decimal
+      292   index pi is primary unique recipe-code
+      293   index income income-goods-doc-code
+      294   index wogds write-off-goods-doc-code
+      295   index wooff write-off-office-doc-code
+      296   .
+      297   define temp-table temp_dressing-ingr no-undo
+      298       field recipe-code   as character
+      299       field gds-code      as integer
+      300       field line-qnty     as decimal
+      301       field used-qnty     as decimal
+      302       field recipe-qnty   as decimal
+      303       index pi is primary unique recipe-code gds-code
+      304   .
+      305   define temp-table temp_recipe-order no-undo
+      306       field recipe-code   as character
+      307       field order         as integer
+      308       index pi is primary unique order
+      309   .
+      310   define temp-table temp_recipe-childs-qnty no-undo
+      311       field recipe-code   as character
+      312       field childs-qnty   as integer
+      313       field order         as integer
+      314       index pi is primary unique recipe-code
+      315   .
+      316   define temp-table temp_recipe-childs no-undo
+      317       field recipe-code       as character
+      318       field child-code        as integer
+      319       field child-recipe-code as character
+      320       index pi is primary unique recipe-code child-code
+      321   .
+      322   define variable v-fbrlib-recipe-order               as integer  no-undo.
+      323   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      324   procedure cur-time :
+      325      define output parameter p-today as date      no-undo .
+      326      define output parameter p-time  as integer   no-undo .
+      327     do
+      328     on error undo, return error
+      329     :
+      330       define variable v-date1 as date      no-undo .
+      331       define variable v-date2 as date      no-undo .
+      332       define variable v-time  as integer   no-undo .
+      333       assign
+      334         v-date1 = today
+      335         v-time  = time
+      336         v-date2 = today
+      337       .
+      338       if v-date1 <> v-date2
+      339       then do:
+      340         assign
+      341           v-date1 = today
+      342           v-time  = v-time
+      343         .
+      344       end.
+      345       assign
+      346         p-today = v-date1
+      347         p-time  = v-time
+      348       .
+      349     end.
+      350   end.
+      351   function cur-time-date returns character
+      352   :
+      353     return string(today, '99/99/9999':U) .
+      354   end.
+      355   function cur-time-mjd returns decimal
+      356   :
+      357     define variable v-date as date      no-undo .
+      358     define variable v-time as integer   no-undo .
+      359     run cur-time in this-procedure
+      360       (output v-date
+      361       ,output v-time
+      362       ) .
+      363     return integer(v-date) - 2400002 + (v-time / 86400) .
+      364   end.
+      365   function cur-time-get-ending-index returns integer
+      366   (input p-number as integer
+      367   )
+      368   :
+      369     if p-number < 0
+      370     or p-number = ?
+      371     then do:
+      372       return 1 .
+      373     end.
+      374     define variable v-rest as integer   no-undo .
+      375     assign
+      376       p-number = p-number modulo 100
+      377     .
+      378     if p-number < 20
+      379     then do:
+      380       assign
+      381         v-rest = p-number
+      382       .
+      383     end.
+      384     else do:
+      385       assign
+      386         v-rest = p-number modulo 10
+      387       .
+      388     end.
+      389     case v-rest :
+      390       when 1
+      391       then do:
+      392         return 2 .
+      393       end.
+      394       when 2 or
+      395       when 3 or
+      396       when 4
+      397       then do:
+      398         return 3 .
+      399       end.
+      400       otherwise do:
+      401         return 1 .
+      402       end.
+      403     end case .
+      404   end.
+      405   procedure cur-time-mjd-to-date :
+      406      define input  parameter i-mjd-diff as decimal no-undo.
+      407      define output parameter o-Date     as date    no-undo.
+      408      define output parameter o-Time     as integer no-undo.
+      409      define variable v-day-number as integer   no-undo .
+      410      if    i-mjd-diff < 0
+      411         or i-mjd-diff = ?
+      412      then do:
+      413         return "?" .
+      414      end.
+      415      assign
+      416         v-day-number = truncate(i-mjd-diff,0).
+      417         o-Date = date(v-day-number + 2400002).
+      418         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      419     .
+      420   end.
+      421   function cur-time-mjd-to-string returns character
+      422   (input p-mjd-diff as decimal
+      423   )
+      424   :
+      425     define variable v-day-number as integer   no-undo .
+      426     define variable v-seconds    as integer   no-undo .
+      427     define variable v-hour       as integer   no-undo .
+      428     define variable v-min        as integer   no-undo .
+      429     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      430     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      431     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      432     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      433     if p-mjd-diff < 0
+      434     or p-mjd-diff = ?
+      435     then do:
+      436       return "?" .
+      437     end.
+      438     assign
+      439       v-day-number = integer(truncate(p-mjd-diff,0))
+      440       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      441     .
+      442     if v-seconds > 86400
+      443     then do:
+      444       assign
+      445         v-seconds = 86400 - 1
+      446       .
+      447     end.
+      448     if v-seconds < 0
+      449     then do:
+      450       assign
+      451         v-seconds = 0
+      452       .
+      453     end.
+      454     assign
+      455       v-hour = truncate(v-seconds / 3600, 0)
+      456     .
+      457     assign
+      458       v-seconds = v-seconds modulo 3600
+      459     .
+      460     assign
+      461       v-min = truncate(v-seconds / 60, 0)
+      462     .
+      463     assign
+      464       v-seconds = v-seconds modulo 60
+      465     .
+      466     return
+      467         (if v-day-number <> 0
+      468           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      469           else ""
+      470         )
+      471       + (if v-day-number <> 0 or v-hour <> 0
+      472           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      473           else ""
+      474         )
+      475       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      476           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      477           else ""
+      478         )
+      479       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      480       .
+      481   end.
+      482   function cur-time-string returns character
+      483   :
+      484     define variable v-date as date      no-undo .
+      485     define variable v-time as integer   no-undo .
+      486     run cur-time in this-procedure
+      487       (output v-date
+      488       ,output v-time
+      489       ) .
+      490     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      491   end.
+      492   function cur-time-string-sec returns character
+      493   :
+      494     define variable v-date as date      no-undo .
+      495     define variable v-time as integer   no-undo .
+      496     run cur-time in this-procedure
+      497       (output v-date
+      498       ,output v-time
+      499       ) .
+      500     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      501   end.
+      502   function cur-time-custom  returns character
+      503   (input p-prefix as character
+      504   ,input p-date-format as character
+      505   ,input p-delimiter as character
+      506   ,input p-time-format as character
+      507   ,input p-suffix as character
+      508   )
+      509   :
+      510     define variable v-date as date      no-undo .
+      511     define variable v-time as integer   no-undo .
+      512     run cur-time in this-procedure
+      513       (output v-date
+      514       ,output v-time
+      515       ) .
+      516     return
+      517       p-prefix
+      518       + string(v-date, p-date-format)
+      519       + p-delimiter
+      520       + string(v-time, p-time-format)
+      521       + p-suffix
+      522       .
+      523   end.
+      524   function cur-time-print  returns character
+      525   :
+      526     define variable v-date as date      no-undo .
+      527     define variable v-time as integer   no-undo .
+      528     run cur-time in this-procedure
+      529       (output v-date
+      530       ,output v-time
+      531       ) .
+      532     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      533   end.
+      534   function cur-time-datetime returns datetime
+      535   :
+      536     define variable v-char as character no-undo .
+      537     define variable v-datetime as datetime no-undo .
+      538     v-char = cur-time-string().
+      539     v-datetime = datetime(v-char).
+      540     return  v-datetime.
+      541   end.
+      542   function cur-time-string-msec returns character
+      543   :
+      544     define variable v-date as datetime  no-undo .
+      545     v-date = now.
+      546     return string(v-date) .
+      547   end.
+      548   procedure fbrlib_create-fbr-doc :
+      549   define input parameter p-obj-type as character no-undo .
+      550   define input parameter p-obj-code as integer no-undo .
+      551   define input parameter p-userid as character no-undo .
+      552   define output parameter p-fbr-doc-code as character no-undo .
+      553   define output parameter p-recid as recid no-undo .
+      554   define variable v-host-code as integer no-undo .
+      555   define variable v-base-code as integer no-undo .
+      556   define variable v-obj-db-num as integer no-undo .
+      557   define variable v-db-num as integer no-undo .
+      558   DEFINE VARIABLE v-today as date no-undo .
+      559   DEFINE VARIABLE v-time as integer no-undo .
+      560   define variable v-doc-code as character no-undo .
+      561   define variable fi-pay-code as integer no-undo .
+      562   define buffer buf_fbr-doc for ub.fbr-doc.
+      563   define buffer buf_curr-accnt for ub.curr-accnt.
+      564   do
+      565   on error  undo , return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      566   on stop   undo , return error substitute( "&1. stop", vss-workfile )
+      567   on endkey undo , return error substitute( "&1. endkey", vss-workfile )
+      568   :
+      569   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      570   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+      571     (input  p-obj-type
+      572     ,input  p-obj-code
+      573     ,output v-host-code
+      574     )  .
+      575   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      576   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objdbnum in g#library
+      577     (input  p-obj-type
+      578     ,input  p-obj-code
+      579     ,output v-obj-db-num
+      580     )  .
+      581   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      582   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curdbnum in g#library
+      583     (output v-db-num
+      584     )  .
+      585   if v-obj-db-num <> v-db-num then do:
+      586     return error substitute("Запрещено создание документа производства в чужой БД:&1БД &2&3 - &4&1текущая БД - &5"
+      587                             , chr(10)
+      588                             , p-obj-type
+      589                             , p-obj-code
+      590                             , v-obj-db-num
+      591                             , v-db-num).
+      592   end.
+      593   run cur-time in this-procedure ( output v-today, output v-time).
+      594   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      595   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curobjdt in g#library
+      596     (input  p-obj-type
+      597     ,input  p-obj-code
+      598     ,output v-today
+      599     )  .
+      600   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      601   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run basecode in g#library
+      602     (input  v-host-code
+      603     ,output v-base-code
+      604     )  .
+      605   find last buf_curr-accnt no-lock
+      606       where buf_curr-accnt.curr-code = v-base-code
+      607         and buf_curr-accnt.exch-date <= v-today use-index pi
+      608   no-error.
+      609   if not available buf_curr-accnt
+      610   then do:
+      611     undo, return error substitute("На дату &1 неизвестен курс базовой валюты с кодом &2"
+      612                                     , string(v-today, "99/99/9999")
+      613                                     , v-base-code).
+      614   end.
+      615   run doc-code in this-procedure (
+      616         input  "main"
+      617       , input  p-obj-type
+      618       , input  p-obj-code
+      619       , input  ?
+      620       , output v-doc-code
+      621   ) no-error.
+      622   if error-status:error
+      623   then do:
+      624     undo, return error substitute("Ошибка при генерации номера документа производства&1&2&1&3"
+      625                                   , chr(10)
+      626                                   , error-status:get-message(1)
+      627                                   , return-value ).
+      628   end.
+      629   run trg/chkdocnm.p (
+      630         input v-doc-code
+      631       , input 'fbr-doc':U
+      632       , input ?
+      633   ) no-error.
+      634   if error-status:error
+      635   then do:
+      636     undo, return error substitute("Ошибка при проверке номера для нового документа производства&1&2&1&3"
+      637                                   , chr(10)
+      638                                   , error-status:get-message(1)
+      639                                   , return-value ).
+      640   end.
+      641   create buf_fbr-doc.
+      642   assign
+      643   buf_fbr-doc.doc-code  = v-doc-code
+      644   buf_fbr-doc.creid     = p-userid
+      645   buf_fbr-doc.doc-date  = v-today
+      646   buf_fbr-doc.doc-type  = 'производство':U
+      647   buf_fbr-doc.host-code = v-host-code
+      648   buf_fbr-doc.obj-code  = p-obj-code
+      649   buf_fbr-doc.obj-type  = p-obj-type
+      650   buf_fbr-doc.PS        = "@"
+      651   buf_fbr-doc.status_   = 'новый':U
+      652   buf_fbr-doc.user-db-num = v-obj-db-num
+      653   buf_fbr-doc.user-name   = p-userid
+      654   .
+      655   run fbrlib_get-default-pay-code in this-procedure (
+      656         input buf_fbr-doc.obj-type
+      657       , input buf_fbr-doc.obj-code
+      658       , output fi-pay-code
+      659   ).
+      660   buf_fbr-doc.pay-code = fi-pay-code.
+      661   p-recid = recid(buf_fbr-doc).
+      662   p-fbr-doc-code = buf_fbr-doc.doc-code.
+      663   end.
+      664   end procedure.
+      665   procedure fbrlib_get-default-pay-code :
+      666   define input parameter p-obj-type   as character        no-undo.
+      667   define input parameter p-obj-code   as integer          no-undo.
+      668   define output parameter p-pay-code  as integer          no-undo.
+      669   define variable v-host-code as integer no-undo .
+      670   define buffer buf_shop          for ub.shop.
+      671   define buffer buf_store         for ub.store.
+      672   define buffer buf_sysconf       for ub.sysconf.
+      673   do
+      674   for buf_shop
+      675     , buf_store
+      676     , buf_sysconf
+      677   on error undo, return error
+      678   :
+      679     case p-obj-type  :
+      680       when 'маг':U then do:
+      681           find first buf_shop no-lock
+      682                 where buf_shop.obj-code = p-obj-code
+      683           no-error.
+      684           if available buf_shop
+      685           then do:
+      686               assign
+      687                   p-pay-code = buf_shop.fbr-pay
+      688               .
+      689           end.
+      690       end.
+      691       when 'скл':U then do:
+      692           find first buf_store no-lock
+      693                 where buf_store.obj-code = p-obj-code
+      694           no-error.
+      695           if available buf_store
+      696           then do:
+      697               assign
+      698                   p-pay-code = buf_store.fbr-pay
+      699               .
+      700           end.
+      701       end.
+      702     end case.
+      703     if p-pay-code = ?
+      704     or p-pay-code = 0
+      705     then do:
+      706   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      707   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+      708     (input  p-obj-type
+      709     ,input  p-obj-code
+      710     ,output v-host-code
+      711     )  .
+      712         find first buf_sysconf no-lock
+      713               where buf_sysconf.host-code = v-host-code
+      714         no-error.
+      715         if available buf_sysconf
+      716         then do:
+      717             assign
+      718                 p-pay-code = buf_sysconf.fbr-pay
+      719             .
+      720         end.
+      721     end.
+      722     if p-pay-code = ?
+      723     or p-pay-code = 0
+      724     then do:
+      725   define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      726   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objdnpay in g#library
+      727     (input  p-obj-type
+      728     ,input  p-obj-code
+      729     ,output p-pay-code
+      730     )  .
+      731     end.
+      732   end.
+      733   end procedure.
+      734   procedure fbrlib-fill-and-check-temp_fbrlib_recipe :
+      735   do
+      736   on error undo, return error
+      737   :
+      738   define input parameter p-fbr-doc-code as character    no-undo.
+      739       define variable vss-description as character    no-undo init "fbrlib-fill-and-check-temp_fbrlib_recipe: ".
+      740       define variable v-gds-name      as character    no-undo.
+      741       define buffer buf_fbr-doc               for ub.fbr-doc.
+      742       define buffer buf_fbr-line              for ub.fbr-line.
+      743       define buffer buf_temp_fbrlib_recipe    for temp_fbrlib_recipe.
+      744       define buffer buf_out_temp_fbrlib_recipe    for temp_fbrlib_recipe.
+      745       find first buf_fbr-doc no-lock
+      746            where buf_fbr-doc.doc-code = p-fbr-doc-code
+      747       .
+      748       for each buf_temp_fbrlib_recipe
+      749       :
+      750           delete buf_temp_fbrlib_recipe.
+      751       end.
+      752       for each buf_fbr-line no-lock
+      753          where buf_fbr-line.doc-code = p-fbr-doc-code
+      754       :
+      755           find first buf_temp_fbrlib_recipe
+      756                where buf_temp_fbrlib_recipe.recipe-code = buf_fbr-line.recipe-code
+      757           no-error.
+      758           if not available buf_temp_fbrlib_recipe
+      759           then do:
+      760               create buf_temp_fbrlib_recipe.
+      761               assign
+      762                   buf_temp_fbrlib_recipe.recipe-code = buf_fbr-line.recipe-code
+      763                   buf_temp_fbrlib_recipe.fbr-doc-code = buf_fbr-line.doc-code
+      764               .
+      765           end.
+      766       end.
+      767       for each buf_temp_fbrlib_recipe
+      768       :
+      769           assign
+      770               buf_temp_fbrlib_recipe.count-income                = 0
+      771               buf_temp_fbrlib_recipe.qnty-income                 = 0
+      772               buf_temp_fbrlib_recipe.sum-income-sale             = 0
+      773               buf_temp_fbrlib_recipe.sum-income-cost-base        = 0
+      774               buf_temp_fbrlib_recipe.sum-income-cost-rubl        = 0
+      775               buf_temp_fbrlib_recipe.sum-income-vat-cost-base    = 0
+      776               buf_temp_fbrlib_recipe.sum-income-vat-cost-rubl    = 0
+      777               buf_temp_fbrlib_recipe.count-write-off             = 0
+      778               buf_temp_fbrlib_recipe.qnty-write-off              = 0
+      779               buf_temp_fbrlib_recipe.sum-write-off-sale          = 0
+      780               buf_temp_fbrlib_recipe.sum-write-off-cost-base     = 0
+      781               buf_temp_fbrlib_recipe.sum-write-off-cost-rubl     = 0
+      782               buf_temp_fbrlib_recipe.sum-write-off-vat-cost-base = 0
+      783               buf_temp_fbrlib_recipe.sum-write-off-vat-cost-rubl = 0
+      784           .
+      785           for each buf_fbr-line no-lock
+      786              where buf_fbr-line.doc-code     = p-fbr-doc-code
+      787                and buf_fbr-line.trn-type     = 'при':U
+      788                and buf_fbr-line.recipe-code  = buf_temp_fbrlib_recipe.recipe-code
+      789           :
+      790               if ( buf_fbr-line.price-base   = ?
+      791                   or buf_fbr-line.price-rubl = ?
+      792                   or buf_fbr-line.price-base <= 0
+      793                   or buf_fbr-line.price-rubl <= 0 )
+      794               and buf_fbr-line.fact-qnty <> 0
+      795               and buf_fbr-line.rsrv-qnty <> ?
+      796               and buf_fbr-doc.is-free    = no
+      797               then do:
+      798   define variable vss-include-info10 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      799   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-arnm in g#library
+      800     (input  buf_fbr-line.artic
+      801     ,input  buf_fbr-line.prod-type
+      802     ,input  buf_fbr-line.prod-code
+      803     ,output v-gds-name
+      804     ) no-error .
+      805                   if error-status :error
+      806                   then do:
+      807                       assign
+      808                           v-gds-name = ""
+      809                       .
+      810                   end.
+      811                   undo, return error  substitute("&1 В документе пр-ва &2 учетная цена не определена или нулевая!&3Рецепт &4&3Товар: &5 &6"
+      812                                                 ,vss-description
+      813                                                 ,buf_fbr-doc.doc-code
+      814                                                 ,chr(10)
+      815                                                 ,buf_fbr-line.recipe-code
+      816                                                 ,buf_fbr-line.artic
+      817                                                 ,v-gds-name).
+      818               end.
+      819               assign
+      820                   buf_temp_fbrlib_recipe.count-income             = buf_temp_fbrlib_recipe.count-income + 1
+      821                   buf_temp_fbrlib_recipe.qnty-income              = buf_temp_fbrlib_recipe.qnty-income
+      822                                                                   + buf_fbr-line.fact-qnty
+      823                   buf_temp_fbrlib_recipe.sum-income-sale          = buf_temp_fbrlib_recipe.sum-income-sale
+      824                                                                   + buf_fbr-line.price-sale * buf_fbr-line.fact-qnty
+      825               .
+      826               if buf_fbr-line.is-waste = no
+      827               then do:
+      828                   assign
+      829                       buf_temp_fbrlib_recipe.sum-income-cost-base     = buf_temp_fbrlib_recipe.sum-income-cost-base
+      830                                                                       + buf_fbr-line.price-sum-base
+      831                       buf_temp_fbrlib_recipe.sum-income-cost-rubl     = buf_temp_fbrlib_recipe.sum-income-cost-rubl
+      832                                                                       + buf_fbr-line.price-sum-rubl
+      833                       buf_temp_fbrlib_recipe.sum-income-vat-cost-base = buf_temp_fbrlib_recipe.sum-income-vat-cost-base
+      834                                                                       + buf_fbr-line.price-sum-vat-base
+      835                       buf_temp_fbrlib_recipe.sum-income-vat-cost-rubl = buf_temp_fbrlib_recipe.sum-income-vat-cost-rubl
+      836                                                                       + buf_fbr-line.price-sum-vat-rubl
+      837                   .
+      838               end.
+      839           end.
+      840           for each buf_fbr-line no-lock
+      841              where buf_fbr-line.doc-code     = p-fbr-doc-code
+      842                and buf_fbr-line.trn-type     = 'спи':U
+      843                and buf_fbr-line.recipe-code  = buf_temp_fbrlib_recipe.recipe-code
+      844           :
+      845               if ( buf_fbr-line.price-base   = ?
+      846                   or buf_fbr-line.price-rubl = ?
+      847                   or buf_fbr-line.price-base <= 0
+      848                   or buf_fbr-line.price-rubl <= 0 )
+      849               and buf_fbr-line.fact-qnty <> 0
+      850               and buf_fbr-line.rsrv-qnty <> ?
+      851               and buf_fbr-doc.is-free    = no
+      852               and buf_fbr-doc.status_    = 'разрешен':U
+      853               then do:
+      854   define variable vss-include-info11 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      855   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-arnm in g#library
+      856     (input  buf_fbr-line.artic
+      857     ,input  buf_fbr-line.prod-type
+      858     ,input  buf_fbr-line.prod-code
+      859     ,output v-gds-name
+      860     ) no-error .
+      861                   if error-status :error
+      862                   then do:
+      863                       assign
+      864                           v-gds-name = ""
+      865                       .
+      866                   end.
+      867                   undo, return error  substitute("&1 В документе пр-ва &2 учетная цена не определена или нулевая!&3Рецепт &4&3Товар: &5 &6"
+      868                                                 ,vss-description
+      869                                                 ,buf_fbr-doc.doc-code
+      870                                                 ,chr(10)
+      871                                                 ,buf_fbr-line.recipe-code
+      872                                                 ,buf_fbr-line.artic
+      873                                                 ,v-gds-name).
+      874               end.
+      875               assign
+      876                   buf_temp_fbrlib_recipe.count-write-off             = buf_temp_fbrlib_recipe.count-write-off + 1
+      877                   buf_temp_fbrlib_recipe.qnty-write-off              = buf_temp_fbrlib_recipe.qnty-write-off
+      878                                                                   + buf_fbr-line.fact-qnty
+      879                   buf_temp_fbrlib_recipe.sum-write-off-sale          = buf_temp_fbrlib_recipe.sum-write-off-sale
+      880                                                                   + buf_fbr-line.price-sale * buf_fbr-line.fact-qnty
+      881               .
+      882               if buf_fbr-line.is-waste = no
+      883               then do:
+      884                   assign
+      885                       buf_temp_fbrlib_recipe.sum-write-off-cost-base     = buf_temp_fbrlib_recipe.sum-write-off-cost-base
+      886                                                                       + buf_fbr-line.price-sum-base
+      887                       buf_temp_fbrlib_recipe.sum-write-off-cost-rubl     = buf_temp_fbrlib_recipe.sum-write-off-cost-rubl
+      888                                                                       + buf_fbr-line.price-sum-rubl
+      889                       buf_temp_fbrlib_recipe.sum-write-off-vat-cost-base = buf_temp_fbrlib_recipe.sum-write-off-vat-cost-base
+      890                                                                       + buf_fbr-line.price-sum-vat-base
+      891                       buf_temp_fbrlib_recipe.sum-write-off-vat-cost-rubl = buf_temp_fbrlib_recipe.sum-write-off-vat-cost-rubl
+      892                                                                       + buf_fbr-line.price-sum-vat-rubl
+      893                   .
+      894               end.
+      895           end.
+      896           if buf_fbr-doc.status_    = 'разрешен':U
+      897           and ( abs( buf_temp_fbrlib_recipe.sum-write-off-cost-base     - buf_temp_fbrlib_recipe.sum-income-cost-base     ) > 0.01
+      898           or abs( buf_temp_fbrlib_recipe.sum-write-off-cost-rubl     - buf_temp_fbrlib_recipe.sum-income-cost-rubl     ) > 0.01
+      899           or abs( buf_temp_fbrlib_recipe.sum-write-off-vat-cost-base - buf_temp_fbrlib_recipe.sum-income-vat-cost-base ) > 0.01
+      900           or abs( buf_temp_fbrlib_recipe.sum-write-off-vat-cost-rubl - buf_temp_fbrlib_recipe.sum-income-vat-cost-rubl ) > 0.01
+      901               )
+      902           then do:
+      903            undo, return error
+      904               substitute("В документе пр-ва &1 Не совпадают суммы учетных цен для списанного и оприходованного по рецепту товара.&2" +
+      905                           "Рецепт: &3&2&4&4по списанному товару&4по оприходованному товару&2"  +
+      906                           "Сумма в баз.вал.&4&5&4&4&6&2" +
+      907                           "Сумма в &9.&4&7&4&4&8&2"
+      908                          , buf_fbr-doc.doc-code
+      909                          , chr(10)
+      910                          , buf_temp_fbrlib_recipe.recipe-code
+      911                          , chr(9)
+      912                          , buf_temp_fbrlib_recipe.sum-write-off-cost-base
+      913                          , buf_temp_fbrlib_recipe.sum-income-cost-base
+      914                          , buf_temp_fbrlib_recipe.sum-write-off-cost-rubl
+      915                          , buf_temp_fbrlib_recipe.sum-income-cost-rubl
+      916                          , "руб"
+      917                          )
+      918              +
+      919              substitute("НДС в баз.вал.&1&2&1&1&3&4" +
+      920                         "НДС в &7.&1&5&1&1&6&4"
+      921                        ,  chr(9)
+      922                        ,buf_temp_fbrlib_recipe.sum-write-off-vat-cost-base
+      923                        ,buf_temp_fbrlib_recipe.sum-income-vat-cost-base
+      924                        ,chr(10)
+      925                        ,buf_temp_fbrlib_recipe.sum-write-off-vat-cost-rubl
+      926                        ,buf_temp_fbrlib_recipe.sum-income-vat-cost-rubl
+      927                        ,"руб"
+      928                        )       .
+      929           end.
+      930       end.
+      931   end.
+      932   end procedure.
+      933   procedure fbrlib-fill-sum-fbr-doc :
+      934   do
+      935   on error undo, return error
+      936   :
+      937   define input parameter p-fbr-doc-recid  as recid        no-undo.
+      938   define input parameter p-mode           as character    no-undo.
+      939       define variable vss-description as character init "fbrlib-fill-sum-fbr-doc: "  no-undo.
+      940       define buffer buf_fbr-doc           for ub.fbr-doc.
+      941       define buffer buf_fbr-line          for ub.fbr-line.
+      942       define buffer buf_temp_fbrlib_recipe   for temp_fbrlib_recipe.
+      943       define variable v-in-count          as integer       no-undo.
+      944       define variable v-out-count         as integer       no-undo.
+      945       find first buf_fbr-doc exclusive-lock
+      946            where recid ( buf_fbr-doc ) = p-fbr-doc-recid
+      947       .
+      948       find first buf_temp_fbrlib_recipe no-error.
+      949       if not available buf_temp_fbrlib_recipe
+      950       then do:
+      951           run fbrlib-fill-and-check-temp_fbrlib_recipe in this-procedure (
+      952               input buf_fbr-doc.doc-code
+      953           ) no-error.
+      954           if error-status :error
+      955           then do:
+      956               undo, return error substitute("&1 Ошибка расчета сумм при заполнении шапки документа производства.&2&3&2&4"
+      957                                              , vss-description
+      958                                              , chr(10)
+      959                                              , error-status:get-message(1)
+      960                                              , return-value ).
+      961           end.
+      962       end.
+      963       assign
+      964           v-in-count                  = 0
+      965           buf_fbr-doc.in-qnty         = 0
+      966           buf_fbr-doc.in-sale         = 0
+      967           buf_fbr-doc.in-base         = 0
+      968           buf_fbr-doc.in-rubl         = 0
+      969           buf_fbr-doc.in-vat-base     = 0
+      970           buf_fbr-doc.in-vat-rubl     = 0
+      971           v-out-count                 = 0
+      972           buf_fbr-doc.out-qnty        = 0
+      973           buf_fbr-doc.out-sale        = 0
+      974           buf_fbr-doc.out-base        = 0
+      975           buf_fbr-doc.out-rubl        = 0
+      976           buf_fbr-doc.out-vat-base    = 0
+      977           buf_fbr-doc.out-vat-rubl    = 0
+      978       .
+      979       for each buf_temp_fbrlib_recipe
+      980       :
+      981           assign
+      982               v-in-count                  = v-in-count                + buf_temp_fbrlib_recipe.count-income
+      983               buf_fbr-doc.in-qnty         = buf_fbr-doc.in-qnty       + buf_temp_fbrlib_recipe.qnty-income
+      984               buf_fbr-doc.in-sale         = buf_fbr-doc.in-sale       + buf_temp_fbrlib_recipe.sum-income-sale
+      985               buf_fbr-doc.in-base         = buf_fbr-doc.in-base       + buf_temp_fbrlib_recipe.sum-income-cost-base
+      986               buf_fbr-doc.in-rubl         = buf_fbr-doc.in-rubl       + buf_temp_fbrlib_recipe.sum-income-cost-rubl
+      987               buf_fbr-doc.in-vat-base     = buf_fbr-doc.in-vat-base   + buf_temp_fbrlib_recipe.sum-income-vat-cost-base
+      988               buf_fbr-doc.in-vat-rubl     = buf_fbr-doc.in-vat-rubl   + buf_temp_fbrlib_recipe.sum-income-vat-cost-rubl
+      989               v-out-count                 = v-out-count               + buf_temp_fbrlib_recipe.count-write-off
+      990               buf_fbr-doc.out-qnty        = buf_fbr-doc.out-qnty      + buf_temp_fbrlib_recipe.qnty-write-off
+      991               buf_fbr-doc.out-sale        = buf_fbr-doc.out-sale      + buf_temp_fbrlib_recipe.sum-write-off-sale
+      992               buf_fbr-doc.out-base        = buf_fbr-doc.out-base      + buf_temp_fbrlib_recipe.sum-write-off-cost-base
+      993               buf_fbr-doc.out-rubl        = buf_fbr-doc.out-rubl      + buf_temp_fbrlib_recipe.sum-write-off-cost-rubl
+      994               buf_fbr-doc.out-vat-base    = buf_fbr-doc.out-vat-base  + buf_temp_fbrlib_recipe.sum-write-off-vat-cost-base
+      995               buf_fbr-doc.out-vat-rubl    = buf_fbr-doc.out-vat-rubl  + buf_temp_fbrlib_recipe.sum-write-off-vat-cost-rubl
+      996           .
+      997       end.
+      998       if ( abs (buf_fbr-doc.in-rubl - buf_fbr-doc.out-rubl) <= 0.01
+      999       and   abs (buf_fbr-doc.in-base - buf_fbr-doc.out-base) <= 0.01 )
+     1000       or p-mode <> 'факт':U
+     1001       then do:
+     1002           if substring( buf_fbr-doc.PS, 1, 1 ) = "@"
+     1003           then do:
+     1004               assign
+     1005                   buf_fbr-doc.PS = "@ Строк полученных товаров : "
+     1006                                   + string( v-out-count, ">>>,>>9" )
+     1007                                   + chr(10) + "Строк исходных товаров : "
+     1008                                   + string( v-in-count, ">>>,>>9" )
+     1009               .
+     1010           end.
+     1011       end.
+     1012       else do:
+     1013         undo, return error substitute("В док-те пр-ва &1 не совпадают суммы списанных и оприходованных товаров.&2" +
+     1014                                       "Сумма списанных товаров в &3 - &4&2" +
+     1015                                       "Сумма оприходованных товаров в &3 - &5&2" +
+     1016                                       "Сумма оприходованных товаров в &3 - &6&2" +
+     1017                                       "Сумма списанных товаров в баз.вал. - &7&2" +
+     1018                                       "Сумма оприходованных товаров в баз.вал. - &8&2"
+     1019                                       , buf_fbr-doc.doc-code
+     1020                                       , chr(10)
+     1021                                       , "рублях"
+     1022                                       , round( buf_fbr-doc.out-rubl, 2 )
+     1023                                       , round( buf_fbr-doc.in-rubl,  2 )
+     1024                                       , round( buf_fbr-doc.in-rubl,  2 )
+     1025                                       , round( buf_fbr-doc.out-base, 2 )
+     1026                                       , round( buf_fbr-doc.in-base,  2 )).
+     1027       end.
+     1028   end.
+     1029   end procedure.
+     1030   procedure fbrlib-calc-prices :
+     1031   do
+     1032   on error undo, return error
+     1033   :
+     1034   define input parameter p-fbr-line-recid as recid        no-undo.
+     1035   define input parameter p-price-obj-type as character    no-undo.
+     1036   define input parameter p-price-obj-code as integer      no-undo.
+     1037   define output parameter p-current-price as decimal      no-undo.
+     1038       define variable v-void          as decimal       no-undo.
+     1039       define variable v-void-char     as character     no-undo.
+     1040       define variable v-gds-code      as integer       no-undo.
+     1041       define variable v-b-code        as integer       no-undo.
+     1042       define buffer buf_fbr-doc   for ub.fbr-doc.
+     1043       define buffer buf_fbr-line  for ub.fbr-line.
+     1044       define buffer buf_gds-prt   for ub.gds-prt.
+     1045       define buffer buf_bar-code  for ub.bar-code.
+     1046       find first buf_fbr-line no-lock
+     1047           where recid( buf_fbr-line ) = p-fbr-line-recid
+     1048       .
+     1049   define variable vss-include-info12 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1050   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gds-code in g#library
+     1051     (input  buf_fbr-line.artic
+     1052     ,input  buf_fbr-line.prod-type
+     1053     ,input  buf_fbr-line.prod-code
+     1054     ,output v-gds-code
+     1055     ) no-error .
+     1056       if error-status :error
+     1057       then do:
+     1058         undo, return error substitute("&1 &2 &3&4Ошибка определения кода товара (артикул &7).&4&5&4&6"
+     1059                                         ,vss-workfile
+     1060                                         ,vss-revision
+     1061                                         ,vss-description
+     1062                                         ,chr(10)
+     1063                                         , error-status:get-message(1)
+     1064                                         , return-value
+     1065                                         , buf_fbr-line.artic
+     1066                                         ).
+     1067       end.
+     1068   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run gdsbcode in g#library
+     1069     (input  v-gds-code
+     1070     ,input  ?
+     1071     ,output v-b-code
+     1072     ) no-error .
+     1073       if error-status :error
+     1074       then do:
+     1075         undo, return error substitute("&1 &2 &3&4Ошибка определения основного бар-кода товара (код товара) &7.&4&5&4&6"
+     1076                                         ,vss-workfile
+     1077                                         ,vss-revision
+     1078                                         ,vss-description
+     1079                                         ,chr(10)
+     1080                                         , error-status:get-message(1)
+     1081                                         , return-value
+     1082                                         , v-gds-code
+     1083                                         ).
+     1084       end.
+     1085       if buf_fbr-line.is-calc = no
+     1086       then do:
+     1087   define variable vss-include-info13 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1088   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run bcodeprc in g#library
+     1089     (input  p-price-obj-type
+     1090     ,input  p-price-obj-code
+     1091     ,input  v-b-code
+     1092     ,input  0
+     1093     ,input  0
+     1094     ,output v-void-char
+     1095     ,output p-current-price
+     1096     ,output v-void
+     1097     ,output v-void
+     1098     ) no-error .
+     1099           if error-status :error
+     1100           then do:
+     1101             undo, return error substitute("&1 &2 &3&4Ошибка определения продажной цены основного бар-кода товара (код товара) &7.&4&5&4&6"
+     1102                                             ,vss-workfile
+     1103                                             ,vss-revision
+     1104                                             ,vss-description
+     1105                                             ,chr(10)
+     1106                                             , error-status:get-message(1)
+     1107                                             , return-value
+     1108                                             , v-gds-code
+     1109                                             ).
+     1110           end.
+     1111       end.
+     1112       else do:
+     1113           assign
+     1114               p-current-price = buf_fbr-line.price-sale
+     1115           .
+     1116       end.
+     1117   end.
+     1118   end procedure.
+     1119   procedure fbrlib-put-in-order-recipe :
+     1120   do
+     1121   on error undo, return error
+     1122   :
+     1123   define input parameter p-fbr-doc-doc-code   as character    no-undo.
+     1124       define variable v-recipe-counter    as integer          no-undo.
+     1125       define variable v-recipe-amount     as integer init 0   no-undo.
+     1126       define variable v-child-counter     as integer          no-undo.
+     1127       define variable v-is-call-cycle     as logical          no-undo.
+     1128       define variable v-str as character     no-undo.
+     1129       define buffer buf_in_fbr-line       for ub.fbr-line.
+     1130       define buffer buf_dress_fbr-line    for ub.fbr-line.
+     1131       define buffer buf_fbr-line          for ub.fbr-line.
+     1132       define buffer buf_recipe-gds        for ub.recipe-gds.
+     1133       define buffer buf_recipe            for ub.recipe.
+     1134       for each temp_recipe-childs-qnty
+     1135       :
+     1136           delete temp_recipe-childs-qnty.
+     1137       end.
+     1138       for each temp_recipe-childs
+     1139       :
+     1140           delete temp_recipe-childs.
+     1141       end.
+     1142       for each temp_recipe-order
+     1143       :
+     1144           delete temp_recipe-order.
+     1145       end.
+     1146       for each buf_fbr-line no-lock
+     1147          where buf_fbr-line.doc-code = p-fbr-doc-doc-code
+     1148       on error undo, return error
+     1149       :
+     1150           find first temp_recipe-childs-qnty
+     1151                where temp_recipe-childs-qnty.recipe-code = buf_fbr-line.recipe-code
+     1152           no-error.
+     1153           if not available temp_recipe-childs-qnty
+     1154           then do:
+     1155               create temp_recipe-childs-qnty.
+     1156               assign
+     1157                   v-recipe-amount                     = v-recipe-amount + 1
+     1158                   temp_recipe-childs-qnty.recipe-code = buf_fbr-line.recipe-code
+     1159                   temp_recipe-childs-qnty.order       = v-recipe-amount
+     1160                   temp_recipe-childs-qnty.childs-qnty = 0
+     1161                   v-child-counter                     = 0
+     1162               .
+     1163           end.
+     1164       end.
+     1165       for each buf_in_fbr-line no-lock
+     1166          where buf_in_fbr-line.doc-code = p-fbr-doc-doc-code
+     1167            and buf_in_fbr-line.trn-type = 'спи':U
+     1168       on error undo, return error
+     1169       :
+     1170           for each buf_dress_fbr-line no-lock
+     1171              where buf_dress_fbr-line.doc-code    = p-fbr-doc-doc-code
+     1172                and buf_dress_fbr-line.trn-type    = 'при':U
+     1173                and buf_dress_fbr-line.artic       = buf_in_fbr-line.artic
+     1174                and buf_dress_fbr-line.prod-type   = buf_in_fbr-line.prod-type
+     1175                and buf_dress_fbr-line.prod-code   = buf_in_fbr-line.prod-code
+     1176           on error undo, return error
+     1177           :
+     1178               find first buf_recipe no-lock
+     1179                    where buf_recipe.recipe-code = buf_dress_fbr-line.recipe-code
+     1180               .
+     1181               if buf_in_fbr-line.is-comp = yes
+     1182               then do:
+     1183                   find last temp_recipe-childs-qnty
+     1184                       where temp_recipe-childs-qnty.recipe-code = buf_in_fbr-line.recipe-code
+     1185                   .
+     1186                   assign
+     1187                       temp_recipe-childs-qnty.childs-qnty = temp_recipe-childs-qnty.childs-qnty + 1
+     1188                   .
+     1189                   create temp_recipe-childs.
+     1190                   assign
+     1191                       temp_recipe-childs.recipe-code          = buf_in_fbr-line.recipe-code
+     1192                       temp_recipe-childs.child-code           = temp_recipe-childs-qnty.childs-qnty
+     1193                       temp_recipe-childs.child-recipe-code    = buf_dress_fbr-line.recipe-code
+     1194                   .
+     1195               end.
+     1196               else do:
+     1197               end.
+     1198           end.
+     1199       end.
+     1200       for each buf_in_fbr-line no-lock
+     1201          where buf_in_fbr-line.doc-code = p-fbr-doc-doc-code
+     1202            and buf_in_fbr-line.trn-type = 'при':U
+     1203       on error undo, return error
+     1204       :
+     1205           find first buf_recipe no-lock
+     1206                where buf_recipe.recipe-code = buf_in_fbr-line.recipe-code
+     1207           no-error.
+     1208           if buf_in_fbr-line.is-comp = no
+     1209           then do:
+     1210           end.
+     1211           else do:
+     1212               for each buf_recipe-gds no-lock
+     1213               where buf_recipe-gds.recipe-code = buf_in_fbr-line.recipe-code
+     1214               :
+     1215                   for each buf_fbr-line no-lock
+     1216                   where buf_fbr-line.doc-code    = p-fbr-doc-doc-code
+     1217                       and buf_fbr-line.trn-type    = 'при':U
+     1218                       and buf_fbr-line.artic       = buf_recipe-gds.artic
+     1219                       and buf_fbr-line.prod-type   = buf_recipe-gds.prod-type
+     1220                       and buf_fbr-line.prod-code   = buf_recipe-gds.prod-code
+     1221                   on error undo, return error
+     1222                   :
+     1223                       find first buf_recipe no-lock
+     1224                            where buf_recipe.recipe-code = buf_fbr-line.recipe-code
+     1225                       .
+     1226                       if buf_recipe.recipe-type = 'разделка':U
+     1227                       then do:
+     1228                       end.
+     1229                       else do:
+     1230                           find last temp_recipe-childs-qnty
+     1231                               where temp_recipe-childs-qnty.recipe-code = buf_in_fbr-line.recipe-code
+     1232                           .
+     1233                           assign
+     1234                               temp_recipe-childs-qnty.childs-qnty = temp_recipe-childs-qnty.childs-qnty + 1
+     1235                           .
+     1236                           create temp_recipe-childs.
+     1237                           assign
+     1238                               temp_recipe-childs.recipe-code          = buf_in_fbr-line.recipe-code
+     1239                               temp_recipe-childs.child-code           = temp_recipe-childs-qnty.childs-qnty
+     1240                               temp_recipe-childs.child-recipe-code    = buf_fbr-line.recipe-code
+     1241                           .
+     1242                       end.
+     1243                   end.
+     1244               end.
+     1245           end.
+     1246       end.
+     1247       for each temp_recipe-order
+     1248       on error undo, return error
+     1249       :
+     1250           delete temp_recipe-order.
+     1251       end.
+     1252       assign
+     1253           v-fbrlib-recipe-order = 0
+     1254       .
+     1255       do v-recipe-counter = 1 to v-recipe-amount
+     1256       on error undo, return error
+     1257       :
+     1258           run fbrlib-add-recipe-in-tmp-order in this-procedure (
+     1259                 input v-recipe-counter
+     1260               , input 0
+     1261               , output v-is-call-cycle
+     1262           ).
+     1263           if v-is-call-cycle = yes
+     1264           then do:
+     1265               message
+     1266                       "Достигнут максимальный уровень вложенности рецептов."
+     1267                   skip(1)
+     1268                   skip "Невозможно упорядочить рецепты."
+     1269                   skip(1)
+     1270                   skip "Необходимо изменить структуру рецептов,"
+     1271                   skip "используемых при формировании"
+     1272                   skip "данного документа производства."
+     1273               view-as alert-box error
+     1274               title "Невозможно рассчитать документ производства".
+     1275               for each temp_recipe-childs-qnty
+     1276               :
+     1277                   delete temp_recipe-childs-qnty.
+     1278               end.
+     1279               for each temp_recipe-childs
+     1280               :
+     1281                   delete temp_recipe-childs.
+     1282               end.
+     1283               for each temp_recipe-order
+     1284               :
+     1285                   delete temp_recipe-order.
+     1286               end.
+     1287               for each temp_recipe-order
+     1288               on error undo, return error
+     1289               :
+     1290                   delete temp_recipe-order.
+     1291               end.
+     1292               for each temp_fbrlib_recipe
+     1293               on error undo, return error
+     1294               :
+     1295                   delete temp_recipe-order.
+     1296               end.
+     1297               undo, return error.
+     1298           end.
+     1299       end.
+     1300   end.
+     1301   end procedure.
+     1302   procedure fbrlib-add-recipe-in-tmp-order :
+     1303   do
+     1304   on error undo, return error
+     1305   :
+     1306   define input parameter p-order              as integer      no-undo.
+     1307   define input parameter p-call-counter       as integer      no-undo.
+     1308   define output parameter p-is-call-cycle     as logical      no-undo.
+     1309       define variable v-nodes-counter     as integer       no-undo.
+     1310       define buffer buf_c_temp_recipe-childs-qnty for temp_recipe-childs-qnty.
+     1311       define buffer buf_temp_recipe-childs-qnty   for temp_recipe-childs-qnty.
+     1312       define buffer buf_temp_recipe-childs        for temp_recipe-childs     .
+     1313       define buffer buf_temp_recipe-order         for temp_recipe-order.
+     1314       assign
+     1315           p-call-counter = p-call-counter + 1
+     1316       .
+     1317       if p-call-counter > 50
+     1318       then do:
+     1319           assign
+     1320               p-is-call-cycle = yes
+     1321           .
+     1322       end.
+     1323       else do:
+     1324           find first buf_temp_recipe-childs-qnty
+     1325                where buf_temp_recipe-childs-qnty.order = p-order
+     1326           .
+     1327           find first buf_temp_recipe-order
+     1328                where buf_temp_recipe-order.recipe-code = buf_temp_recipe-childs-qnty.recipe-code
+     1329           no-error.
+     1330           if not available buf_temp_recipe-order
+     1331           then do:
+     1332               do v-nodes-counter = 1 to buf_temp_recipe-childs-qnty.childs-qnty
+     1333               :
+     1334                   find first buf_temp_recipe-childs
+     1335                        where buf_temp_recipe-childs.recipe-code = buf_temp_recipe-childs-qnty.recipe-code
+     1336                          and buf_temp_recipe-childs.child-code  = v-nodes-counter
+     1337                   .
+     1338                   find first buf_c_temp_recipe-childs-qnty
+     1339                        where buf_c_temp_recipe-childs-qnty.recipe-code = buf_temp_recipe-childs.child-recipe-code
+     1340                   .
+     1341                   run fbrlib-add-recipe-in-tmp-order in this-procedure (
+     1342                         input buf_c_temp_recipe-childs-qnty.order
+     1343                       , input p-call-counter
+     1344                       , output p-is-call-cycle
+     1345                   ).
+     1346                   if p-is-call-cycle = yes
+     1347                   then do:
+     1348                       return.
+     1349                   end.
+     1350               end.
+     1351               assign
+     1352                   v-fbrlib-recipe-order = v-fbrlib-recipe-order + 1
+     1353               .
+     1354               create buf_temp_recipe-order.
+     1355               assign
+     1356                   buf_temp_recipe-order.recipe-code   = buf_temp_recipe-childs-qnty.recipe-code
+     1357                   buf_temp_recipe-order.order         = v-fbrlib-recipe-order
+     1358               .
+     1359           end.
+     1360       end.
+     1361   end.
+     1362   end procedure.
+     1363   procedure fbrlib-get-trn-type :
+     1364   define input parameter p-recipe-code    as character    no-undo.
+     1365   define input parameter p-goods-recid    as recid        no-undo.
+     1366   define input parameter p-is-integration as logical      no-undo.
+     1367   define output parameter p-is-comp       as logical      no-undo.
+     1368   define output parameter p-trn-type      as character    no-undo.
+     1369   define buffer buf_recipe    for ub.recipe.
+     1370   define buffer buf_goods     for ub.goods.
+     1371   do
+     1372   for buf_recipe
+     1373     , buf_goods
+     1374   on error undo, return error
+     1375   :
+     1376       find first buf_goods no-lock
+     1377            where recid( buf_goods ) = p-goods-recid
+     1378       .
+     1379       find first buf_recipe no-lock
+     1380            where buf_recipe.recipe-code = p-recipe-code
+     1381       no-error.
+     1382       if not available buf_recipe
+     1383       then do:
+     1384           assign
+     1385               p-is-comp = no
+     1386               p-trn-type = "":U
+     1387           .
+     1388           undo, return.
+     1389       end.
+     1390       if  buf_recipe.artic        = buf_goods.artic
+     1391       and buf_recipe.prod-type    = buf_goods.prod-type
+     1392       and buf_recipe.prod-code    = buf_goods.prod-code
+     1393       then do:
+     1394           assign
+     1395               p-is-comp = yes
+     1396           .
+     1397       end.
+     1398       else do:
+     1399           assign
+     1400               p-is-comp = no
+     1401           .
+     1402       end.
+     1403       case buf_recipe.recipe-type
+     1404       :
+     1405           when 'производство':U
+     1406           then do:
+     1407               if p-is-comp = yes
+     1408               then do:
+     1409                   assign
+     1410                       p-trn-type = 'при':U
+     1411                   .
+     1412               end.
+     1413               else do:
+     1414                   assign
+     1415                       p-trn-type = 'спи':U
+     1416                   .
+     1417               end.
+     1418           end.
+     1419           when 'альтернатива':U
+     1420           then do:
+     1421               if p-is-comp = yes
+     1422               then do:
+     1423                   assign
+     1424                       p-trn-type = 'при':U
+     1425                   .
+     1426               end.
+     1427               else do:
+     1428                   assign
+     1429                       p-trn-type = 'спи':U
+     1430                   .
+     1431               end.
+     1432           end.
+     1433           when 'разделка':U
+     1434           then do:
+     1435               if p-is-comp = no
+     1436               then do:
+     1437                   assign
+     1438                       p-trn-type = 'при':U
+     1439                   .
+     1440               end.
+     1441               else do:
+     1442                   assign
+     1443                       p-trn-type = 'спи':U
+     1444                   .
+     1445               end.
+     1446           end.
+     1447           when 'комплектация':U
+     1448           then do:
+     1449               if p-is-integration = ?
+     1450               then do:
+     1451                   message
+     1452                       "Выберите тип операции по рецепту комплектации:"
+     1453                       skip (2) "YES - комплектация"
+     1454                       skip     "NO - разукомплектация"
+     1455                   view-as alert-box question
+     1456                   buttons YES-NO
+     1457                   update p-is-integration.
+     1458               end.
+     1459               if p-is-integration = yes
+     1460               then do:
+     1461                   if p-is-comp = yes
+     1462                   then do:
+     1463                       assign
+     1464                           p-trn-type = 'при':U
+     1465                       .
+     1466                   end.
+     1467                   else do:
+     1468                       assign
+     1469                           p-trn-type = 'спи':U
+     1470                       .
+     1471                   end.
+     1472               end.
+     1473               else do:
+     1474                   if p-is-comp = yes
+     1475                   then do:
+     1476                       assign
+     1477                           p-trn-type = 'спи':U
+     1478                       .
+     1479                   end.
+     1480                   else do:
+     1481                       assign
+     1482                           p-trn-type = 'при':U
+     1483                       .
+     1484                   end.
+     1485               end.
+     1486           end.
+     1487       end case.
+     1488   end.
+     1489   end procedure.
+     1490   procedure fbrlib-get-mark :
+     1491   define input parameter p-recipe-code    as character    no-undo.
+     1492   define output parameter p-mark          as logical    no-undo.
+     1493   define buffer buf_goods-attr     for ub.goods-attr.
+     1494   define buffer buf_recipe-gds for ub.recipe-gds .
+     1495       for each buf_recipe-gds no-lock where buf_recipe-gds.recipe-code = p-recipe-code,
+     1496            first buf_goods-attr no-lock where buf_goods-attr.gds-code = buf_recipe-gds.gds-code and
+     1497                                               buf_goods-attr.attr-code = 'mark-type':U:
+     1498            if buf_goods-attr.attr-value <> "" and buf_goods-attr.attr-value <> "not-type" then do:
+     1499               p-mark = true .
+     1500               return .
+     1501            end.
+     1502       end.
+     1503   end procedure.
+     1504   procedure fbrlib-check-temp-tables :
+     1505   do
+     1506   on error undo, return error
+     1507   :
+     1508   define input parameter p-title  as character    no-undo.
+     1509       define variable v-str               as character        no-undo.
+     1510       assign
+     1511           v-str = v-str + chr(10) + "temp_recipe-childs-qnty:" + chr(10)
+     1512       .
+     1513       for each temp_recipe-childs-qnty
+     1514       on error undo, return error
+     1515       :
+     1516           assign
+     1517               v-str   = v-str + string( temp_recipe-childs-qnty.recipe-code )
+     1518                       + "   " + string( temp_recipe-childs-qnty.childs-qnty )
+     1519                       + "   " + string( temp_recipe-childs-qnty.order )
+     1520                       + chr(10)
+     1521           .
+     1522       end.
+     1523       assign
+     1524           v-str = v-str + "temp_recipe-childs:" + chr(10)
+     1525       .
+     1526       for each temp_recipe-childs
+     1527       on error undo, return error
+     1528       :
+     1529           assign
+     1530               v-str   = v-str + string( temp_recipe-childs.recipe-code )
+     1531                       + "   " + string( temp_recipe-childs.child-code )
+     1532                       + "   " + string( temp_recipe-childs.child-recipe-code )
+     1533                       + chr(10)
+     1534           .
+     1535       end.
+     1536       assign
+     1537           v-str = v-str + chr(10) + "temp_recipe-order:" + chr(10)
+     1538       .
+     1539       for each temp_recipe-order
+     1540       on error undo, return error
+     1541       :
+     1542           assign
+     1543               v-str   = v-str + string( temp_recipe-order.recipe-code )
+     1544                       + "   " + string( temp_recipe-order.order )
+     1545                       + chr(10)
+     1546           .
+     1547       end.
+     1548       assign
+     1549           v-str = v-str + chr(10) + "temp_fbrlib_recipe:" + chr(10)
+     1550       .
+     1551       run writelog in this-procedure ( input "fbr.log", input 0, input p-title ).
+     1552       run writelog in this-procedure ( input "fbr.log", input 0, input v-str ).
+     1553       for each temp_fbrlib_recipe
+     1554       on error undo, return error
+     1555       :
+     1556           assign
+     1557               v-str   = "recipe-code: "                   + string( temp_fbrlib_recipe.recipe-code                 )
+     1558                       + "   " + "count-income: "                  + string( temp_fbrlib_recipe.count-income                )
+     1559                       + "   " + "qnty-income: "                   + string( temp_fbrlib_recipe.qnty-income                 )
+     1560                       + "   " + "sum-income-sale: "               + string( temp_fbrlib_recipe.sum-income-sale             )
+     1561                       + "   " + "sum-income-cost-base: "          + string( temp_fbrlib_recipe.sum-income-cost-base        )
+     1562                       + "   " + "sum-income-cost-rubl: "          + string( temp_fbrlib_recipe.sum-income-cost-rubl        )
+     1563                       + "   " + "sum-income-vat-cost-base: "      + string( temp_fbrlib_recipe.sum-income-vat-cost-base    )
+     1564                       + "   " + "sum-income-vat-cost-rubl: "      + string( temp_fbrlib_recipe.sum-income-vat-cost-rubl    )
+     1565                       + "   " + "count-write-off: "               + string( temp_fbrlib_recipe.count-write-off             )
+     1566                       + "   " + "qnty-write-off: "                + string( temp_fbrlib_recipe.qnty-write-off              )
+     1567                       + "   " + "sum-write-off-sale: "            + string( temp_fbrlib_recipe.sum-write-off-sale          )
+     1568                       + "   " + "sum-write-off-cost-base: "       + string( temp_fbrlib_recipe.sum-write-off-cost-base     )
+     1569                       + "   " + "sum-write-off-cost-rubl: "       + string( temp_fbrlib_recipe.sum-write-off-cost-rubl     )
+     1570                       + "   " + "sum-write-off-vat-cost-base: "   + string( temp_fbrlib_recipe.sum-write-off-vat-cost-base )
+     1571                       + "   " + "sum-write-off-vat-cost-rubl: "   + string( temp_fbrlib_recipe.sum-write-off-vat-cost-rubl )
+     1572                       + chr(10)
+     1573           .
+     1574           run writelog in this-procedure ( input "fbr.log", input 0, input v-str ).
+     1575       end.
+     1576   end.
+     1577   end procedure.
+     1578   procedure fbrlib-s-coeff-value :
+     1579   define input  parameter p-gds-code    as integer        no-undo.
+     1580   define input  parameter p-date        as date           no-undo.
+     1581   define input  parameter p-obj-type    as character      no-undo.
+     1582   define input  parameter p-obj-code    as integer        no-undo.
+     1583   define output parameter p-coeff-value as decimal        no-undo.
+     1584   define variable vss-description as character init "fbrlib-s-coeff-value-01: определяет значение сезонного коэффициента" no-undo.
+     1585       define variable v-date          as date         no-undo.
+     1586       define variable v-host-code     as integer      no-undo.
+     1587       define buffer buf_goods       for ub.goods.
+     1588       define buffer buf_fbr-gds-obj for ub.fbr-gds-obj.
+     1589       define buffer buf_clients     for ub.clients.
+     1590       define buffer buf_s-coeff     for ub.s-coeff.
+     1591   do
+     1592   for buf_goods
+     1593     , buf_fbr-gds-obj
+     1594     , buf_clients
+     1595     , buf_s-coeff
+     1596   on error undo, return error return-value
+     1597   :
+     1598       find first buf_goods no-lock
+     1599            where buf_goods.gds-code = p-gds-code
+     1600       no-error .
+     1601       if not available buf_goods
+     1602       then do:
+     1603          undo, return error substitute("Ошибка при определении сезонного коэффициента - не найден товар с кодом &1", p-gds-code).
+     1604       end.
+     1605       find first buf_clients no-lock
+     1606            where buf_clients.obj-type = p-obj-type
+     1607              and buf_clients.obj-code = p-obj-code
+     1608       no-error.
+     1609       if not available buf_clients
+     1610       then do:
+     1611          undo, return error substitute("Ошибка при определении сезонного коэффициента - не найден объект &1&2", p-obj-type, p-obj-code).
+     1612       end.
+     1613       assign
+     1614           v-date = date(month(p-date), day(p-date), Year(01/01/1996))
+     1615       .
+     1616       find first buf_fbr-gds-obj no-lock
+     1617            where buf_fbr-gds-obj.gds-code = p-gds-code
+     1618              and buf_fbr-gds-obj.obj-type = p-obj-type
+     1619              and buf_fbr-gds-obj.obj-code = p-obj-code
+     1620       no-error.
+     1621       if not available buf_fbr-gds-obj
+     1622       or buf_fbr-gds-obj.is-season = no
+     1623       then do:
+     1624           assign
+     1625               p-coeff-value = 0
+     1626           .
+     1627           return.
+     1628       end.
+     1629   define variable vss-include-info14 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1630   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+     1631     (input  p-obj-type
+     1632     ,input  p-obj-code
+     1633     ,output v-host-code
+     1634     )  .
+     1635       find last buf_s-coeff no-lock
+     1636           where buf_s-coeff.gds-code = p-gds-code
+     1637             and buf_s-coeff.host-code = v-host-code
+     1638             and buf_s-coeff.obj-type = p-obj-type
+     1639             and buf_s-coeff.obj-code = p-obj-code
+     1640             and buf_s-coeff.s-date <= v-date
+     1641       no-error.
+     1642       if available buf_s-coeff
+     1643       then do:
+     1644           assign
+     1645               p-coeff-value = buf_s-coeff.coeff-value
+     1646           .
+     1647           return.
+     1648       end.
+     1649       find last buf_s-coeff no-lock
+     1650           where buf_s-coeff.gds-code = p-gds-code
+     1651             and buf_s-coeff.host-code = v-host-code
+     1652             and buf_s-coeff.obj-type = "":U
+     1653             and buf_s-coeff.obj-code = 0
+     1654             and buf_s-coeff.s-date <= v-date
+     1655       no-error.
+     1656       if available buf_s-coeff
+     1657       then do:
+     1658           assign
+     1659               p-coeff-value = buf_s-coeff.coeff-value
+     1660           .
+     1661           return.
+     1662       end.
+     1663       find last buf_s-coeff no-lock
+     1664           where buf_s-coeff.gds-code = p-gds-code
+     1665             and buf_s-coeff.host-code = 0
+     1666             and buf_s-coeff.obj-type = "":U
+     1667             and buf_s-coeff.obj-code = 0
+     1668             and buf_s-coeff.s-date <= v-date
+     1669       no-error.
+     1670       if available buf_s-coeff
+     1671       then do:
+     1672           assign
+     1673               p-coeff-value = buf_s-coeff.coeff-value
+     1674           .
+     1675       end.
+     1676       else do:
+     1677           assign
+     1678               p-coeff-value = 0
+     1679           .
+     1680       end.
+     1681   end.
+     1682   end procedure.
+     1683   procedure fbrlib_create-fbr-recipe-gds :
+     1684   define input parameter p-doc-code         as character      no-undo.
+     1685   define input parameter p-recipe-code      as character      no-undo.
+     1686   define input parameter p-prod-type        as character      no-undo.
+     1687   define input parameter p-prod-code        as integer        no-undo.
+     1688   define input parameter p-artic            as character      no-undo.
+     1689   define input parameter p-gds-code         as integer        no-undo.
+     1690   define input parameter p-is-waste         as logical        no-undo.
+     1691   define input parameter p-proc-number      as integer        no-undo.
+     1692   define input parameter p-obj-date         as date           no-undo.
+     1693   define input parameter p-obj-type         as character      no-undo.
+     1694   define input parameter p-obj-code         as integer        no-undo.
+     1695   define input parameter p-calc-method      as decimal        no-undo.
+     1696   define input parameter p-coeff-waste      as decimal        no-undo.
+     1697   define input parameter p-orig-qnty        as decimal        no-undo.
+     1698   define input parameter p-orig-brutto-qnty as decimal        no-undo.
+     1699       define variable v-coeff-season  as decimal      no-undo.
+     1700       define variable v-void-decimal  as decimal      no-undo.
+     1701       define variable v-void-integer  as integer      no-undo.
+     1702       define variable v-recipe-type   as character    no-undo.
+     1703       define buffer buf_fbr-recipe-gds    for ub.fbr-recipe-gds.
+     1704       define buffer buf_goods             for ub.goods.
+     1705       define buffer buf_recipe            for ub.recipe.
+     1706   do
+     1707   for buf_fbr-recipe-gds
+     1708     , buf_recipe
+     1709     , buf_goods
+     1710   on error undo, return error substitute ("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+     1711   :
+     1712       find first buf_fbr-recipe-gds exclusive-lock
+     1713            where buf_fbr-recipe-gds.doc-code    = p-doc-code
+     1714              and buf_fbr-recipe-gds.recipe-code = p-recipe-code
+     1715              and buf_fbr-recipe-gds.prod-type   = p-prod-type
+     1716              and buf_fbr-recipe-gds.prod-code   = p-prod-code
+     1717              and buf_fbr-recipe-gds.artic       = p-artic
+     1718       no-error.
+     1719       if not available buf_fbr-recipe-gds
+     1720       then do:
+     1721           create buf_fbr-recipe-gds.
+     1722           assign
+     1723               buf_fbr-recipe-gds.doc-code           = p-doc-code
+     1724               buf_fbr-recipe-gds.recipe-code        = p-recipe-code
+     1725               buf_fbr-recipe-gds.prod-type          = p-prod-type
+     1726               buf_fbr-recipe-gds.prod-code          = p-prod-code
+     1727               buf_fbr-recipe-gds.artic              = p-artic
+     1728               buf_fbr-recipe-gds.gds-code           = p-gds-code
+     1729               buf_fbr-recipe-gds.is-waste           = p-is-waste
+     1730               buf_fbr-recipe-gds.proc-number        = p-proc-number
+     1731               buf_fbr-recipe-gds.recipe-qnty        = p-orig-qnty
+     1732               buf_fbr-recipe-gds.recipe-brutto-qnty = p-orig-brutto-qnty
+     1733           .
+     1734           find first buf_goods no-lock
+     1735                where buf_goods.prod-type = buf_fbr-recipe-gds.prod-type
+     1736                  and buf_goods.prod-code = buf_fbr-recipe-gds.prod-code
+     1737                  and buf_goods.artic     = buf_fbr-recipe-gds.artic
+     1738           .
+     1739           run fbrlib-s-coeff-value in this-procedure (
+     1740                 input buf_goods.gds-code
+     1741               , input p-obj-date
+     1742               , input p-obj-type
+     1743               , input p-obj-code
+     1744               , output v-coeff-season
+     1745           ) no-error.
+     1746           if error-status:error
+     1747           then do:
+     1748               return error substitute ("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)).
+     1749           end.
+     1750           assign
+     1751               buf_fbr-recipe-gds.qnty         = p-orig-qnty
+     1752               buf_fbr-recipe-gds.coeff-value  = v-coeff-season
+     1753               buf_fbr-recipe-gds.coeff-waste  = p-coeff-waste
+     1754           .
+     1755           run fbrlib-get-recipe-type in this-procedure (
+     1756                 input buf_fbr-recipe-gds.doc-code
+     1757               , input buf_fbr-recipe-gds.recipe-code
+     1758               , output v-recipe-type
+     1759           ).
+     1760           if v-recipe-type <> 'производство':U
+     1761           then do:
+     1762               assign
+     1763                   buf_fbr-recipe-gds.coeff-value  = 0
+     1764                   buf_fbr-recipe-gds.coeff-waste  = 0
+     1765                   buf_fbr-recipe-gds.calc-method  = 1
+     1766                   buf_fbr-recipe-gds.brutto-qnty  = buf_fbr-recipe-gds.qnty
+     1767               .
+     1768           end.
+     1769           else do:
+     1770               run fbrlib-calc-brutto in this-procedure (
+     1771                     input v-recipe-type
+     1772                   , input buf_fbr-recipe-gds.qnty
+     1773                   , input buf_fbr-recipe-gds.coeff-value
+     1774                   , input buf_fbr-recipe-gds.coeff-waste
+     1775                   , input 0
+     1776                   , input 3
+     1777                   , output v-void-decimal
+     1778                   , output v-void-decimal
+     1779                   , output buf_fbr-recipe-gds.brutto-qnty
+     1780                   , output v-void-integer
+     1781               ).
+     1782               assign
+     1783                   buf_fbr-recipe-gds.calc-method  = p-calc-method
+     1784               .
+     1785               run fbrlib-calc-brutto in this-procedure (
+     1786                     input v-recipe-type
+     1787                   , input buf_fbr-recipe-gds.qnty
+     1788                   , input buf_fbr-recipe-gds.coeff-value
+     1789                   , input buf_fbr-recipe-gds.coeff-waste
+     1790                   , input buf_fbr-recipe-gds.brutto-qnty
+     1791                   , input buf_fbr-recipe-gds.calc-method
+     1792                   , output buf_fbr-recipe-gds.qnty
+     1793                   , output v-void-decimal
+     1794                   , output v-void-decimal
+     1795                   , output v-void-integer
+     1796               ).
+     1797           end.
+     1798       end.
+     1799   end.
+     1800   end procedure.
+     1801   procedure fbrlib-set-default-recipe :
+     1802   define input parameter p-obj-type   as character    no-undo.
+     1803   define input parameter p-obj-code   as integer      no-undo.
+     1804   define input parameter p-gds-code   as integer      no-undo.
+     1805       define variable v-artic             as character    no-undo.
+     1806       define variable v-prod-type         as character    no-undo.
+     1807       define variable v-prod-code         as character    no-undo.
+     1808       define variable v-recipe-code       as character    no-undo.
+     1809       define variable v-fbr-gds-obj-recid as recid        no-undo.
+     1810       define variable v-recipe-found      as logical      no-undo.
+     1811       define buffer buf_recipe        for ub.recipe.
+     1812       define buffer buf_other_recipe  for ub.recipe.
+     1813       define buffer buf_goods         for ub.goods.
+     1814       define buffer buf_fbr-gds-obj   for ub.fbr-gds-obj.
+     1815   do
+     1816   for buf_recipe
+     1817     , buf_goods
+     1818     , buf_fbr-gds-obj
+     1819   on error undo, return error
+     1820   :
+     1821       find first buf_goods no-lock
+     1822            where buf_goods.gds-code = p-gds-code
+     1823       .
+     1824       run fbrlib-get-obj-recipe in this-procedure (
+     1825             input p-obj-type
+     1826           , input p-obj-code
+     1827           , input p-gds-code
+     1828           , output v-recipe-code
+     1829       ).
+     1830       if v-recipe-code <> ""
+     1831       then do:
+     1832           find first buf_recipe no-lock
+     1833               where buf_recipe.recipe-code = v-recipe-code
+     1834           no-error.
+     1835           if not available buf_recipe
+     1836           then do:
+     1837               assign
+     1838                   v-recipe-code = ""
+     1839               .
+     1840           end.
+     1841       end.
+     1842       if v-recipe-code = ""
+     1843       then do:
+     1844           find first buf_fbr-gds-obj exclusive-lock
+     1845                where buf_fbr-gds-obj.obj-type = p-obj-type
+     1846                  and buf_fbr-gds-obj.obj-code = p-obj-code
+     1847                  and buf_fbr-gds-obj.gds-code = p-gds-code
+     1848           no-error.
+     1849           if not available buf_fbr-gds-obj
+     1850           then do:
+     1851               run ref/fgdsobj1.p (
+     1852                     input-output v-fbr-gds-obj-recid
+     1853                   , input 'ДОБАВЛЕНИЕ':U
+     1854                   , input no
+     1855                   , input p-gds-code
+     1856                   , input p-obj-type
+     1857                   , input p-obj-code
+     1858                   , input 0
+     1859                   , input ""
+     1860                   , input 0
+     1861                   , input no
+     1862                   , input no
+     1863                   , input no
+     1864                   , input no
+     1865                   , input no
+     1866                   , input no
+     1867               ) no-error.
+     1868               if error-status:error
+     1869               then do:
+     1870                   message
+     1871                           vss-workfile vss-revision vss-description
+     1872                       skip "Ошибка изменения атрибутов товара на объекте"
+     1873                       skip return-value
+     1874                       skip trim(error-status :get-message(1))
+     1875                               trim(error-status :get-message(2))
+     1876                               trim(error-status :get-message(3))
+     1877                   view-as alert-box error.
+     1878                   undo, return error .
+     1879               end.
+     1880               find first buf_fbr-gds-obj exclusive-lock
+     1881                    where recid( buf_fbr-gds-obj ) = v-fbr-gds-obj-recid
+     1882               .
+     1883           end.
+     1884           assign
+     1885               v-recipe-found = no
+     1886           .
+     1887           for first buf_recipe no-lock
+     1888               where buf_recipe.obj-type    = p-obj-type
+     1889                 and buf_recipe.obj-code    = p-obj-code
+     1890                 and buf_recipe.artic       = buf_goods.artic
+     1891                 and buf_recipe.prod-type   = buf_goods.prod-type
+     1892                 and buf_recipe.prod-code   = buf_goods.prod-code
+     1893                 and buf_recipe.recipe-type = 'производство':U
+     1894                 or (
+     1895                     buf_recipe.obj-type    = ""
+     1896                 and buf_recipe.obj-code    = 0
+     1897                 and buf_recipe.artic       = buf_goods.artic
+     1898                 and buf_recipe.prod-type   = buf_goods.prod-type
+     1899                 and buf_recipe.prod-code   = buf_goods.prod-code
+     1900                 and buf_recipe.recipe-type = 'производство':U
+     1901                     )
+     1902           :
+     1903               assign
+     1904                   v-recipe-found = yes
+     1905                   buf_fbr-gds-obj.default-recipe-code = buf_recipe.recipe-code
+     1906               .
+     1907           end.
+     1908           if v-recipe-found = no
+     1909           then do:
+     1910               for first buf_recipe no-lock
+     1911                   where buf_recipe.obj-type    = p-obj-type
+     1912                     and buf_recipe.obj-code    = p-obj-code
+     1913                     and buf_recipe.artic       = buf_goods.artic
+     1914                     and buf_recipe.prod-type   = buf_goods.prod-type
+     1915                     and buf_recipe.prod-code   = buf_goods.prod-code
+     1916                     and buf_recipe.recipe-type <> 'альтернатива':U
+     1917                     or (
+     1918                         buf_recipe.obj-type    = ""
+     1919                     and buf_recipe.obj-code    = 0
+     1920                     and buf_recipe.artic       = buf_goods.artic
+     1921                     and buf_recipe.prod-type   = buf_goods.prod-type
+     1922                     and buf_recipe.prod-code   = buf_goods.prod-code
+     1923                     and buf_recipe.recipe-type <> 'альтернатива':U
+     1924                         )
+     1925               :
+     1926                   assign
+     1927                       v-recipe-found = yes
+     1928                       buf_fbr-gds-obj.default-recipe-code = buf_recipe.recipe-code
+     1929                   .
+     1930               end.
+     1931               if v-recipe-found = no
+     1932               then do:
+     1933                   for first buf_recipe no-lock
+     1934                       where buf_recipe.obj-type    = p-obj-type
+     1935                         and buf_recipe.obj-code    = p-obj-code
+     1936                         and buf_recipe.artic       = buf_goods.artic
+     1937                         and buf_recipe.prod-type   = buf_goods.prod-type
+     1938                         and buf_recipe.prod-code   = buf_goods.prod-code
+     1939                         or (
+     1940                             buf_recipe.obj-type    = ""
+     1941                         and buf_recipe.obj-code    = 0
+     1942                         and buf_recipe.artic       = buf_goods.artic
+     1943                         and buf_recipe.prod-type   = buf_goods.prod-type
+     1944                         and buf_recipe.prod-code   = buf_goods.prod-code
+     1945                             )
+     1946                   :
+     1947                       assign
+     1948                           v-recipe-found = yes
+     1949                           buf_fbr-gds-obj.default-recipe-code = buf_recipe.recipe-code
+     1950                       .
+     1951                   end.
+     1952                   if v-recipe-found = no
+     1953                   then do:
+     1954                       assign
+     1955                           buf_fbr-gds-obj.default-recipe-code = ""
+     1956                       .
+     1957                   end.
+     1958               end.
+     1959           end.
+     1960       end.
+     1961   end.
+     1962   end procedure.
+     1963   procedure fbrlib-get-obj-recipe :
+     1964   define input parameter p-obj-type       as character    no-undo.
+     1965   define input parameter p-obj-code       as integer      no-undo.
+     1966   define input parameter p-gds-code       as integer      no-undo.
+     1967   define output parameter p-recipe-code   as character    no-undo.
+     1968       define buffer buf_fbr-gds-obj   for ub.fbr-gds-obj.
+     1969   do
+     1970   for buf_fbr-gds-obj
+     1971   on error undo, return error
+     1972   :
+     1973       find first buf_fbr-gds-obj no-lock
+     1974            where buf_fbr-gds-obj.obj-type = p-obj-type
+     1975              and buf_fbr-gds-obj.obj-code = p-obj-code
+     1976              and buf_fbr-gds-obj.gds-code = p-gds-code
+     1977       no-error.
+     1978       if available buf_fbr-gds-obj
+     1979       then do:
+     1980           assign
+     1981               p-recipe-code = buf_fbr-gds-obj.default-recipe-code
+     1982           .
+     1983       end.
+     1984       else do:
+     1985           assign
+     1986               p-recipe-code = ""
+     1987           .
+     1988       end.
+     1989   end.
+     1990   end procedure.
+     1991   procedure fbrlib-create-or-update-recipe-gds :
+     1992   define input parameter p-recipe-code    as character        no-undo.
+     1993   define input parameter p-gds-code       as integer          no-undo.
+     1994   define input parameter p-is-waste       as logical          no-undo.
+     1995   define input parameter p-qnty           as decimal          no-undo.
+     1996   define input parameter p-proc-number    as integer          no-undo.
+     1997   define input parameter p-nws-self       as logical          no-undo.
+     1998       define variable v-max-proc-num  as integer      no-undo.
+     1999       define variable v-recipe-type   as character    no-undo.
+     2000       define buffer buf_goods             for ub.goods.
+     2001       define buffer buf_recipe-gds        for ub.recipe-gds.
+     2002       define buffer buf_recipe            for ub.recipe.
+     2003       define buffer buf_proc_recipe-gds   for ub.recipe-gds.
+     2004   do
+     2005   for buf_goods
+     2006     , buf_recipe-gds
+     2007     , buf_recipe
+     2008     , buf_proc_recipe-gds
+     2009   on error undo, return error
+     2010   :
+     2011       find first buf_recipe no-lock
+     2012            where buf_recipe.recipe-code = p-recipe-code
+     2013       .
+     2014       find first buf_goods no-lock
+     2015            where buf_goods.gds-code = p-gds-code
+     2016       .
+     2017       find first buf_recipe-gds
+     2018            where buf_recipe-gds.recipe-code = p-recipe-code
+     2019              and buf_recipe-gds.prod-type   = buf_goods.prod-type
+     2020              and buf_recipe-gds.prod-code   = buf_goods.prod-code
+     2021              and buf_recipe-gds.artic       = buf_goods.artic
+     2022       no-error.
+     2023       if not available buf_recipe-gds
+     2024       then do:
+     2025           create buf_recipe-gds.
+     2026           assign
+     2027               buf_recipe-gds.recipe-code = p-recipe-code
+     2028               buf_recipe-gds.gds-code    = p-gds-code
+     2029               buf_recipe-gds.prod-type   = buf_goods.prod-type
+     2030               buf_recipe-gds.prod-code   = buf_goods.prod-code
+     2031               buf_recipe-gds.artic       = buf_goods.artic
+     2032           .
+     2033           assign
+     2034               buf_recipe-gds.is-waste    = no
+     2035               buf_recipe-gds.qnty        = 0
+     2036               buf_recipe-gds.coeff-waste = 0
+     2037               buf_recipe-gds.brutto-qnty = 0
+     2038               buf_recipe-gds.proc-number = 0
+     2039               buf_recipe-gds.nws-self    = no
+     2040           .
+     2041       end.
+     2042       assign
+     2043           buf_recipe-gds.is-waste    = p-is-waste
+     2044       .
+     2045       run fbrlib-get-recipe-type in this-procedure (
+     2046             input "":U
+     2047           , input buf_recipe-gds.recipe-code
+     2048           , output v-recipe-type
+     2049       ).
+     2050       if v-recipe-type <> 'производство':U
+     2051       then do:
+     2052           assign
+     2053               buf_recipe-gds.calc-method = 1
+     2054               buf_recipe-gds.qnty        = p-qnty
+     2055               buf_recipe-gds.brutto-qnty = p-qnty
+     2056               buf_recipe-gds.coeff-waste = 0
+     2057           .
+     2058       end.
+     2059       else do:
+     2060           assign
+     2061               buf_recipe-gds.calc-method = 1
+     2062               buf_recipe-gds.brutto-qnty = p-qnty
+     2063           .
+     2064           run fbrlib-calc-brutto in this-procedure (
+     2065                 input v-recipe-type
+     2066               , input 0
+     2067               , input 0
+     2068               , input buf_recipe-gds.coeff-waste
+     2069               , input buf_recipe-gds.brutto-qnty
+     2070               , input 1
+     2071               , output buf_recipe-gds.qnty
+     2072               , output buf_recipe-gds.coeff-waste
+     2073               , output buf_recipe-gds.brutto-qnty
+     2074               , output buf_recipe-gds.calc-method
+     2075           ).
+     2076       end.
+     2077       assign
+     2078           buf_recipe-gds.nws-self    = p-nws-self
+     2079       .
+     2080       if buf_recipe.recipe-type = 'альтернатива':U
+     2081       and buf_recipe-gds.proc-number <> 0
+     2082       then do:
+     2083       end.
+     2084       else do:
+     2085           if p-proc-number <> 0
+     2086           then do:
+     2087               assign
+     2088                   buf_recipe-gds.proc-number = p-proc-number
+     2089               .
+     2090           end.
+     2091           else do:
+     2092               assign
+     2093                   v-max-proc-num = 0
+     2094               .
+     2095               for each buf_proc_recipe-gds no-lock
+     2096                  where buf_proc_recipe-gds.recipe-code = p-recipe-code
+     2097               :
+     2098                   if recid( buf_proc_recipe-gds ) <> recid( buf_recipe-gds )
+     2099                   then do:
+     2100                       assign
+     2101                           v-max-proc-num = ( if v-max-proc-num < buf_proc_recipe-gds.proc-number then buf_proc_recipe-gds.proc-number else v-max-proc-num )
+     2102                       .
+     2103                   end.
+     2104               end.
+     2105               assign
+     2106                   buf_recipe-gds.proc-number = v-max-proc-num + 1
+     2107               .
+     2108           end.
+     2109       end.
+     2110   end.
+     2111   end procedure.
+     2112   PROCEDURE fbrlib-create-or-update-recipe :
+     2113   define input parameter p-mode               as character    no-undo.
+     2114   define input parameter p-obj-type           as character    no-undo.
+     2115   define input parameter p-obj-code           as integer      no-undo.
+     2116   define input parameter p-recipe-code        as character    no-undo.
+     2117   define input parameter p-recipe-type        as character    no-undo.
+     2118   define input parameter p-gds-code           as integer      no-undo.
+     2119   define input parameter p-name               as character    no-undo.
+     2120   define input parameter p-design             as character    no-undo.
+     2121   define input parameter p-order              as integer      no-undo.
+     2122   define input parameter p-quality            as character    no-undo.
+     2123   define input parameter p-ref-num            as character    no-undo.
+     2124   define input parameter p-technique          as character    no-undo.
+     2125   define input parameter p-template           as character    no-undo.
+     2126   define input parameter p-qnty               as decimal      no-undo.
+     2127   define input parameter p-portion-qnty       as integer      no-undo.
+     2128   define input parameter p-portion-weight     as decimal      no-undo.
+     2129   define output parameter p-new-recipe-code   as character    no-undo.
+     2130       define variable v-host-code         as integer      no-undo.
+     2131       define variable v-fbr-gds-obj-recid as recid        no-undo.
+     2132       define buffer buf_recipe    for ub.recipe.
+     2133       define buffer buf_goods     for ub.goods.
+     2134   do
+     2135   for buf_recipe
+     2136     , buf_goods
+     2137   on error undo, return error
+     2138   :
+     2139       if p-mode <> 'ДОБАВЛЕНИЕ':U
+     2140       and p-mode <> 'ИЗМЕНЕНИЕ':U
+     2141       then do:
+     2142           message
+     2143               skip "Ошибка задания типа операции для создания или измения рецепта."
+     2144               skip (1)
+     2145               skip "Задан тип операции:" p-mode
+     2146           view-as alert-box error.
+     2147           undo, return error .
+     2148       end.
+     2149       if p-recipe-code = ""
+     2150       then do:
+     2151   define variable vss-include-info15 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2152   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run hostcode in g#library
+     2153     (input  p-obj-type
+     2154     ,input  p-obj-code
+     2155     ,output v-host-code
+     2156     )  .
+     2157           find first buf_goods no-lock
+     2158                where buf_goods.gds-code = p-gds-code
+     2159           .
+     2160           create buf_recipe .
+     2161           run fbrcode-gen-recipe-code in this-procedure (
+     2162                 input p-obj-type
+     2163               , input p-obj-code
+     2164               , output buf_recipe.recipe-code
+     2165           ).
+     2166           assign
+     2167               buf_recipe.artic               = buf_goods.artic
+     2168               buf_recipe.prod-type           = buf_goods.prod-type
+     2169               buf_recipe.prod-code           = buf_goods.prod-code
+     2170               buf_recipe.recipe-type         = p-recipe-type
+     2171               buf_recipe.recipe-name         = ( if p-name = "" then buf_goods.gds-name else p-name )
+     2172               buf_recipe.gds-code            = p-gds-code
+     2173               buf_recipe.host-code           = v-host-code
+     2174               buf_recipe.obj-type            = p-obj-type
+     2175               buf_recipe.obj-code            = p-obj-code
+     2176               buf_recipe.recipe-design       = ""
+     2177               buf_recipe.recipe-order        = 0
+     2178               buf_recipe.recipe-quality      = ""
+     2179               buf_recipe.recipe-ref-num      = ""
+     2180               buf_recipe.recipe-technique    = ""
+     2181               buf_recipe.recipe-template     = ""
+     2182               buf_recipe.qnty                = 1.0
+     2183               buf_recipe.portion-qnty        = 1
+     2184               buf_recipe.portion-weight      = 0
+     2185           .
+     2186       end.
+     2187       if p-name <> ""
+     2188       then do:
+     2189           assign
+     2190               buf_recipe.recipe-name = p-name
+     2191           .
+     2192       end.
+     2193       assign
+     2194           buf_recipe.recipe-design       = p-design
+     2195           buf_recipe.recipe-order        = p-order
+     2196           buf_recipe.recipe-quality      = p-quality
+     2197           buf_recipe.recipe-ref-num      = p-ref-num
+     2198           buf_recipe.recipe-technique    = p-technique
+     2199           buf_recipe.recipe-template     = p-template
+     2200           buf_recipe.qnty                = p-qnty
+     2201           buf_recipe.portion-qnty        = p-portion-qnty
+     2202           buf_recipe.portion-weight      = p-portion-weight
+     2203       .
+     2204       assign
+     2205           p-new-recipe-code = buf_recipe.recipe-code
+     2206       .
+     2207       run fbrlib-set-default-recipe in this-procedure (
+     2208             input p-obj-type
+     2209           , input p-obj-code
+     2210           , input buf_goods.gds-code
+     2211       ).
+     2212   end.
+     2213   END PROCEDURE.
+     2214   PROCEDURE fbrlib-delete-fact-fbr-doc :
+     2215   define input parameter parparentproc-handle as widget-handle no-undo .
+     2216   define input parameter p-doc-code   as character no-undo.
+     2217   define input parameter p-chip-num   like ub.c-trn-doc.chip-num no-undo .
+     2218       define variable v-shift-on      as logical      no-undo.
+     2219       define variable v-shift-date    as date         no-undo.
+     2220       define variable v-shift-num     as integer      no-undo.
+     2221       define variable v-shift-name    as character    no-undo.
+     2222       define variable v-obj-date      as date         no-undo.
+     2223       define variable v-chip-num      as integer      no-undo.
+     2224       define buffer buf_fbr-doc       for ub.fbr-doc.
+     2225       define buffer buf_fbr-line      for ub.fbr-line.
+     2226       define buffer buf_c-fbr-doc     for ub.c-fbr-doc.
+     2227       define buffer buf_fbr-recipe     for ub.fbr-recipe.
+     2228       define buffer buf_fbr-recipe-gds for ub.fbr-recipe-gds.
+     2229       define buffer buf_marking-lines for ub.marking-lines .
+     2230       define buffer buf_marking       for ub.marking .
+     2231       define buffer buf_goods         for ub.goods .
+     2232   do
+     2233   for buf_fbr-doc
+     2234     , buf_fbr-line
+     2235     , buf_c-fbr-doc
+     2236     , buf_fbr-recipe
+     2237     , buf_fbr-recipe-gds
+     2238     , buf_goods
+     2239     , buf_marking
+     2240     , buf_marking-lines
+     2241   on error undo, return error
+     2242   :
+     2243   define variable vss-include-info16 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2244     define variable v-cntxt-db-num        as integer   no-undo .
+     2245     define variable v-cntxt-userid        as character no-undo .
+     2246     define variable v-cntxt-level         as character no-undo .
+     2247     define variable v-cntxt-host-code-obj as integer   no-undo .
+     2248     define variable v-cntxt-obj-type      as character no-undo .
+     2249     define variable v-cntxt-obj-code      as integer   no-undo .
+     2250     define variable v-cntxt-db-num-obj    as integer   no-undo .
+     2251     define variable v-cntxt-is-admin      as logical   no-undo .
+     2252   define variable vss-include-info17 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2253     run mainmenu_getcntxt in parparentproc-handle
+     2254       (output v-cntxt-db-num
+     2255       ,output v-cntxt-userid
+     2256       ,output v-cntxt-level
+     2257       ,output v-cntxt-host-code-obj
+     2258       ,output v-cntxt-obj-type
+     2259       ,output v-cntxt-obj-code
+     2260       ,output v-cntxt-db-num-obj
+     2261       ,output v-cntxt-is-admin
+     2262       ) .
+     2263       if search ("delfbr.err") <> ?
+     2264       then do:
+     2265           os-delete "delfbr.err".
+     2266       end.
+     2267     _del-block:
+     2268       do transaction
+     2269     on error undo _del-block, return error return-value
+     2270     on endkey undo _del-block , return error return-value
+     2271     on stop undo _del-block , return error return-value
+     2272       :
+     2273           find first buf_fbr-doc exclusive-lock
+     2274                where buf_fbr-doc.doc-code = p-doc-code
+     2275           no-error.
+     2276           if not available buf_fbr-doc
+     2277           then do:
+     2278         undo _del-block, return error substitute("&1 &2 &3&4Не найден документ производства &5 для удаления."
+     2279                                           ,vss-workfile
+     2280                                           ,vss-revision
+     2281                                           ,vss-description
+     2282                                           ,chr(10)
+     2283                                           , p-doc-code).
+     2284           end.
+     2285           run fbrlib-delete-fact-trn-doc in this-procedure (
+     2286               input parparentproc-handle
+     2287              ,input p-doc-code
+     2288              ,input 'при':U
+     2289              ,input p-chip-num
+     2290              ,output v-chip-num
+     2291           ) no-error.
+     2292           if error-status :error
+     2293           then do:
+     2294               run fbrlib-print-del-error-message in this-procedure .
+     2295         undo _del-block, return error.
+     2296           end.
+     2297           assign
+     2298           p-chip-num = (if p-chip-num = ?
+     2299                         then v-chip-num
+     2300                         else p-chip-num).
+     2301           run fbrlib-delete-fact-trn-doc in this-procedure (
+     2302               input parparentproc-handle
+     2303              ,input p-doc-code
+     2304              ,input 'рас':U
+     2305              ,input p-chip-num
+     2306              ,output v-chip-num
+     2307           ) no-error.
+     2308           if error-status :error
+     2309           then do:
+     2310               run fbrlib-print-del-error-message in this-procedure .
+     2311         undo _del-block, return error.
+     2312           end.
+     2313           run fbrlib-delete-fact-trn-doc in this-procedure (
+     2314               input parparentproc-handle
+     2315              ,input p-doc-code
+     2316              ,input 'спи':U
+     2317              ,input p-chip-num
+     2318              ,output v-chip-num
+     2319           ) no-error.
+     2320           if error-status :error
+     2321           then do:
+     2322               run fbrlib-print-del-error-message in this-procedure .
+     2323         undo _del-block, return error.
+     2324           end.
+     2325           create buf_c-fbr-doc.
+     2326           buffer-copy buf_fbr-doc to buf_c-fbr-doc.
+     2327   define variable vss-include-info18 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2328   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curobjdt in g#library
+     2329     (input  buf_fbr-doc.obj-type
+     2330     ,input  buf_fbr-doc.obj-code
+     2331     ,output v-obj-date
+     2332     ) no-error .
+     2333           if error-status :error
+     2334           or v-obj-date = ?
+     2335           then do:
+     2336         undo _del-block, return error "Нет текущей даты на объекте документа.".
+     2337           end.
+     2338   define variable vss-include-info19 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2339   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+     2340     (input  buf_fbr-doc.obj-type
+     2341     ,input  buf_fbr-doc.obj-code
+     2342     ,input  'shift-on=request'
+     2343     ,output v-shift-on
+     2344     )  .
+     2345           if v-shift-on
+     2346           then do:
+     2347   define variable vss-include-info20 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2348   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curshift in g#library
+     2349     (input  buf_fbr-doc.obj-type
+     2350     ,input  buf_fbr-doc.obj-code
+     2351     ,output v-shift-date
+     2352     ,output v-shift-num
+     2353     ,output v-shift-name
+     2354     ) no-error .
+     2355               if error-status :error
+     2356               then do:
+     2357           undo _del-block, return error "Ошибка при поиске текущей смены на объекте".
+     2358               end.
+     2359           end.
+     2360           else do:
+     2361               assign
+     2362                   v-shift-date = ?
+     2363                   v-shift-num  = ?
+     2364                   v-shift-name = ?
+     2365               .
+     2366           end.
+     2367           define variable v-today       as date         no-undo.
+     2368           define variable v-time        as integer      no-undo.
+     2369           run cur-time in this-procedure (
+     2370                 output v-today
+     2371               , output v-time
+     2372           ).
+     2373           assign
+     2374               buf_c-fbr-doc.chip-num         = (if p-chip-num <> ? then p-chip-num else next-value( s-corr-chip, ub  ))
+     2375               buf_c-fbr-doc.corr-user-name   = v-cntxt-userid
+     2376               buf_c-fbr-doc.corr-user-db-num = v-cntxt-db-num
+     2377               buf_c-fbr-doc.corr-date        = v-today
+     2378               buf_c-fbr-doc.corr-time        = v-time
+     2379               buf_c-fbr-doc.corr-shift-date  = v-shift-date
+     2380               buf_c-fbr-doc.corr-shift-num   = v-shift-num
+     2381               buf_c-fbr-doc.corr-shift-name  = v-shift-name
+     2382               buf_c-fbr-doc.is-del           = yes
+     2383           .
+     2384           assign
+     2385               buf_fbr-doc.is-del = yes
+     2386           .
+     2387           for each buf_fbr-line exclusive-lock
+     2388              where buf_fbr-line.doc-code = p-doc-code
+     2389       on error  undo _del-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2390       on stop   undo _del-block, return error substitute( "&1. stop", vss-workfile )
+     2391       on endkey undo _del-block, return error substitute( "&1. endkey", vss-workfile )
+     2392           :
+     2393               for first buf_goods no-lock where buf_goods.artic      = buf_fbr-line.artic
+     2394                                             and buf_goods.prod-type  = buf_fbr-line.prod-type
+     2395                                             and buf_goods.prod-code  = buf_fbr-line.prod-code,
+     2396               each buf_marking-lines exclusive-lock where buf_marking-lines.gds-code = buf_goods.gds-code
+     2397                                                       and buf_marking-lines.obj-type = buf_fbr-doc.obj-type
+     2398                                                       and buf_marking-lines.obj-code = buf_fbr-doc.obj-code
+     2399                                                       and buf_marking-lines.in-code  = "manufacturing"
+     2400                                                       and buf_marking-lines.out-code = buf_fbr-line.doc-code
+     2401                                                       and buf_marking-lines.part-code = buf_fbr-line.recipe-code
+     2402                                                       and buf_marking-lines.prt-code = 0
+     2403               :
+     2404                 for first buf_marking exclusive-lock where buf_marking.mark begins buf_marking-lines.mark :
+     2405                   assign
+     2406                     buf_marking.sts = objSrv:Env:Marking:Sts:Mark:UsedInProduction:KeyIntDB when buf_fbr-line.is-comp
+     2407                   .
+     2408                 end .
+     2409                 delete buf_marking-lines.
+     2410               end .
+     2411               delete buf_fbr-line.
+     2412           end.
+     2413           for each buf_fbr-recipe exclusive-lock
+     2414              where buf_fbr-recipe.doc-code = p-doc-code
+     2415       on error  undo _del-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2416       on stop   undo _del-block, return error substitute( "&1. stop", vss-workfile )
+     2417       on endkey undo _del-block, return error substitute( "&1. endkey", vss-workfile )
+     2418           :
+     2419               delete buf_fbr-recipe.
+     2420           end.
+     2421           for each buf_fbr-recipe-gds exclusive-lock
+     2422              where buf_fbr-recipe-gds.doc-code = p-doc-code
+     2423       on error  undo _del-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2424       on stop   undo _del-block, return error substitute( "&1. stop", vss-workfile )
+     2425       on endkey undo _del-block, return error substitute( "&1. endkey", vss-workfile )
+     2426           :
+     2427               delete buf_fbr-recipe-gds.
+     2428           end.
+     2429           delete buf_fbr-doc.
+     2430       end.
+     2431   end.
+     2432   END PROCEDURE.
+     2433   PROCEDURE fbrlib-del-trn-doc :
+     2434   do
+     2435   on error undo, return error
+     2436   :
+     2437   define input parameter parparentproc        as widget-handle no-undo .
+     2438   define input parameter p-fbr-doc-doc-code   as character    no-undo.
+     2439   define input parameter p-trn-doc-type       as character    no-undo.
+     2440   define input parameter p-phchip-num         like ub.c-trn-doc.chip-num no-undo .
+     2441   define output parameter p-chip-num           like ub.c-trn-doc.chip-num no-undo .
+     2442       define variable v-trn-doc-doc-code  as character     no-undo.
+     2443       define buffer buf_trn-doc       for ub.trn-doc.
+     2444   define variable vss-include-info21 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2445     define variable v-cntxt-db-num        as integer   no-undo .
+     2446     define variable v-cntxt-userid        as character no-undo .
+     2447     define variable v-cntxt-level         as character no-undo .
+     2448     define variable v-cntxt-host-code-obj as integer   no-undo .
+     2449     define variable v-cntxt-obj-type      as character no-undo .
+     2450     define variable v-cntxt-obj-code      as integer   no-undo .
+     2451     define variable v-cntxt-db-num-obj    as integer   no-undo .
+     2452     define variable v-cntxt-is-admin      as logical   no-undo .
+     2453   define variable vss-include-info22 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2454     run mainmenu_getcntxt in parparentproc
+     2455       (output v-cntxt-db-num
+     2456       ,output v-cntxt-userid
+     2457       ,output v-cntxt-level
+     2458       ,output v-cntxt-host-code-obj
+     2459       ,output v-cntxt-obj-type
+     2460       ,output v-cntxt-obj-code
+     2461       ,output v-cntxt-db-num-obj
+     2462       ,output v-cntxt-is-admin
+     2463       ) .
+     2464       run fbrcode-trn-doc in this-procedure (
+     2465             input 'производство':U
+     2466           , input p-fbr-doc-doc-code
+     2467           , input p-trn-doc-type
+     2468           , output v-trn-doc-doc-code
+     2469       ).
+     2470       find first buf_trn-doc no-lock
+     2471            where buf_trn-doc.doc-code = v-trn-doc-doc-code
+     2472       no-error.
+     2473       if available buf_trn-doc
+     2474       then do:
+     2475           run str/del-doc.p (
+     2476                 input parparentproc
+     2477               , input buf_trn-doc.doc-code
+     2478               , input v-cntxt-db-num
+     2479               , input "del-doc.err"
+     2480               , input ?
+     2481               , input p-fbr-doc-doc-code
+     2482               , input v-cntxt-userid
+     2483               , input 0
+     2484               , input p-phchip-num
+     2485               , output p-chip-num
+     2486           ) no-error.
+     2487           if error-status :error
+     2488           then do:
+     2489             undo, return error substitute("Не удалось удалить складской документ &1, созданный по документу производства &2.&3&4&3&5"
+     2490                                           ,v-trn-doc-doc-code
+     2491                                           ,p-fbr-doc-doc-code
+     2492                                           , chr(10)
+     2493                                           , error-status:get-message(1)
+     2494                                           , return-value ).
+     2495           end.
+     2496       end.
+     2497   end.
+     2498   END PROCEDURE.
+     2499   PROCEDURE fbrlib-delete-fact-trn-doc :
+     2500   define input parameter parparentproc    as widget-handle    no-undo.
+     2501   define input parameter p-fbr-doc-code   as character        no-undo.
+     2502   define input parameter p-doc-type       as character    no-undo.
+     2503   define input parameter p-ph-chip-num       like ub.c-trn-doc.chip-num no-undo .
+     2504   define output parameter p-chip-num      like ub.c-trn-doc.chip-num no-undo .
+     2505       define variable v-doc-code          as character        no-undo.
+     2506       define variable v-ext-doc-type      as character        no-undo.
+     2507       define variable v-trn-doc-recid     as recid            no-undo.
+     2508       define variable varchip-code        as integer          no-undo.
+     2509       define variable varchip-code2       as integer          no-undo.
+     2510       define variable v-chip-counter      as integer          no-undo.
+     2511       define buffer buf_trn-doc       for ub.trn-doc.
+     2512       define buffer buf_pri_trn-doc   for ub.trn-doc.
+     2513       define buffer buf_cons_trn-doc  for ub.trn-doc.
+     2514   do
+     2515   for buf_trn-doc
+     2516     , buf_pri_trn-doc
+     2517     , buf_cons_trn-doc
+     2518   on error undo, return error
+     2519   :
+     2520   define variable vss-include-info23 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2521     define variable v-cntxt-db-num        as integer   no-undo .
+     2522     define variable v-cntxt-userid        as character no-undo .
+     2523     define variable v-cntxt-level         as character no-undo .
+     2524     define variable v-cntxt-host-code-obj as integer   no-undo .
+     2525     define variable v-cntxt-obj-type      as character no-undo .
+     2526     define variable v-cntxt-obj-code      as integer   no-undo .
+     2527     define variable v-cntxt-db-num-obj    as integer   no-undo .
+     2528     define variable v-cntxt-is-admin      as logical   no-undo .
+     2529   define variable vss-include-info24 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2530     run mainmenu_getcntxt in parparentproc
+     2531       (output v-cntxt-db-num
+     2532       ,output v-cntxt-userid
+     2533       ,output v-cntxt-level
+     2534       ,output v-cntxt-host-code-obj
+     2535       ,output v-cntxt-obj-type
+     2536       ,output v-cntxt-obj-code
+     2537       ,output v-cntxt-db-num-obj
+     2538       ,output v-cntxt-is-admin
+     2539       ) .
+     2540       run fbrcode-trn-doc in this-procedure (
+     2541             input 'производство':U
+     2542           , input p-fbr-doc-code
+     2543           , input p-doc-type
+     2544           , output v-doc-code
+     2545       ).
+     2546       find first buf_trn-doc no-lock
+     2547            where buf_trn-doc.doc-code = v-doc-code
+     2548       no-error.
+     2549       if not available buf_trn-doc
+     2550       then do:
+     2551           if p-doc-type <> 'спи':U
+     2552           then do:
+     2553               message
+     2554                   "Не найден документ '" p-doc-type "'"
+     2555                   "по документу производства " p-fbr-doc-code
+     2556               view-as alert-box.
+     2557               undo, return error.
+     2558           end.
+     2559           else do:
+     2560           end.
+     2561       end.
+     2562       else do:
+     2563           assign
+     2564               v-trn-doc-recid = recid( buf_trn-doc )
+     2565               v-ext-doc-type  = buf_trn-doc.ext-doc-type
+     2566           .
+     2567           if v-ext-doc-type = 'ev':U
+     2568           then do:
+     2569               find first buf_pri_trn-doc no-lock
+     2570                    where buf_pri_trn-doc.out-code     = v-doc-code
+     2571                      and buf_pri_trn-doc.ext-doc-type = 'iv':U
+     2572               no-error.
+     2573               if available buf_pri_trn-doc
+     2574               then do:
+     2575                   run str/del-doc.p (
+     2576                         input parparentproc
+     2577                       , input buf_pri_trn-doc.doc-code
+     2578                       , input v-cntxt-db-num
+     2579                       , input "delfbr.err"
+     2580                       , input ?
+     2581                       , input p-fbr-doc-code
+     2582                       , input v-cntxt-userid
+     2583                       , input 0
+     2584                       , input (if p-ph-chip-num <> ?
+     2585                               then p-ph-chip-num
+     2586                               else (if varchip-code <> 0
+     2587                                   then varchip-code
+     2588                                   else ?)
+     2589                               )
+     2590                       , output varchip-code2
+     2591                   ) no-error.
+     2592                   if error-status :error
+     2593                   then do:
+     2594                     undo, return error substitute("Ошибка при удалении складского документа &1, созданный по документу производства &2.&3&4&3&5"
+     2595                                                   ,buf_pri_trn-doc.doc-code
+     2596                                                   ,p-fbr-doc-code
+     2597                                                   , chr(10)
+     2598                                                   , error-status:get-message(1)
+     2599                                                   , return-value ).
+     2600                   end.
+     2601               end.
+     2602           end.
+     2603           define buffer buf_out_trn-doc       for ub.trn-doc.
+     2604           if p-doc-type = 'при':U
+     2605           then do:
+     2606               assign
+     2607                   v-chip-counter = 0
+     2608               .
+     2609               for each buf_out_trn-doc exclusive-lock
+     2610                  where buf_out_trn-doc.out-code = buf_trn-doc.doc-code
+     2611               on error undo, return error
+     2612               :
+     2613                   assign
+     2614                       v-chip-counter = v-chip-counter + 1
+     2615                   .
+     2616                   if v-chip-counter > 1
+     2617                   then do:
+     2618                       assign
+     2619                           varchip-code = varchip-code2
+     2620                       .
+     2621                   end.
+     2622                   run str/del-doc.p (
+     2623                         input parparentproc
+     2624                       , input buf_out_trn-doc.doc-code
+     2625                       , input v-cntxt-db-num
+     2626                       , input "delfbr.err"
+     2627                       , input ?
+     2628                       , input p-fbr-doc-code
+     2629                       , input v-cntxt-userid
+     2630                       , input 0
+     2631                       , input (if p-ph-chip-num <> ?
+     2632                               then p-ph-chip-num
+     2633                               else (if varchip-code <> 0
+     2634                                   then varchip-code
+     2635                                   else ?)
+     2636                               )
+     2637                       , output varchip-code2
+     2638                   ) no-error.
+     2639                   if error-status :error
+     2640                   then do:
+     2641                     undo, return error substitute("Ошибка при удалении складского документа &1, связанного со складским документов прихода &2, созданный по документу производства &3.&4&5&4&6"
+     2642                                                   ,buf_out_trn-doc.doc-code
+     2643                                                   ,buf_trn-doc.doc-code
+     2644                                                   ,p-fbr-doc-code
+     2645                                                   , chr(10)
+     2646                                                   , error-status:get-message(1)
+     2647                                                   , return-value ).
+     2648                   end.
+     2649               end.
+     2650           end.
+     2651           run str/del-doc.p (
+     2652                 input parparentproc
+     2653               , input buf_trn-doc.doc-code
+     2654               , input v-cntxt-db-num
+     2655               , input "delfbr.err"
+     2656               , input ?
+     2657               , input p-fbr-doc-code
+     2658               , input v-cntxt-userid
+     2659               , input 0
+     2660               , input (if p-ph-chip-num <> ?
+     2661                        then p-ph-chip-num
+     2662                        else (if varchip-code <> 0
+     2663                              then varchip-code
+     2664                              else ?)
+     2665                        )
+     2666               , output varchip-code2
+     2667           ) no-error.
+     2668           if error-status :error
+     2669           then do:
+     2670               undo, return error substitute("Ошибка при удалении складского документа &1, созданный по документу производства &2.&3&4&3&5"
+     2671                                             ,buf_trn-doc.doc-code
+     2672                                             ,p-fbr-doc-code
+     2673                                             , chr(10)
+     2674                                             , error-status:get-message(1)
+     2675                                             , return-value ).
+     2676           end.
+     2677           if p-doc-type = 'рас':U
+     2678           or p-doc-type = 'спи':U
+     2679           then do:
+     2680               assign
+     2681                   v-chip-counter = 0
+     2682               .
+     2683               for each buf_cons_trn-doc no-lock
+     2684                  where buf_cons_trn-doc.out-code      = v-doc-code
+     2685                    and buf_cons_trn-doc.ext-doc-type  = 'pc':U
+     2686               :
+     2687                   assign
+     2688                       v-trn-doc-recid = recid( buf_cons_trn-doc )
+     2689                       v-chip-counter = v-chip-counter + 1
+     2690                   .
+     2691                   assign
+     2692                   varchip-code = if v-chip-counter = 2
+     2693                                  then varchip-code2
+     2694                                  else varchip-code.
+     2695                   run str/del-doc.p (
+     2696                         input parparentproc
+     2697                       , input buf_cons_trn-doc.doc-code
+     2698                       , input v-cntxt-db-num
+     2699                       , input "delfbr.err"
+     2700                       , input ?
+     2701                       , input ?
+     2702                       , input v-cntxt-userid
+     2703                       , input 0
+     2704                       , input (if p-ph-chip-num <> ?
+     2705                                then p-ph-chip-num
+     2706                                else ( if v-chip-counter = 1
+     2707                                       then ?
+     2708                                       else varchip-code )
+     2709                                )
+     2710                       , output varchip-code2
+     2711                   ) no-error.
+     2712                   if error-status :error
+     2713                   then do:
+     2714                       undo, return error substitute("Ошибка при удалении складского документа смены типа приобретения &1, созданный по документу производства &2.&3&4&3&5"
+     2715                                                     ,buf_cons_trn-doc.doc-code
+     2716                                                     ,p-fbr-doc-code
+     2717                                                     , chr(10)
+     2718                                                     , error-status:get-message(1)
+     2719                                                     , return-value ).
+     2720                   end.
+     2721                   assign
+     2722                       p-chip-num = varchip-code2
+     2723                   .
+     2724               end.
+     2725           end.
+     2726           assign
+     2727               p-chip-num = varchip-code2
+     2728           .
+     2729       end.
+     2730   end.
+     2731   END PROCEDURE.
+     2732   PROCEDURE fbrlib-print-del-error-message :
+     2733   do
+     2734   on error undo, return error
+     2735   :
+     2736       define variable v-user-action   as character    no-undo.
+     2737       define variable v-printed       as logical      no-undo.
+     2738       message
+     2739           vss-workfile vss-revision vss-description
+     2740           skip "Ошибка при удалении документа."
+     2741           skip return-value
+     2742           skip trim(error-status :get-message(1))
+     2743           skip trim(error-status :get-message(2))
+     2744           skip trim(error-status :get-message(3))
+     2745       view-as alert-box error.
+     2746       if search ("delfbr.err") <> ?
+     2747       then do:
+     2748         run gbl/prnfilen.w
+     2749           (input  "Ошибки при удалении документа производства"
+     2750           ,input  0
+     2751           ,input  "delfbr.err"
+     2752           ,input  7
+     2753           ,output v-user-action
+     2754           ,output v-printed
+     2755           ).
+     2756       end.
+     2757   end.
+     2758   END PROCEDURE.
+     2759   procedure fbrlib-calc-brutto :
+     2760   define input parameter p-recipe-type        as character        no-undo.
+     2761   define input parameter p-netto              as decimal          no-undo.
+     2762   define input parameter p-coeff-value        as decimal          no-undo.
+     2763   define input parameter p-coeff-waste        as decimal          no-undo.
+     2764   define input parameter p-brutto             as decimal          no-undo.
+     2765   define input parameter p-calc-method        as integer          no-undo.
+     2766   define output parameter p-new-netto         as decimal          no-undo.
+     2767   define output parameter p-new-coeff-waste   as decimal          no-undo.
+     2768   define output parameter p-new-brutto        as decimal          no-undo.
+     2769   define output parameter p-new-calc-method   as integer          no-undo.
+     2770   do
+     2771   on error undo, return error
+     2772   :
+     2773       if p-recipe-type <> 'производство':U
+     2774       then do:
+     2775           assign
+     2776               p-new-coeff-waste = 0
+     2777               p-new-calc-method = 1
+     2778               p-new-netto       = ( if p-calc-method = 1 then p-brutto else p-netto )
+     2779               p-new-brutto      = ( if p-calc-method = 1 then p-brutto else p-netto )
+     2780           .
+     2781       end.
+     2782       else do:
+     2783           assign
+     2784               p-new-calc-method = p-calc-method
+     2785           .
+     2786           if p-coeff-waste = 0
+     2787           then do:
+     2788               assign
+     2789                   p-coeff-value = 0
+     2790               .
+     2791           end.
+     2792           case p-calc-method
+     2793           :
+     2794               when 1
+     2795               then do:
+     2796                   assign
+     2797                       p-new-netto         = p-brutto * ( 100 - p-coeff-value - p-coeff-waste ) / 100
+     2798                       p-new-coeff-waste   = p-coeff-waste
+     2799                       p-new-brutto        = p-brutto
+     2800                   .
+     2801               end.
+     2802               when 2
+     2803               then do:
+     2804                   assign
+     2805                       p-new-netto         = p-netto
+     2806                       p-new-coeff-waste   = 100 - p-coeff-value - ( 100 * p-netto / p-brutto )
+     2807                       p-new-brutto        = p-brutto
+     2808                   .
+     2809               end.
+     2810               when 3
+     2811               then do:
+     2812                   assign
+     2813                       p-new-netto         = p-netto
+     2814                       p-new-coeff-waste   = p-coeff-waste
+     2815                       p-new-brutto        = 100 * p-netto / ( 100 - p-coeff-value - p-coeff-waste )
+     2816                   .
+     2817               end.
+     2818               otherwise do:
+     2819                   define variable v-yesno    as logical      no-undo.
+     2820                   assign
+     2821                       v-yesno = yes
+     2822                   .
+     2823                   message
+     2824                       "Неверный метод для расчета брутто, нетто и процента потерь."
+     2825                       skip "Значение метода должно быть 1, 2 или 3."
+     2826                       skip(1)
+     2827                       skip "Заданное значение:" p-calc-method
+     2828                       skip(1)
+     2829                       skip "Установить значение метода расчета 1"
+     2830                       skip "(расчет нетто по брутто и проценту потерь)?"
+     2831                   view-as alert-box warning
+     2832                   buttons yes-no
+     2833                   title "Неверное значение метода пересчета в строках документа-производства"
+     2834                   update v-yesno
+     2835                   .
+     2836                   if v-yesno = yes
+     2837                   then do:
+     2838                       assign
+     2839                           p-new-calc-method   = 1
+     2840                           p-new-netto         = p-brutto * ( 100 - p-coeff-value - p-coeff-waste ) / 100
+     2841                           p-new-coeff-waste   = p-coeff-waste
+     2842                           p-new-brutto        = p-brutto
+     2843                       .
+     2844                   end.
+     2845                   else do:
+     2846                       message
+     2847                               vss-workfile vss-revision vss-description
+     2848                           skip(1)
+     2849                           skip "Ошибка расчета брутто, нетто и процента потерь."
+     2850                           skip return-value
+     2851                           skip trim(error-status :get-message(1))
+     2852                               trim(error-status :get-message(2))
+     2853                               trim(error-status :get-message(3))
+     2854                       view-as alert-box error
+     2855                       title "Неверное значение метода расчета"
+     2856                       .
+     2857                       undo, return error .
+     2858                   end.
+     2859               end.
+     2860           end case.
+     2861       end.
+     2862   end.
+     2863   end procedure.
+     2864   procedure fbrlib-check-brutto :
+     2865   define input parameter p-recipe-type        as character        no-undo.
+     2866   define input parameter p-netto              as decimal          no-undo.
+     2867   define input parameter p-coeff-value        as decimal          no-undo.
+     2868   define input parameter p-coeff-waste        as decimal          no-undo.
+     2869   define input parameter p-brutto             as decimal          no-undo.
+     2870   define input parameter p-calc-method        as integer          no-undo.
+     2871   define output parameter p-error-message     as character        no-undo.
+     2872   define output parameter p-not-good          as logical          no-undo.
+     2873   do
+     2874   on error undo, return error
+     2875   :
+     2876       if p-recipe-type <> 'производство':U
+     2877       then do:
+     2878           if p-netto <> p-brutto
+     2879           or p-coeff-waste <> 0
+     2880           then do:
+     2881               assign
+     2882                   p-not-good      = yes
+     2883                   p-error-message = substitute( "Во всех рецептах кроме рецепта производства должно выполняться:&1брутто = нетто и процент потерь = 0.&1&1Тип рецепта: &2&1Брутто: &3&1Нетто: &4&1Процент потерь: &5"
+     2884                                           , chr(10), p-recipe-type, p-brutto, p-netto, p-coeff-waste )
+     2885               .
+     2886           end.
+     2887       end.
+     2888       else do:
+     2889           if p-coeff-waste = 0
+     2890           then do:
+     2891               assign
+     2892                   p-coeff-value = 0
+     2893               .
+     2894           end.
+     2895           case p-calc-method
+     2896           :
+     2897               when 1
+     2898               then do:
+     2899                   if round( p-netto, 9 ) <> round( p-brutto * ( 100 - p-coeff-value - p-coeff-waste ) / 100, 9 )
+     2900                   then do:
+     2901                       assign
+     2902                           p-not-good      = yes
+     2903                           p-error-message = substitute( "Ошибка расчета нетто ( &2 ) &1 по брутто ( &3 ) &1 и процентам потерь ( &4, &5 )."
+     2904                                                   , chr(10), p-netto, p-brutto, p-coeff-value, p-coeff-waste )
+     2905                       .
+     2906                   end.
+     2907               end.
+     2908               when 2
+     2909               then do:
+     2910                   if round( p-coeff-waste, 9 ) <> round( 100 - p-coeff-value - ( 100 * p-netto / p-brutto ), 9 )
+     2911                   then do:
+     2912                       assign
+     2913                           p-not-good      = yes
+     2914                           p-error-message =  substitute( "Ошибка расчета процента потерь ( &2 ) &1 по нетто ( &3 ) &1 брутто ( &4 ) &1 и cезонному проценту ( &5 )."
+     2915                                                   , chr(10), p-coeff-waste, p-netto, p-brutto, p-coeff-value )
+     2916                       .
+     2917                   end.
+     2918               end.
+     2919               when 3
+     2920               then do:
+     2921                   if round( p-brutto, 9 ) <> round( 100 * p-netto / ( 100 - p-coeff-value - p-coeff-waste ), 9 )
+     2922                   then do:
+     2923                       assign
+     2924                           p-not-good      = yes
+     2925                           p-error-message = substitute( "Ошибка расчета брутто ( &3 ) &1 по нетто ( &2 ) &1 и процентам потерь ( &4, &5 )."
+     2926                                                   , chr(10), p-netto, p-brutto, p-coeff-value, p-coeff-waste )
+     2927                       .
+     2928                   end.
+     2929               end.
+     2930               otherwise do:
+     2931                   assign
+     2932                       p-not-good      = yes
+     2933                       p-error-message = substitute( "Ошибка ввода метода расчета ( &1 ).", p-calc-method )
+     2934                   .
+     2935               end.
+     2936           end case.
+     2937       end.
+     2938   end.
+     2939   end procedure.
+     2940   procedure fbrlib-check-fbr-recipe :
+     2941   define input parameter p-doc-code       as character        no-undo.
+     2942   define input parameter p-recipe-code    as character        no-undo.
+     2943   define output parameter p-is-correct    as logical          no-undo.
+     2944       define variable v-comp-factor    as decimal      no-undo.
+     2945       define buffer buf_fbr-recipe        for ub.fbr-recipe.
+     2946       define buffer buf_fbr-recipe-gds    for ub.fbr-recipe-gds.
+     2947       define buffer buf_fbr-line          for ub.fbr-line.
+     2948   do
+     2949   for buf_fbr-recipe
+     2950     , buf_fbr-recipe-gds
+     2951     , buf_fbr-line
+     2952   on error undo, return error
+     2953   :
+     2954       assign
+     2955           p-is-correct = yes
+     2956       .
+     2957       find first buf_fbr-recipe no-lock
+     2958            where buf_fbr-recipe.doc-code    = p-doc-code
+     2959              and buf_fbr-recipe.recipe-code = p-recipe-code no-error
+     2960       .
+     2961       if not available buf_fbr-recipe then do:
+     2962         undo, return error substitute("Не найден рецепт (fbr-recipe) с кодом &1 для  документа пр-ва &2", p-recipe-code, p-doc-code).
+     2963       end.
+     2964       if buf_fbr-recipe.recipe-type = 'альтернатива':U
+     2965       then do:
+     2966       end.
+     2967       else do:
+     2968           find first buf_fbr-line no-lock
+     2969                where buf_fbr-line.doc-code    = buf_fbr-recipe.doc-code
+     2970                  and buf_fbr-line.is-comp     = yes
+     2971                  and buf_fbr-line.recipe-code = buf_fbr-recipe.recipe-code
+     2972                  and buf_fbr-line.artic       = buf_fbr-recipe.artic
+     2973                  and buf_fbr-line.prod-type   = buf_fbr-recipe.prod-type
+     2974                  and buf_fbr-line.prod-code   = buf_fbr-recipe.prod-code
+     2975           .
+     2976           assign
+     2977               v-comp-factor = buf_fbr-line.fact-qnty / buf_fbr-recipe.qnty
+     2978           .
+     2979           recipe-line-cycle:
+     2980           for each buf_fbr-recipe-gds no-lock
+     2981              where buf_fbr-recipe-gds.doc-code    = p-doc-code
+     2982                and buf_fbr-recipe-gds.recipe-code = p-recipe-code
+     2983           on error undo, return error
+     2984           :
+     2985               find first buf_fbr-line no-lock
+     2986                    where buf_fbr-line.doc-code    = buf_fbr-recipe-gds.doc-code
+     2987                      and buf_fbr-line.is-comp     = no
+     2988                      and buf_fbr-line.recipe-code = buf_fbr-recipe-gds.recipe-code
+     2989                      and buf_fbr-line.artic       = buf_fbr-recipe-gds.artic
+     2990                      and buf_fbr-line.prod-type   = buf_fbr-recipe-gds.prod-type
+     2991                      and buf_fbr-line.prod-code   = buf_fbr-recipe-gds.prod-code
+     2992               .
+     2993               if absolute( buf_fbr-line.fact-qnty / buf_fbr-recipe-gds.brutto-qnty - v-comp-factor ) > 0.000000001
+     2994               then do:
+     2995                   assign
+     2996                       p-is-correct = no
+     2997                   .
+     2998                   leave recipe-line-cycle.
+     2999               end.
+     3000           end.
+     3001       end.
+     3002   end.
+     3003   end procedure.
+     3004   procedure fbrlib-get-recipe-type :
+     3005   define input parameter p-fbr-doc-code   as character        no-undo.
+     3006   define input parameter p-recipe-code    as character        no-undo.
+     3007   define output parameter p-recipe-type   as character        no-undo.
+     3008       define buffer buf_recipe        for ub.recipe.
+     3009       define buffer buf_fbr-recipe    for ub.fbr-recipe.
+     3010   do
+     3011   for buf_recipe
+     3012     , buf_fbr-recipe
+     3013   on error undo, return error
+     3014   :
+     3015       if p-fbr-doc-code = ""
+     3016       then do:
+     3017           find first buf_recipe no-lock
+     3018                where buf_recipe.recipe-code = p-recipe-code
+     3019           no-error.
+     3020           if available buf_recipe
+     3021           then do:
+     3022               assign
+     3023                   p-recipe-type = buf_recipe.recipe-type
+     3024               .
+     3025           end.
+     3026           else do:
+     3027               assign
+     3028                   p-recipe-type = "":U
+     3029               .
+     3030           end.
+     3031       end.
+     3032       else do:
+     3033           find first buf_fbr-recipe no-lock
+     3034                where buf_fbr-recipe.doc-code      = p-fbr-doc-code
+     3035                  and buf_fbr-recipe.recipe-code   = p-recipe-code
+     3036           no-error.
+     3037           if available buf_fbr-recipe
+     3038           then do:
+     3039               assign
+     3040                   p-recipe-type = buf_fbr-recipe.recipe-type
+     3041               .
+     3042           end.
+     3043           else do:
+     3044               assign
+     3045                   p-recipe-type = "":U
+     3046               .
+     3047           end.
+     3048       end.
+     3049   end.
+     3050   end procedure.
+     3051   PROCEDURE calc-comp-from-ingr :
+     3052   define input parameter p-fbr-v-fbr-doc-line-recid           as recid        no-undo.
+     3053   define input parameter p-fact-qnty                          as decimal      no-undo.
+     3054   define output parameter p-comp-fbr-v-fbr-doc-line-recid     as recid        no-undo.
+     3055   define output parameter p-comp-qnty                         as decimal      no-undo.
+     3056       define variable v-ingr-qnty     as decimal       no-undo.
+     3057       define buffer buf_i_fbr-line    for ub.fbr-line.
+     3058       define buffer buf_fbr-line      for ub.fbr-line.
+     3059       define buffer buf_recipe        for ub.fbr-recipe.
+     3060       define buffer buf_recipe-gds    for ub.fbr-recipe-gds.
+     3061   do
+     3062   for buf_i_fbr-line
+     3063     , buf_fbr-line
+     3064     , buf_recipe
+     3065     , buf_recipe-gds
+     3066   on error undo, return error
+     3067   :
+     3068       find first buf_i_fbr-line no-lock
+     3069            where recid( buf_i_fbr-line ) = p-fbr-v-fbr-doc-line-recid
+     3070       .
+     3071       find first buf_recipe no-lock
+     3072            where buf_recipe.doc-code      = buf_i_fbr-line.doc-code
+     3073              and buf_recipe.recipe-code   = buf_i_fbr-line.recipe-code
+     3074       no-error.
+     3075       if not available buf_recipe
+     3076       then do:
+     3077           message
+     3078                   vss-workfile vss-revision vss-description
+     3079               skip "В строке производства не указан рецепт."
+     3080               skip "Невозможно рассчитать количество составного товара."
+     3081               skip return-value
+     3082               skip trim(error-status :get-message(1))
+     3083                   trim(error-status :get-message(2))
+     3084                   trim(error-status :get-message(3))
+     3085           view-as alert-box error.
+     3086           undo, return error .
+     3087       end.
+     3088       if buf_recipe.recipe-type = 'альтернатива':U
+     3089       then do:
+     3090           for each buf_fbr-line no-lock
+     3091              where buf_fbr-line.doc-code    = buf_i_fbr-line.doc-code
+     3092                and buf_fbr-line.trn-type    = buf_i_fbr-line.trn-type
+     3093                and buf_fbr-line.recipe-code = buf_i_fbr-line.recipe-code
+     3094           on error undo, return error
+     3095           :
+     3096               find first buf_recipe-gds no-lock
+     3097                    where buf_recipe-gds.doc-code    = buf_i_fbr-line.doc-code
+     3098                      and buf_recipe-gds.recipe-code = buf_i_fbr-line.recipe-code
+     3099                      and buf_recipe-gds.artic       = buf_fbr-line.artic
+     3100                      and buf_recipe-gds.prod-type   = buf_fbr-line.prod-type
+     3101                      and buf_recipe-gds.prod-code   = buf_fbr-line.prod-code
+     3102               .
+     3103               assign
+     3104                   p-comp-qnty         = p-comp-qnty       + ( buf_fbr-line.fact-qnty * buf_recipe-gds.brutto-qnty )
+     3105               .
+     3106           end.
+     3107           assign
+     3108               p-comp-qnty         = p-comp-qnty       / buf_recipe.qnty
+     3109           .
+     3110       end.
+     3111       else do:
+     3112           find first buf_recipe-gds no-lock
+     3113                where buf_recipe-gds.doc-code    = buf_i_fbr-line.doc-code
+     3114                  and buf_recipe-gds.recipe-code = buf_i_fbr-line.recipe-code
+     3115                  and buf_recipe-gds.artic       = buf_i_fbr-line.artic
+     3116                  and buf_recipe-gds.prod-type   = buf_i_fbr-line.prod-type
+     3117                  and buf_recipe-gds.prod-code   = buf_i_fbr-line.prod-code
+     3118           .
+     3119           assign
+     3120               p-comp-qnty = p-fact-qnty / buf_recipe-gds.brutto-qnty * buf_recipe.qnty
+     3121           .
+     3122       end.
+     3123       find first buf_fbr-line no-lock
+     3124            where buf_fbr-line.doc-code    = buf_i_fbr-line.doc-code
+     3125              and buf_fbr-line.is-comp     = yes
+     3126              and buf_fbr-line.recipe-code = buf_i_fbr-line.recipe-code
+     3127       .
+     3128       assign
+     3129           p-comp-fbr-v-fbr-doc-line-recid = recid( buf_fbr-line )
+     3130       .
+     3131   end.
+     3132   END PROCEDURE.
+     3133   PROCEDURE get-temp_dressing-ingr-used-qnty :
+     3134   define input parameter p-recipe-code    as character    no-undo.
+     3135   define input parameter p-gds-code       as integer      no-undo.
+     3136   define output parameter p-line-qnty     as decimal      no-undo.
+     3137   define output parameter p-used-qnty     as decimal      no-undo.
+     3138   define output parameter p-recipe-qnty   as decimal      no-undo.
+     3139       define buffer buf_temp_dressing-ingr    for temp_dressing-ingr.
+     3140   do
+     3141   for buf_temp_dressing-ingr
+     3142   on error undo, return error
+     3143   :
+     3144       find first buf_temp_dressing-ingr no-lock
+     3145            where buf_temp_dressing-ingr.recipe-code = p-recipe-code
+     3146              and buf_temp_dressing-ingr.gds-code    = p-gds-code
+     3147       no-error.
+     3148       if available buf_temp_dressing-ingr
+     3149       then do:
+     3150           assign
+     3151               p-line-qnty     = buf_temp_dressing-ingr.line-qnty
+     3152               p-used-qnty     = buf_temp_dressing-ingr.used-qnty
+     3153               p-recipe-qnty   = buf_temp_dressing-ingr.recipe-qnty
+     3154           .
+     3155       end.
+     3156       else do:
+     3157           assign
+     3158               p-line-qnty     = 0
+     3159               p-used-qnty     = 0
+     3160               p-recipe-qnty   = 0
+     3161           .
+     3162       end.
+     3163   end.
+     3164   END PROCEDURE.
+     3165   PROCEDURE fbrlib_adjust-recipe :
+     3166   do
+     3167   on error undo, return error
+     3168   :
+     3169   define input parameter parparentproc as widget-handle no-undo .
+     3170   define input parameter p-fbrhist-handle as handle no-undo .
+     3171   define input parameter p-doc-code       as character    no-undo.
+     3172   define input parameter p-recipe-code    as character    no-undo.
+     3173   define input parameter p-price-sale-obj-type as character no-undo .
+     3174   define input parameter p-price-sale-obj-code as integer no-undo .
+     3175       define variable v-recipe-qnty       as decimal      no-undo.
+     3176       define variable v-comp-qnty         as decimal      no-undo.
+     3177       define variable v-recipe-gds-qnty   as decimal      no-undo.
+     3178       define variable v-ingr-qnty         as decimal      no-undo.
+     3179       define variable v-qnty              as decimal      no-undo.
+     3180       define variable v-coeff-waste       as decimal      no-undo.
+     3181       define variable v-brutto-qnty       as decimal      no-undo.
+     3182       define buffer buf_fbr-recipe        for ub.fbr-recipe.
+     3183       define buffer buf_fbr-recipe-gds    for ub.fbr-recipe-gds.
+     3184       define buffer buf_fbr-line          for ub.fbr-line.
+     3185       define buffer buf_el_fbr-recipe-gds for ub.fbr-recipe-gds.
+     3186       find first buf_fbr-recipe no-lock
+     3187            where buf_fbr-recipe.doc-code      = p-doc-code
+     3188              and buf_fbr-recipe.recipe-code   = p-recipe-code
+     3189       .
+     3190       assign
+     3191           v-recipe-qnty = buf_fbr-recipe.qnty
+     3192       .
+     3193       find first buf_fbr-line no-lock
+     3194            where buf_fbr-line.doc-code    = p-doc-code
+     3195              and buf_fbr-line.is-comp     = yes
+     3196              and buf_fbr-line.recipe-code = p-recipe-code
+     3197       .
+     3198       assign
+     3199           v-comp-qnty = buf_fbr-line.fact-qnty
+     3200       .
+     3201       if buf_fbr-recipe.recipe-type = 'альтернатива':U
+     3202       then do:
+     3203       end.
+     3204       else do:
+     3205           for each buf_fbr-recipe-gds no-lock
+     3206              where buf_fbr-recipe-gds.doc-code    = p-doc-code
+     3207                and buf_fbr-recipe-gds.recipe-code = p-recipe-code
+     3208           on error undo, return error
+     3209           :
+     3210               find first buf_fbr-line no-lock
+     3211                    where buf_fbr-line.doc-code    = p-doc-code
+     3212                      and buf_fbr-line.is-comp     = no
+     3213                      and buf_fbr-line.recipe-code = p-recipe-code
+     3214                      and buf_fbr-line.artic       = buf_fbr-recipe-gds.artic
+     3215                      and buf_fbr-line.prod-type   = buf_fbr-recipe-gds.prod-type
+     3216                      and buf_fbr-line.prod-code   = buf_fbr-recipe-gds.prod-code
+     3217               .
+     3218               if buf_fbr-line.fact-qnty / v-comp-qnty <> buf_fbr-recipe-gds.brutto-qnty / v-recipe-qnty
+     3219               then do:
+     3220                   do transaction
+     3221                   on error undo, return error
+     3222                   :
+     3223                       find first buf_el_fbr-recipe-gds exclusive-lock
+     3224                            where recid( buf_el_fbr-recipe-gds ) = recid( buf_fbr-recipe-gds )
+     3225                       .
+     3226                       assign
+     3227                           buf_el_fbr-recipe-gds.calc-method   = 1
+     3228                           buf_el_fbr-recipe-gds.brutto-qnty   = buf_fbr-line.fact-qnty * v-recipe-qnty / v-comp-qnty
+     3229                       .
+     3230                       run fbrlib-calc-brutto in this-procedure (
+     3231                             input buf_fbr-recipe.recipe-type
+     3232                           , input 0
+     3233                           , input buf_el_fbr-recipe-gds.coeff-value
+     3234                           , input buf_el_fbr-recipe-gds.coeff-waste
+     3235                           , input buf_el_fbr-recipe-gds.brutto-qnty
+     3236                           , input 1
+     3237                           , output buf_el_fbr-recipe-gds.qnty
+     3238                           , output buf_el_fbr-recipe-gds.coeff-waste
+     3239                           , output buf_el_fbr-recipe-gds.brutto-qnty
+     3240                           , output buf_el_fbr-recipe-gds.calc-method
+     3241                       ).
+     3242                   end.
+     3243               end.
+     3244           end.
+     3245           run fbrlib_adjust-doc-lines in this-procedure (
+     3246                 input parparentproc
+     3247               , input p-fbrhist-handle
+     3248               , input p-doc-code
+     3249               , input p-recipe-code
+     3250               , input p-price-sale-obj-type
+     3251               , input p-price-sale-obj-code
+     3252           ).
+     3253       end.
+     3254   end.
+     3255   END PROCEDURE.
+     3256   PROCEDURE fbrlib_adjust-doc-lines :
+     3257   define input parameter parparentproc as widget-handle no-undo .
+     3258   define input parameter p-fbrhist-handle as handle no-undo .
+     3259   define input parameter p-doc-code       as character    no-undo.
+     3260   define input parameter p-recipe-code    as character    no-undo.
+     3261   define input parameter p-price-sale-obj-type as character no-undo .
+     3262   define input parameter p-price-sale-obj-code as integer no-undo .
+     3263   define variable v-comp-qnty         as decimal      no-undo.
+     3264   define variable v-trn-type          as character    no-undo.
+     3265   define variable v-ingr-qnty         as decimal      no-undo.
+     3266   define variable v-recipe-qnty       as decimal      no-undo.
+     3267   define variable v-fbr-v-fbr-doc-line-recid    as recid        no-undo.
+     3268   define buffer buf_fbr-recipe        for ub.fbr-recipe.
+     3269   define buffer buf_fbr-recipe-gds    for ub.fbr-recipe-gds.
+     3270   define buffer buf_fbr-line          for ub.fbr-line.
+     3271   define buffer buf_coeff_fbr-line    for ub.fbr-line.
+     3272   define buffer buf_goods             for ub.goods.
+     3273   define buffer buf_fbr-doc           for ub.fbr-doc.
+     3274   do
+     3275   for buf_fbr-recipe
+     3276     , buf_fbr-recipe-gds
+     3277     , buf_fbr-line
+     3278     , buf_coeff_fbr-line
+     3279     , buf_goods
+     3280     , buf_fbr-doc
+     3281   on error undo, return error
+     3282   :
+     3283       find first buf_fbr-line no-lock
+     3284            where buf_fbr-line.doc-code      = p-doc-code
+     3285              and buf_fbr-line.is-comp       = yes
+     3286              and buf_fbr-line.recipe-code   = p-recipe-code
+     3287       .
+     3288       find first buf_fbr-doc no-lock
+     3289            where buf_fbr-doc.doc-code      = p-doc-code
+     3290       .
+     3291       assign
+     3292           v-comp-qnty = buf_fbr-line.fact-qnty
+     3293           v-trn-type  = buf_fbr-line.trn-type
+     3294       .
+     3295       find first buf_fbr-recipe no-lock
+     3296            where buf_fbr-recipe.doc-code    = p-doc-code
+     3297              and buf_fbr-recipe.recipe-code = p-recipe-code
+     3298       .
+     3299       assign
+     3300       v-recipe-qnty = buf_fbr-recipe.qnty
+     3301       .
+     3302       do transaction
+     3303       on error undo, return error
+     3304       :
+     3305           for each buf_fbr-recipe-gds no-lock
+     3306              where buf_fbr-recipe-gds.doc-code      = p-doc-code
+     3307                and buf_fbr-recipe-gds.recipe-code   = p-recipe-code
+     3308           on error undo, return error
+     3309           :
+     3310               find first buf_fbr-line no-lock
+     3311                    where buf_fbr-line.doc-code    = buf_fbr-recipe-gds.doc-code
+     3312                      and buf_fbr-line.recipe-code = buf_fbr-recipe-gds.recipe-code
+     3313                      and buf_fbr-line.prod-type   = buf_fbr-recipe-gds.prod-type
+     3314                      and buf_fbr-line.prod-code   = buf_fbr-recipe-gds.prod-code
+     3315                      and buf_fbr-line.artic       = buf_fbr-recipe-gds.artic
+     3316               no-error.
+     3317               if not available buf_fbr-line
+     3318               then do:
+     3319                   find first buf_goods no-lock
+     3320                        where buf_goods.artic      = buf_fbr-recipe-gds.artic
+     3321                          and buf_goods.prod-type  = buf_fbr-recipe-gds.prod-type
+     3322                          and buf_goods.prod-code  = buf_fbr-recipe-gds.prod-code
+     3323                   .
+     3324                   run str/fbr-crln.p (
+     3325                         input parparentproc
+     3326                       , input recid( buf_fbr-doc )
+     3327                       , input recid( buf_goods )
+     3328                       , input buf_fbr-recipe-gds.recipe-code
+     3329                       , input v-trn-type
+     3330                       , input no
+     3331                       , input no
+     3332                       , input buf_fbr-doc.obj-type
+     3333                       , input buf_fbr-doc.obj-code
+     3334                       , output v-fbr-v-fbr-doc-line-recid
+     3335                   ).
+     3336                   find first buf_fbr-line no-lock
+     3337                        where buf_fbr-line.doc-code    = buf_fbr-recipe-gds.doc-code
+     3338                          and buf_fbr-line.recipe-code = buf_fbr-recipe-gds.recipe-code
+     3339                          and buf_fbr-line.prod-type   = buf_fbr-recipe-gds.prod-type
+     3340                          and buf_fbr-line.prod-code   = buf_fbr-recipe-gds.prod-code
+     3341                          and buf_fbr-line.artic       = buf_fbr-recipe-gds.artic
+     3342                   no-error.
+     3343                   if not available buf_fbr-line
+     3344                   then do:
+     3345                       undo, return error substitute("Не удалось создать строку документа производства &1 &2&3&4"
+     3346                                                      , p-doc-code
+     3347                                                      , buf_fbr-recipe-gds.artic
+     3348                                                      , buf_fbr-recipe-gds.prod-type
+     3349                                                      , buf_fbr-recipe-gds.prod-code).
+     3350                   end.
+     3351               end.
+     3352               find first buf_coeff_fbr-line exclusive-lock
+     3353                    where recid( buf_coeff_fbr-line ) = recid( buf_fbr-line )
+     3354               .
+     3355               if buf_coeff_fbr-line.calc-method <> buf_fbr-recipe-gds.calc-method
+     3356               or buf_coeff_fbr-line.coeff-value <> buf_fbr-recipe-gds.coeff-value
+     3357               or buf_coeff_fbr-line.coeff-waste <> buf_fbr-recipe-gds.coeff-waste
+     3358               then do:
+     3359                   assign
+     3360                       buf_coeff_fbr-line.calc-method = buf_fbr-recipe-gds.calc-method
+     3361                       buf_coeff_fbr-line.coeff-value = buf_fbr-recipe-gds.coeff-value
+     3362                       buf_coeff_fbr-line.coeff-waste = buf_fbr-recipe-gds.coeff-waste
+     3363                   .
+     3364               end.
+     3365           end.
+     3366       end.
+     3367       define variable v-need-goods    as logical       no-undo.
+     3368       define variable v-need-goods-list       as character     no-undo.
+     3369       define variable v-need-goods-qnty-list  as character     no-undo.
+     3370       find first buf_fbr-line no-lock
+     3371            where buf_fbr-line.doc-code    = buf_fbr-doc.doc-code
+     3372              and buf_fbr-line.is-comp     = yes
+     3373              and buf_fbr-line.recipe-code = p-recipe-code
+     3374       .
+     3375       run str/fbr-qnty.p (
+     3376             input parparentproc
+     3377           , input p-fbrhist-handle
+     3378           , input recid( buf_fbr-doc )
+     3379           , input recid( buf_fbr-line )
+     3380           , input no
+     3381           , input "ingr"
+     3382           , input no
+     3383           , input p-price-sale-obj-type
+     3384           , input p-price-sale-obj-code
+     3385           , input no
+     3386           , input no
+     3387           , input no
+     3388           , output v-need-goods
+     3389           , output v-need-goods-list
+     3390           , output v-need-goods-qnty-list
+     3391       ).
+     3392   end.
+     3393   END PROCEDURE.
+     3394   procedure fbrlib_check-before-close :
+     3395   define input parameter p-doc-code as character no-undo .
+     3396   define variable same-sale as decimal no-undo .
+     3397   define variable is-waste as logical no-undo .
+     3398   define variable fix-price as logical no-undo .
+     3399   define buffer buf_fbr-doc for ub.fbr-doc.
+     3400   define buffer buf_fbr-line for ub.fbr-line.
+     3401   define buffer buf_goods for ub.goods.
+     3402   define buffer buf_fbr-gds-obj for ub.fbr-gds-obj.
+     3403   do
+     3404   on error undo, return error
+     3405   :
+     3406     for each buf_fbr-line no-lock
+     3407         where buf_fbr-line.doc-code = p-doc-code
+     3408       , each buf_goods no-lock
+     3409         where buf_goods.artic     = buf_fbr-line.artic
+     3410           and buf_goods.prod-type = buf_fbr-line.prod-type
+     3411           and buf_goods.prod-code = buf_fbr-line.prod-code
+     3412     break by buf_fbr-line.prod-type
+     3413           by buf_fbr-line.prod-code
+     3414           by buf_fbr-line.artic
+     3415     :
+     3416       if first-of (buf_fbr-line.artic)
+     3417       then do:
+     3418         assign
+     3419         same-sale = buf_fbr-line.price-sale
+     3420         is-waste = (buf_fbr-line.rsrv-qnty = ?)
+     3421         fix-price = buf_fbr-line.is-calc
+     3422         .
+     3423       end.
+     3424       if same-sale <> buf_fbr-line.price-sale
+     3425       then do:
+     3426           undo, return error substitute("Док-нт пр-ва &1 Артикул: &2 &3&4&4Во всех строках документа с этим товаром должна быть указана одна и та же цена продажи."
+     3427                                         ,p-doc-code
+     3428                                         ,buf_goods.artic
+     3429                                         ,buf_goods.gds-name
+     3430                                         ,chr(10)).
+     3431       end.
+     3432       if fix-price <> buf_fbr-line.is-calc then do:
+     3433           undo, return error substitute("Док-нт пр-ва &1 Артикул: &2 &3&4&4Во всех строках документа с этим товаром цена должна быть фиксирована или нет."
+     3434                                         ,p-doc-code
+     3435                                         ,buf_goods.artic
+     3436                                         ,buf_goods.gds-name
+     3437                                         ,chr(10)).
+     3438       end.
+     3439       if is-waste <> (buf_fbr-line.rsrv-qnty = ?)
+     3440       then do:
+     3441         undo, return error substitute("Док-нт пр-ва &1 Артикул: &2 &3&4&4Во всех строках документа этот товар должен быть отходом либо не отходом."
+     3442                                         ,p-doc-code
+     3443                                         ,buf_goods.artic
+     3444                                         ,buf_goods.gds-name
+     3445                                         ,chr(10)).
+     3446       end.
+     3447       if buf_fbr-line.rsrv-qnty <> ?
+     3448       and buf_goods.gds-type <> 'у':U
+     3449       and ( buf_fbr-line.price-sale <= 0 or buf_fbr-line.price-sale = ?  )
+     3450       and buf_fbr-line.fact-qnty <> 0
+     3451       then do:
+     3452         if buf_fbr-line.trn-type     = 'при':U  then for first buf_fbr-doc where buf_fbr-doc.doc-code =  p-doc-code no-lock:
+     3453           if  can-find(first buf_fbr-gds-obj no-lock where
+     3454                   buf_fbr-gds-obj.gds-code = buf_goods.gds-code
+     3455               AND buf_fbr-gds-obj.obj-type = buf_fbr-doc.obj-type
+     3456               AND buf_fbr-gds-obj.obj-code = buf_fbr-doc.obj-code
+     3457               and buf_fbr-gds-obj.is-null-price  )  then .
+     3458                     else undo, return error substitute("Док-нт пр-ва &1 Артикул: &2 &3&4Рецепт &5&4Неправильная (нулевая) цена продажи."
+     3459                                         ,p-doc-code
+     3460                                         ,buf_goods.artic
+     3461                                         ,buf_goods.gds-name
+     3462                                         ,chr(10)
+     3463                                         ,buf_fbr-line.recipe-code
+     3464                                         ).
+     3465         end.
+     3466         else undo, return error substitute("Док-нт пр-ва &1 Артикул: &2 &3&4Рецепт &5&4Неправильная (нулевая) цена продажи."
+     3467                                         ,p-doc-code
+     3468                                         ,buf_goods.artic
+     3469                                         ,buf_goods.gds-name
+     3470                                         ,chr(10)
+     3471                                         ,buf_fbr-line.recipe-code
+     3472                                         ).
+     3473       end.
+     3474     end.
+     3475   end.
+     3476   end procedure.

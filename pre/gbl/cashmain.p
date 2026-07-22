@@ -1,0 +1,1585 @@
+block-level on error undo, throw.
+define input parameter p-user-id    as character no-undo .
+define input parameter p-user-password    as character no-undo .
+define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+define variable vss-author      as character no-undo init "$Author: expertek $":U .
+define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: cashmain.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: gbl/cashmain.p $":U .
+define variable vss-description as character no-undo init "Инициализация АРМа Касса".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+define new  shared variable g#auto as logical no-undo.
+define new  shared variable g#news as logical no-undo.
+define new  shared variable g#oxml as logical no-undo.
+define new  shared variable g#esys as logical no-undo.
+define new  shared variable g#news-source-db as integer no-undo.
+define new  shared variable g#esys-source-esys as integer no-undo.
+define new  shared variable g#db-num as integer   no-undo .
+define new  shared variable g#userid as character no-undo .
+define new  shared variable g#passwd as character no-undo .
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure cur-time :
+   define output parameter p-today as date      no-undo .
+   define output parameter p-time  as integer   no-undo .
+  do
+  on error undo, return error
+  :
+    define variable v-date1 as date      no-undo .
+    define variable v-date2 as date      no-undo .
+    define variable v-time  as integer   no-undo .
+    assign
+      v-date1 = today
+      v-time  = time
+      v-date2 = today
+    .
+    if v-date1 <> v-date2
+    then do:
+      assign
+        v-date1 = today
+        v-time  = v-time
+      .
+    end.
+    assign
+      p-today = v-date1
+      p-time  = v-time
+    .
+  end.
+end.
+function cur-time-date returns character
+:
+  return string(today, '99/99/9999':U) .
+end.
+function cur-time-mjd returns decimal
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return integer(v-date) - 2400002 + (v-time / 86400) .
+end.
+function cur-time-get-ending-index returns integer
+(input p-number as integer
+)
+:
+  if p-number < 0
+  or p-number = ?
+  then do:
+    return 1 .
+  end.
+  define variable v-rest as integer   no-undo .
+  assign
+    p-number = p-number modulo 100
+  .
+  if p-number < 20
+  then do:
+    assign
+      v-rest = p-number
+    .
+  end.
+  else do:
+    assign
+      v-rest = p-number modulo 10
+    .
+  end.
+  case v-rest :
+    when 1
+    then do:
+      return 2 .
+    end.
+    when 2 or
+    when 3 or
+    when 4
+    then do:
+      return 3 .
+    end.
+    otherwise do:
+      return 1 .
+    end.
+  end case .
+end.
+procedure cur-time-mjd-to-date :
+   define input  parameter i-mjd-diff as decimal no-undo.
+   define output parameter o-Date     as date    no-undo.
+   define output parameter o-Time     as integer no-undo.
+   define variable v-day-number as integer   no-undo .
+   if    i-mjd-diff < 0
+      or i-mjd-diff = ?
+   then do:
+      return "?" .
+   end.
+   assign
+      v-day-number = truncate(i-mjd-diff,0).
+      o-Date = date(v-day-number + 2400002).
+      o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+  .
+end.
+function cur-time-mjd-to-string returns character
+(input p-mjd-diff as decimal
+)
+:
+  define variable v-day-number as integer   no-undo .
+  define variable v-seconds    as integer   no-undo .
+  define variable v-hour       as integer   no-undo .
+  define variable v-min        as integer   no-undo .
+  define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+  define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+  define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+  define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+  if p-mjd-diff < 0
+  or p-mjd-diff = ?
+  then do:
+    return "?" .
+  end.
+  assign
+    v-day-number = integer(truncate(p-mjd-diff,0))
+    v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+  .
+  if v-seconds > 86400
+  then do:
+    assign
+      v-seconds = 86400 - 1
+    .
+  end.
+  if v-seconds < 0
+  then do:
+    assign
+      v-seconds = 0
+    .
+  end.
+  assign
+    v-hour = truncate(v-seconds / 3600, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 3600
+  .
+  assign
+    v-min = truncate(v-seconds / 60, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 60
+  .
+  return
+      (if v-day-number <> 0
+        then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0
+        then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+        then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+        else ""
+      )
+    + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+    .
+end.
+function cur-time-string returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-string-sec returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+end.
+function cur-time-custom  returns character
+(input p-prefix as character
+,input p-date-format as character
+,input p-delimiter as character
+,input p-time-format as character
+,input p-suffix as character
+)
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return
+    p-prefix
+    + string(v-date, p-date-format)
+    + p-delimiter
+    + string(v-time, p-time-format)
+    + p-suffix
+    .
+end.
+function cur-time-print  returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-datetime returns datetime
+:
+  define variable v-char as character no-undo .
+  define variable v-datetime as datetime no-undo .
+  v-char = cur-time-string().
+  v-datetime = datetime(v-char).
+  return  v-datetime.
+end.
+function cur-time-string-msec returns character
+:
+  define variable v-date as datetime  no-undo .
+  v-date = now.
+  return string(v-date) .
+end.
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure cmptime :
+do
+on error undo, return error
+:
+define output parameter p-difference as decimal      no-undo.
+define variable v-srv-time      as decimal           no-undo.
+define variable v-cli-time      as decimal           no-undo.
+assign
+    session :time-source = "ub":U
+    v-srv-time = integer(today) + ( time / 86400 )
+.
+assign
+    session :time-source = "LOCAL":U
+    v-cli-time = integer(today) + ( time / 86400 )
+.
+assign
+    p-difference = ( v-srv-time - v-cli-time ) * 1440
+.
+end.
+end procedure.
+procedure cmptime-time-diff :
+do
+on error undo, return error
+:
+define input parameter p-date1          as date         no-undo.
+define input parameter p-time1          as integer      no-undo.
+define input parameter p-date2          as date         no-undo.
+define input parameter p-time2          as integer      no-undo.
+define output parameter p-difference    as decimal      no-undo.
+    assign
+        p-difference = ( integer( p-date2 ) - integer( p-date1 ) + ( ( p-time2 - p-time1 ) / 86400 ) ) * 1440
+    .
+end.
+end procedure.
+procedure cmptime-string-to-hms :
+do
+on error undo, return error
+:
+define input parameter p-time-string as character    no-undo.
+define input parameter p-format      as character    no-undo.
+define output parameter p-hour as integer      no-undo.
+define output parameter p-min  as integer      no-undo.
+define output parameter p-sec  as integer      no-undo.
+if p-format <> "hh:mm" and p-format <> "hh:mm:ss"
+then do:
+    message
+      "cmptime.i: Ошибка преобразования строки даты"
+      skip return-value
+      skip trim(error-status :get-message(1))
+           trim(error-status :get-message(2))
+           trim(error-status :get-message(3))
+           trim(error-status :get-message(4))
+           trim(error-status :get-message(5))
+    view-as alert-box error.
+    undo, return error .
+end.
+assign
+    p-hour      = integer ( entry( 1, p-time-string, ":" ) )
+    p-min       = integer ( entry( 2, p-time-string, ":" ) )
+    p-sec       = ( if p-format = "hh:mm:ss"
+                    then integer ( entry( 3, p-time-string, ":" ) )
+                    else 0
+                  )
+.
+end.
+end procedure.
+procedure cmptime-hms-to-integer :
+do
+on error undo, return error
+:
+define input parameter p-hour   as integer      no-undo.
+define input parameter p-min    as integer      no-undo.
+define input parameter p-sec    as integer      no-undo.
+define output parameter p-time  as integer      no-undo.
+    assign
+        p-time = p-hour * 3600 + ( p-min * 60 ) + p-sec
+    .
+end.
+end procedure.
+define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure sys-time_get-sys :
+  define output parameter p-year         as integer   no-undo .
+  define output parameter p-month        as integer   no-undo .
+  define output parameter p-day          as integer   no-undo .
+  define output parameter p-hour         as integer   no-undo .
+  define output parameter p-minute       as integer   no-undo .
+  define output parameter p-second       as integer   no-undo .
+  define output parameter p-milliseconds as integer   no-undo .
+  define variable v-system-time-structure as memptr    no-undo.
+  do
+  on error undo, return error return-value
+  :
+    assign
+      set-size(v-system-time-structure) = 16
+    .
+    run GetSystemTime
+      (input  get-pointer-value(v-system-time-structure)
+      ) .
+    assign
+      p-year         = get-short(v-system-time-structure,  1)
+      p-month        = get-short(v-system-time-structure,  3)
+      p-day          = get-short(v-system-time-structure,  7)
+      p-hour         = get-short(v-system-time-structure,  9)
+      p-minute       = get-short(v-system-time-structure, 11)
+      p-second       = get-short(v-system-time-structure, 13)
+      p-milliseconds = get-short(v-system-time-structure, 15)
+    .
+    assign
+      set-size(v-system-time-structure) = 0
+    .
+  end.
+end procedure.
+procedure sys-time_get-comp-user-name :
+  define output parameter p-computer-name as character no-undo .
+  define output parameter p-user-name     as character no-undo .
+  define output parameter p-process-pid   as integer   no-undo .
+  define variable v-return-value  as integer   no-undo .
+  define variable v-buffer-length as integer   no-undo .
+  define variable v-buffer-memptr as memptr    no-undo .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-buffer-length = 1024
+      set-size(v-buffer-memptr) = v-buffer-length + 4
+    .
+    assign
+      put-long(v-buffer-memptr, 1) = v-buffer-length
+    .
+    run GetComputerNameA
+      (input  get-pointer-value(v-buffer-memptr) + 4
+      ,input  get-pointer-value(v-buffer-memptr)
+      ,output v-return-value
+      ) .
+    if v-return-value <> 0
+    then do:
+      assign
+        p-computer-name = get-string(v-buffer-memptr, 5)
+      .
+    end.
+    assign
+      put-long(v-buffer-memptr, 1) = v-buffer-length
+    .
+    run GetUserNameA
+      (input  get-pointer-value(v-buffer-memptr) + 4
+      ,input  get-pointer-value(v-buffer-memptr)
+      ,output v-return-value
+      ) .
+    if v-return-value <> 0
+    then do:
+      assign
+        p-user-name = get-string(v-buffer-memptr, 5)
+      .
+    end.
+    run GetCurrentProcessId
+      (output p-process-pid
+      ) .
+    assign
+      set-size(v-buffer-memptr) = 0
+    .
+  end.
+end procedure.
+procedure sys-time_get-http :
+  define output parameter p-http-time as character no-undo .
+  define variable v-year         as integer   no-undo .
+  define variable v-month        as integer   no-undo .
+  define variable v-day-of-week  as integer   no-undo .
+  define variable v-day          as integer   no-undo .
+  define variable v-hour         as integer   no-undo .
+  define variable v-minute       as integer   no-undo .
+  define variable v-second       as integer   no-undo .
+  define variable v-milliseconds as integer   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run sys-time_get-sys in this-procedure
+      (output v-year
+      ,output v-month
+      ,output v-day
+      ,output v-hour
+      ,output v-minute
+      ,output v-second
+      ,output v-milliseconds
+      ) .
+    assign
+      v-day-of-week = weekday(date(v-month, v-day, v-year))
+      p-http-time = entry(v-day-of-week, 'Sun,Mon,Tue,Wed,Thu,Fri,Sat')
+                  + ', ':u
+                  + string(v-day, '99':u)
+                  + ' ':u
+                  + entry(v-month, 'Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec':u)
+                  + ' ':u
+                  + string(v-year, '9999':u)
+                  + ' ':u
+                  + string(v-hour, '99':u)
+                  + ':':u
+                  + string(v-minute, '99':u)
+                  + ':':u
+                  + string(v-second, '99':u)
+                  + ' ':u
+                  + 'GMT':u
+    .
+  end.
+end procedure.
+procedure sys-time_set-sys :
+  define input  parameter p-year         as integer   no-undo .
+  define input  parameter p-month        as integer   no-undo .
+  define input  parameter p-day          as integer   no-undo .
+  define input  parameter p-hour         as integer   no-undo .
+  define input  parameter p-minute       as integer   no-undo .
+  define input  parameter p-second       as integer   no-undo .
+  define input  parameter p-milliseconds as integer   no-undo .
+  define variable v-system-time-structure as memptr    no-undo.
+  define variable v-return-value as integer   no-undo .
+  define variable v-day-of-week  as integer   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-day-of-week = weekday(date(p-month, p-day, p-year))
+    .
+    assign
+      set-size(v-system-time-structure) = 16
+    .
+    assign
+      put-short(v-system-time-structure,  1) = p-year
+      put-short(v-system-time-structure,  3) = p-month
+      put-short(v-system-time-structure,  5) = v-day-of-week
+      put-short(v-system-time-structure,  7) = p-day
+      put-short(v-system-time-structure,  9) = p-hour
+      put-short(v-system-time-structure, 11) = p-minute
+      put-short(v-system-time-structure, 13) = p-second
+      put-short(v-system-time-structure, 15) = p-milliseconds
+    .
+    run SetSystemTime
+      (input  get-pointer-value(v-system-time-structure)
+      ,output v-return-value
+      ) .
+    assign
+      set-size(v-system-time-structure) = 0
+    .
+    if v-return-value = 0
+    then do:
+      undo, return error "sys-time_set-sys: Ошибка при установке даты" .
+    end.
+  end.
+end procedure.
+procedure sys-time_sys-to-mjd :
+  define input  parameter p-year         as integer   no-undo .
+  define input  parameter p-month        as integer   no-undo .
+  define input  parameter p-day          as integer   no-undo .
+  define input  parameter p-hour         as integer   no-undo .
+  define input  parameter p-minute       as integer   no-undo .
+  define input  parameter p-second       as integer   no-undo .
+  define input  parameter p-milliseconds as integer   no-undo .
+  define output parameter p-mjd          as decimal   no-undo .
+  define variable v-year-correction as decimal   no-undo .
+  define variable v-shift-year as decimal   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-year-correction = truncate((decimal(p-month) - 14.0) / 12, 0)
+      v-shift-year      = decimal(p-year) + v-year-correction
+      p-mjd = truncate( (1461.0 * (v-shift-year + 4800.0 ) ) / 4, 0)
+            + truncate( (367.0 * (decimal(p-month) - 2.0 - v-year-correction * 12) ) / 12, 0)
+            - truncate( (3 * truncate((v-shift-year + 4900 ) / 100,0) ) / 4, 0)
+            + decimal(p-day) - 2432076.0
+            + p-hour / 24.0
+            + p-minute / 1440.0
+            + p-second / 86400.0
+            + p-milliseconds / 86400000.0
+    .
+  end.
+end procedure.
+procedure sys-time_sys-to-loc :
+  define input  parameter p-sys-year         as integer   no-undo .
+  define input  parameter p-sys-month        as integer   no-undo .
+  define input  parameter p-sys-day          as integer   no-undo .
+  define input  parameter p-sys-hour         as integer   no-undo .
+  define input  parameter p-sys-minute       as integer   no-undo .
+  define input  parameter p-sys-second       as integer   no-undo .
+  define input  parameter p-sys-milliseconds as integer   no-undo .
+  define output parameter p-loc-year         as integer   no-undo .
+  define output parameter p-loc-month        as integer   no-undo .
+  define output parameter p-loc-day          as integer   no-undo .
+  define output parameter p-loc-hour         as integer   no-undo .
+  define output parameter p-loc-minute       as integer   no-undo .
+  define output parameter p-loc-second       as integer   no-undo .
+  define output parameter p-loc-milliseconds as integer   no-undo .
+  define variable v-system-time-structure as memptr    no-undo.
+  define variable v-return-value          as integer   no-undo .
+  define variable v-sys-day-of-week       as integer   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-sys-day-of-week = weekday(date(p-sys-month, p-sys-day, p-sys-year))
+    .
+    assign
+      set-size(v-system-time-structure) = 32
+    .
+    assign
+      put-short(v-system-time-structure,  1) = p-sys-year
+      put-short(v-system-time-structure,  3) = p-sys-month
+      put-short(v-system-time-structure,  5) = v-sys-day-of-week
+      put-short(v-system-time-structure,  7) = p-sys-day
+      put-short(v-system-time-structure,  9) = p-sys-hour
+      put-short(v-system-time-structure, 11) = p-sys-minute
+      put-short(v-system-time-structure, 13) = p-sys-second
+      put-short(v-system-time-structure, 15) = p-sys-milliseconds
+    .
+    run SystemTimeToTzSpecificLocalTime
+      (input  0
+      ,input  get-pointer-value(v-system-time-structure)
+      ,input  get-pointer-value(v-system-time-structure) + 16
+      ,output v-return-value
+      ) .
+    assign
+      p-loc-year         = get-short(v-system-time-structure,  1 + 16)
+      p-loc-month        = get-short(v-system-time-structure,  3 + 16)
+      p-loc-day          = get-short(v-system-time-structure,  7 + 16)
+      p-loc-hour         = get-short(v-system-time-structure,  9 + 16)
+      p-loc-minute       = get-short(v-system-time-structure, 11 + 16)
+      p-loc-second       = get-short(v-system-time-structure, 13 + 16)
+      p-loc-milliseconds = get-short(v-system-time-structure, 15 + 16)
+    .
+    assign
+      set-size(v-system-time-structure) = 0
+    .
+    if v-return-value = 0
+    then do:
+      undo, return error "sys-time_set-sys: Ошибка при установке даты" .
+    end.
+  end.
+end procedure.
+procedure sys-time_mjd-to-sys :
+  define input  parameter p-mjd          as decimal   no-undo .
+  define output parameter p-year         as integer   no-undo .
+  define output parameter p-month        as integer   no-undo .
+  define output parameter p-day          as integer   no-undo .
+  define output parameter p-hour         as integer   no-undo .
+  define output parameter p-minute       as integer   no-undo .
+  define output parameter p-second       as integer   no-undo .
+  define output parameter p-milliseconds as integer   no-undo .
+  define variable v-year-correction as decimal   no-undo .
+  define variable v-shift-year      as decimal   no-undo .
+  define variable v-conv-date     as date      no-undo .
+  define variable v-int-part      as integer   no-undo .
+  define variable v-fraction-part as decimal   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-int-part      = integer(truncate(p-mjd, 0))
+      v-fraction-part = p-mjd - v-int-part
+      v-conv-date     = date(11, 17, 1858) + v-int-part
+      p-year          = year(v-conv-date)
+      p-month         = month(v-conv-date)
+      p-day           = day(v-conv-date)
+      v-fraction-part = v-fraction-part * 24.0
+      p-hour          = integer(truncate(v-fraction-part, 0))
+      v-fraction-part = (v-fraction-part - p-hour) * 60.0
+      p-minute        = integer(truncate(v-fraction-part, 0))
+      v-fraction-part = (v-fraction-part - p-minute) * 60.0
+      p-second        = integer(truncate(v-fraction-part, 0))
+      v-fraction-part = (v-fraction-part - p-second) * 1000.0
+      p-milliseconds  = integer(v-fraction-part)
+    .
+  end.
+end procedure.
+procedure sys-time_mjd-to-loc :
+  define input  parameter p-mjd              as decimal   no-undo .
+  define output parameter p-loc-year         as integer   no-undo .
+  define output parameter p-loc-month        as integer   no-undo .
+  define output parameter p-loc-day          as integer   no-undo .
+  define output parameter p-loc-hour         as integer   no-undo .
+  define output parameter p-loc-minute       as integer   no-undo .
+  define output parameter p-loc-second       as integer   no-undo .
+  define output parameter p-loc-milliseconds as integer   no-undo .
+  define variable v-sys-year         as integer   no-undo .
+  define variable v-sys-month        as integer   no-undo .
+  define variable v-sys-day          as integer   no-undo .
+  define variable v-sys-hour         as integer   no-undo .
+  define variable v-sys-minute       as integer   no-undo .
+  define variable v-sys-second       as integer   no-undo .
+  define variable v-sys-milliseconds as integer   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run sys-time_mjd-to-sys
+      (input  p-mjd
+      ,output v-sys-year
+      ,output v-sys-month
+      ,output v-sys-day
+      ,output v-sys-hour
+      ,output v-sys-minute
+      ,output v-sys-second
+      ,output v-sys-milliseconds
+      ) .
+    run sys-time_sys-to-loc
+      (input  v-sys-year
+      ,input  v-sys-month
+      ,input  v-sys-day
+      ,input  v-sys-hour
+      ,input  v-sys-minute
+      ,input  v-sys-second
+      ,input  v-sys-milliseconds
+      ,output p-loc-year
+      ,output p-loc-month
+      ,output p-loc-day
+      ,output p-loc-hour
+      ,output p-loc-minute
+      ,output p-loc-second
+      ,output p-loc-milliseconds
+      ) .
+  end.
+end procedure.
+function sys-time_get-mjd-func returns decimal
+:
+  define variable v-year         as integer   no-undo .
+  define variable v-month        as integer   no-undo .
+  define variable v-day          as integer   no-undo .
+  define variable v-hour         as integer   no-undo .
+  define variable v-minute       as integer   no-undo .
+  define variable v-second       as integer   no-undo .
+  define variable v-milliseconds as integer   no-undo .
+  define variable v-mjd          as decimal   no-undo .
+  run sys-time_get-sys in this-procedure
+    (output v-year
+    ,output v-month
+    ,output v-day
+    ,output v-hour
+    ,output v-minute
+    ,output v-second
+    ,output v-milliseconds
+    ) .
+  run sys-time_sys-to-mjd in this-procedure
+    (input  v-year
+    ,input  v-month
+    ,input  v-day
+    ,input  v-hour
+    ,input  v-minute
+    ,input  v-second
+    ,input  v-milliseconds
+    ,output v-mjd
+    ) .
+  return v-mjd .
+end function .
+function sys-time_get-sys-str-func returns character
+:
+  define variable v-utc-time as character no-undo .
+  define variable v-year         as integer   no-undo .
+  define variable v-month        as integer   no-undo .
+  define variable v-day          as integer   no-undo .
+  define variable v-hour         as integer   no-undo .
+  define variable v-minute       as integer   no-undo .
+  define variable v-second       as integer   no-undo .
+  define variable v-milliseconds as integer   no-undo .
+  run sys-time_get-sys in this-procedure
+    (output v-year
+    ,output v-month
+    ,output v-day
+    ,output v-hour
+    ,output v-minute
+    ,output v-second
+    ,output v-milliseconds
+    ) .
+  assign
+    v-utc-time  = 'UTC ':u
+                + string(v-year,         '9999':u)
+                + '/':u
+                + string(v-month,        '99':u)
+                + '/':u
+                + string(v-day,          '99':u)
+                + ' ':u
+                + string(v-hour,         '99':u)
+                + ':':u
+                + string(v-minute,       '99':u)
+                + ':':u
+                + string(v-second,       '99':u)
+                + ' ':u
+                + string(v-milliseconds, '999':u)
+  .
+  return v-utc-time.
+end function .
+function sys-time_mjd-to-loc-str-func returns character
+  (v-sys-mjd as decimal)
+:
+  define variable v-loc-str          as character no-undo .
+  define variable v-loc-year         as integer   no-undo .
+  define variable v-loc-month        as integer   no-undo .
+  define variable v-loc-day          as integer   no-undo .
+  define variable v-loc-hour         as integer   no-undo .
+  define variable v-loc-minute       as integer   no-undo .
+  define variable v-loc-second       as integer   no-undo .
+  define variable v-loc-milliseconds as integer   no-undo .
+  run sys-time_mjd-to-loc in this-procedure
+    (input  v-sys-mjd
+    ,output v-loc-year
+    ,output v-loc-month
+    ,output v-loc-day
+    ,output v-loc-hour
+    ,output v-loc-minute
+    ,output v-loc-second
+    ,output v-loc-milliseconds
+    ) .
+  assign
+    v-loc-str = substitute('&1/&2/&3 &4:&5'
+                          ,string(v-loc-day,    '99':U)
+                          ,string(v-loc-month,  '99':U)
+                          ,string(v-loc-year,   '9999':U)
+                          ,string(v-loc-hour,   '99':U)
+                          ,string(v-loc-minute, '99':U)
+                          )
+  .
+  return v-loc-str .
+end function .
+PROCEDURE GetSystemTime EXTERNAL "kernel32.dll"
+:
+  DEFINE INPUT  PARAMETER lpSystemTime AS LONG .
+END PROCEDURE.
+PROCEDURE SetSystemTime EXTERNAL "kernel32.dll"
+:
+  DEFINE INPUT  PARAMETER lpSystemTime AS LONG .
+  DEFINE RETURN PARAMETER ReturnValue  AS LONG .
+END PROCEDURE.
+PROCEDURE GetTimeZoneInformation EXTERNAL "kernel32.dll"
+:
+  DEFINE INPUT  PARAMETER lpTimeZoneInformation AS LONG .
+  DEFINE RETURN PARAMETER ReturnValue           AS LONG .
+END PROCEDURE.
+PROCEDURE SystemTimeToTzSpecificLocalTime EXTERNAL "kernel32.dll"
+:
+  DEFINE INPUT  PARAMETER lpTimeZone      AS LONG .
+  DEFINE INPUT  PARAMETER lpUniversalTime AS LONG .
+  DEFINE INPUT  PARAMETER lpLocalTime     AS LONG .
+  DEFINE RETURN PARAMETER ReturnValue     AS LONG .
+END PROCEDURE.
+PROCEDURE GetUserNameA EXTERNAL "advapi32.dll"
+:
+  DEFINE INPUT  PARAMETER lpBuffer    AS LONG .
+  DEFINE INPUT  PARAMETER lpnSize     AS LONG .
+  DEFINE RETURN PARAMETER ReturnValue AS LONG .
+END PROCEDURE.
+PROCEDURE GetComputerNameA EXTERNAL "kernel32.dll"
+:
+  DEFINE INPUT  PARAMETER lpBuffer    AS LONG .
+  DEFINE INPUT  PARAMETER lpnSize     AS LONG .
+  DEFINE RETURN PARAMETER ReturnValue AS LONG .
+END PROCEDURE.
+PROCEDURE GetCurrentProcessId EXTERNAL "kernel32.dll"
+:
+  DEFINE RETURN PARAMETER RetVal          AS LONG.
+END PROCEDURE.
+define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+FUNCTION gbclcode-is-this-db-code returns logical ( input p-db-num as integer
+                                                    ,input p-range-type as character
+                                                    ,input p-code as integer):
+define variable v-seq-val as integer no-undo .
+define buffer buf_code-range for ub.code-range.
+find first buf_code-range no-lock where
+          buf_code-range.db-num = p-db-num
+    and  buf_code-range.range-type = p-range-type
+    and  buf_code-range.stts = 'u'
+    and buf_code-range.first-code <= p-code
+    and buf_code-range.last-code >= p-code no-error .
+if available buf_code-range then return yes.
+CASE p-range-type:
+  when 'pngb':U then do:
+    v-seq-val = current-value(s-pngb-code, ub).
+  end.
+  when 'fmgb':U then do:
+    v-seq-val = current-value(s-fmgb-code, ub).
+  end.
+END CASE.
+if p-code <= v-seq-val then do:
+  find first buf_code-range no-lock where
+            buf_code-range.db-num = p-db-num
+      and  buf_code-range.range-type = p-range-type
+      and  buf_code-range.stts = 'a'
+      and buf_code-range.first-code <= p-code
+      no-error .
+ if available buf_code-range then return yes.
+end.
+find first buf_code-range no-lock where
+          buf_code-range.db-num = p-db-num
+    and  buf_code-range.range-type = p-range-type
+    and  buf_code-range.stts = 'f'
+    and buf_code-range.first-code <= p-code
+    and buf_code-range.last-code >= p-code
+    no-error .
+if available buf_code-range then return yes.
+return no.
+END FUNCTION.
+FUNCTION gbclcode-is-this-db-code-short returns logical ( input p-db-num as integer
+                                                    ,input p-range-type as character
+                                                    ,input p-code as integer):
+define variable v-seq-val as integer no-undo .
+define buffer buf_code-range for ub.code-range.
+CASE p-range-type:
+  when 'pngb':U then do:
+    v-seq-val = current-value(s-pngb-code, ub).
+  end.
+  when 'fmgb':U then do:
+    v-seq-val = current-value(s-fmgb-code, ub).
+  end.
+END CASE.
+if p-code <= v-seq-val then do:
+  find first buf_code-range no-lock where
+            buf_code-range.db-num = p-db-num
+      and  buf_code-range.range-type = p-range-type
+      and buf_code-range.first-code <= p-code
+      and buf_code-range.last-code >= p-code no-error .
+  if available buf_code-range then return yes.
+end.
+return no.
+END FUNCTION.
+FUNCTION gbclcode-is-this-db-role returns integer ( input p-role as character
+                                                    ,input p-db-num as integer
+                                                    ,input p-staff-code as integer
+                                                    ,input p-date as date
+                                                     ):
+define buffer buf_staff for ub.staff.
+if p-date = ? then do:
+  p-date = today .
+end.
+find first buf_staff no-lock where
+          buf_staff.role = p-role
+      and buf_staff.role-level = 'db':U
+      and buf_staff.db-num = p-db-num
+      and buf_staff.staff-code = p-staff-code
+      and buf_staff.date-end >= p-date use-index pi  no-error .
+if available buf_staff then do:
+  return buf_staff.psn-code.
+end.
+return 0.
+end FUNCTION.
+FUNCTION gbclcode-get-this-db-first-role returns integer ( input p-role as character
+                                                          ,input p-db-num as integer
+                                                          ,input p-date as date
+                                                              ):
+define buffer buf_staff for ub.staff.
+define buffer buf2_staff for ub.staff.
+if p-date = ? then do:
+  p-date = today .
+end.
+for each  buf_staff no-lock where
+          buf_staff.role = p-role
+      and buf_staff.db-num = p-db-num,
+first buf2_staff no-lock where
+      buf2_staff.role = p-role
+  and buf2_staff.role-level = 'db':U
+  and buf2_staff.staff-code = buf_staff.staff-code
+  and buf2_staff.date-start <= p-date
+  and buf2_staff.date-end >= p-date
+by buf_staff.staff-code
+by date-start descending:
+  return buf_staff.staff-code.
+end.
+end FUNCTION.
+FUNCTION gbclcode-get-db-role returns integer ( input p-role as character
+                                               ,input p-db-num as integer
+                                               ,input p-psn-code as integer
+                                               ,input p-date as date
+                                               ,output p-c-password as character
+                                                     ):
+define buffer buf_staff for ub.staff.
+if p-date = ? then do:
+  p-date = today .
+end.
+find first buf_staff no-lock where
+          buf_staff.role = p-role
+      and buf_staff.role-level = 'db':U
+      and buf_staff.db-num = p-db-num
+     and buf_staff.date-end >= p-date
+     and buf_staff.psn-code = p-psn-code use-index irole-psn no-error .
+if available buf_staff
+then do:
+  assign
+  p-c-password = buf_staff.password.
+  return buf_staff.staff-code.
+end.
+p-c-password = ''.
+return 0.
+end FUNCTION.
+FUNCTION gbclcode-is-psn-role returns integer (
+                                              input p-role as character
+                                              ,input p-psn-code as integer
+                                              ,input p-date as date
+                                                  ):
+define buffer buf_staff for ub.staff.
+if p-date = ? then do:
+  p-date = today .
+end.
+for each buf_staff no-lock where
+          buf_staff.psn-code = p-psn-code
+     and  buf_staff.role = p-role
+by buf_staff.role-level
+by buf_staff.date-start
+     :
+  if  buf_staff.date-start <= p-date and
+  buf_staff.date-end >= p-date  then do:
+    return buf_staff.staff-code.
+  end.
+end.
+return 0.
+end FUNCTION.
+FUNCTION gbclcode-get-role-name returns character ( input p-role as character):
+define variable v-role-name as character no-undo .
+assign
+v-role-name = entry (lookup (p-role, 'C,S':U) + 1, ',':U + 'Кассир,Продавец':U)
+no-error .
+return v-role-name.
+END.
+define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+FUNCTION gbclcode-get-position returns character ( input p-role as character
+                                                  ,input p-role-level as character
+                                                  ,input p-work-place as character
+                                                  ,input p-staff-code as integer
+                                                             ):
+define variable v-role-name as character no-undo .
+define variable v-role-level as character no-undo .
+define variable v-staff-code as integer no-undo .
+assign
+v-role-name = entry (lookup (p-role, 'C,S':U) + 1, ',':U + 'Кассир,Продавец':U)
+v-role-level = substitute("&1 &2", entry (lookup (p-role-level, 'global,db,firm,object':U) + 1, ',':U + 'Глобально,БД,Фирма,Объект':U) , p-work-place)
+v-staff-code = p-staff-code
+no-error .
+return substitute("&1, &2, Код &3"
+                ,v-role-name
+                ,v-role-level
+                ,(if p-staff-code = 0 then chr(63) else string(p-staff-code))).
+END.
+FUNCTION gbclcode-get-work-place returns character (
+                                                input p-role as character
+                                               ,input p-role-level as character
+                                               ,input p-db-num as integer
+                                               ,input p-host-code as integer
+                                               ,input p-obj-type as character
+                                               ,input p-obj-code as integer
+                                               ) :
+define variable v-work-place as character no-undo .
+define variable v-obj-type as character no-undo .
+  case p-role-level:
+    when 'db':U then do:
+      v-work-place = string(p-db-num, "99999").
+    end.
+    when 'firm':U then do:
+      v-work-place = string(p-host-code, "99999").
+    end.
+    when 'object':U then do:
+      assign
+      v-work-place = p-obj-type + string(p-obj-code, "999999999")
+      .
+    end.
+  END CASE.
+  return v-work-place.
+END FUNCTION.
+FUNCTION gbclcode-get-level-last-code returns integer (
+                                                        input p-role as character
+                                                      , input p-role-level as character
+                                                      , input p-work-place as character
+                                                      , input p-date-start as date
+                                                      ):
+DEFINE VARIABLE v-today as date no-undo .
+define buffer buf_staff for ub.staff.
+if p-work-place = chr(63) then return ?.
+if p-date-start = ? then do:
+  v-today = today .
+end.
+else do:
+  v-today = p-date-start.
+end.
+find last buf_staff no-lock where
+          buf_staff.role = p-role
+     and  buf_staff.role-level = p-role-level
+     and  buf_staff.work-place = p-work-place
+     and  buf_staff.date-start <= v-today + 1
+     and  buf_staff.date-end >= v-today + 1
+     use-index pi  no-error .
+if available buf_staff
+then return buf_staff.staff-code.
+return 0.
+end FUNCTION.
+define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  define variable v-cntxt-db-num        as integer   no-undo .
+  define variable v-cntxt-userid        as character no-undo .
+  define variable v-cntxt-level         as character no-undo .
+  define variable v-cntxt-host-code-obj as integer   no-undo .
+  define variable v-cntxt-obj-type      as character no-undo .
+  define variable v-cntxt-obj-code      as integer   no-undo .
+  define variable v-cntxt-db-num-obj    as integer   no-undo .
+  define variable v-cntxt-is-admin      as logical   no-undo .
+define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define new global shared variable g#libthpos as handle no-undo .
+define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+PROCEDURE get-db-num :
+  define output parameter p-db-num as integer no-undo .
+  do
+  on error undo, return error return-value
+  :
+      run gbl/getdbnum.p (output p-db-num).
+  end.
+END PROCEDURE.
+define variable v-cntxa-report-num as integer no-undo .
+PROCEDURE get-report-num :
+  define output parameter p-report-num as integer no-undo .
+  do
+  on error undo, return error
+  :
+    if v-cntxa-report-num = 0 then do:
+      run gbl/getrpnum.p (output p-report-num).
+      v-cntxa-report-num = p-report-num.
+    end.
+    else do:
+      assign
+      p-report-num = v-cntxa-report-num
+      .
+    end.
+  end.
+END PROCEDURE.
+PROCEDURE get-userid :
+do
+on error undo, return error
+:
+define output parameter p-userid  as character    no-undo.
+    assign
+        p-userid = g#userid
+    .
+end.
+END PROCEDURE.
+PROCEDURE get-version-num :
+define output parameter p-curr-version as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run gbl/getvern.p
+      ( output p-curr-version
+      ) .
+  end.
+END PROCEDURE.
+procedure get-news :
+define output parameter p-news as logical no-undo .
+  do
+  on error undo, return error
+  :
+     p-news = g#news.
+  end.
+end procedure.
+procedure get-esys :
+define output parameter p-esys as logical no-undo .
+  do
+  on error undo, return error
+  :
+     p-esys = g#esys.
+  end.
+end procedure.
+define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable v-uh8 as handle no-undo .
+define variable v-found8 as logical no-undo .
+v-uh8 = session:first-procedure no-error.
+do while valid-handle(v-uh8):
+  if v-uh8:type = "PROCEDURE" then do:
+    if v-uh8:file-name = "gbl/mainproc.p" then do:
+      v-found8 = yes.
+      leave.
+    end.
+  end.
+  v-uh8 = v-uh8:next-sibling no-error.
+end.
+if not v-found8 then do:
+  run gbl/mainproc.p persistent.
+end.
+procedure mainhandle_parentproc_indicator :
+return.
+end procedure.
+define variable conf-par               as character no-undo .
+define variable par-type               as character no-undo .
+define variable v-today                as date      no-undo .
+define variable v-time                 as integer   no-undo .
+define variable v-computer-name        as character no-undo .
+define variable v-computer-tcp-name    as character no-undo .
+define variable v-computer-ip-addr     as character no-undo .
+define variable v-computer-login-name  as character no-undo .
+define variable v-computer-process-pid as integer   no-undo .
+define variable v-connect-usr          as integer   no-undo .
+define variable v-connect-device       as character no-undo .
+define variable v-userio-id            as integer   no-undo .
+define variable v-emul                 as logical   FORMAT "да/нет"   no-undo.
+define variable v-obj-code    as integer      no-undo.
+define variable v-cash-num    as integer      no-undo.
+define buffer buf_sys-ctrl     for ub.sys-ctrl .
+define buffer buf_user-account for ub.user-account .
+define buffer buf_user-login   for ub.user-login .
+define variable parparentproc    as handle       no-undo.
+do
+on error undo, return error return-value
+:
+   assign
+      parparentproc = this-procedure
+   .
+   run sys-time_get-comp-user-name in this-procedure
+      (output v-computer-name
+      ,output v-computer-login-name
+      ,output v-computer-process-pid
+      ) .
+   define variable v-session-parameters    as character    no-undo.
+   define variable v-num-param             as integer      no-undo.
+   define variable v-counter               as integer      no-undo.
+   define variable v-param-name            as character    no-undo.
+   define variable v-param-value           as character    no-undo.
+   define variable v-desk-num-set          as logical      no-undo.
+   define variable v-obj-code-set          as logical      no-undo.
+   assign
+      v-session-parameters = session:parameter
+      v-num-param          = num-entries(v-session-parameters)
+      v-counter            = 1
+   .
+   IF v-num-param = 0
+   OR (v-num-param modulo 2) <> 0
+   THEN DO:
+      message
+         "Неверное число параметров"
+         skip  "Работа с кассой невозможна."
+      view-as alert-box error.
+      quit.
+   end.
+   read-param:
+   do while v-counter < v-num-param
+   on error  undo, leave
+   on endkey undo, leave
+   on stop   undo, leave
+   :
+      assign
+         v-param-name  = TRIM(entry( v-counter    , v-session-parameters ))
+         v-param-value = TRIM(entry( v-counter + 1, v-session-parameters ))
+         v-counter     = v-counter + 2
+      .
+      case v-param-name:
+      WHEN "маг" THEN DO:
+         assign
+            v-obj-code = INTEGER(v-param-value)
+         no-error.
+         IF ERROR-STATUS:ERROR
+         OR v-obj-code <= 0
+         OR v-obj-code  = ?
+         THEN DO:
+            message
+               "Неверный номер магазина:"
+               skip v-param-value
+               skip "Работа с кассой невозможна."
+            view-as alert-box error.
+            quit.
+         END.
+         assign
+            v-obj-code-set = TRUE
+         .
+      END.
+      WHEN "касса" THEN DO:
+         assign
+            v-cash-num = INTEGER(v-param-value)
+         no-error.
+         IF ERROR-STATUS:ERROR
+         OR v-cash-num <= 0
+         OR v-cash-num  = ?
+         THEN DO:
+            message
+               "Неверный номер кассы:"
+               skip v-param-value
+               skip "Работа с кассой невозможна."
+            view-as alert-box error.
+            quit.
+         END.
+         assign
+            v-desk-num-set = TRUE
+         .
+      END.
+      WHEN "эмулятор" THEN DO:
+         assign
+            v-emul = LOGICAL(v-param-value)
+         no-error.
+         IF ERROR-STATUS:ERROR
+         THEN DO:
+            message
+               "Неверные настройки эмулятора:"
+               skip v-param-value
+               skip "Работа с кассой невозможна."
+            view-as alert-box error.
+            quit.
+         END.
+      END.
+      otherwise dO:
+          message
+            "Неизвестный параметер" v-param-name
+            skip
+          view-as alert-box error.
+      END.
+      END case.
+   end.
+   IF NOT v-desk-num-set
+   THEN DO:
+      message
+         "Среди переданных параметров не было номера кассы"
+         skip "Работа с кассой невозможна."
+      view-as alert-box error.
+      quit.
+   END.
+   IF NOT v-obj-code-set
+   THEN DO:
+      message
+         "Среди переданных параметров не было номера магазина"
+         skip "Работа с кассой невозможна."
+      view-as alert-box error.
+      quit.
+   END.
+   RUN init-cntxt IN THIS-PROCEDURE.
+   IF v-cntxt-db-num <> v-cntxt-db-num-obj
+   THEN DO:
+      message
+         SUBSTITUTE("Во входных параметрах указана касса &1 магазина &2, привязаного к &3 БД", v-cash-num, v-obj-code, v-cntxt-db-num-obj )
+         skip "Текущая БД:" v-cntxt-db-num
+         skip "Работа с кассой невозможна."
+      view-as alert-box error.
+      quit.
+   END.
+   FIND FIRST buf_user-account
+        WHERE buf_user-account.user-id = v-cntxt-userid
+        no-lock
+        .
+   IF buf_user-account.psn-code = 0
+   OR buf_user-account.psn-code = ?
+   THEN DO:
+      message
+         substitute("У данного пользователя &1 (&2) нет привязки к физическому лицу."
+                    , buf_user-account.nik
+                    , buf_user-account.user-id)
+         skip "Работа с кассой невозможна."
+      view-as alert-box error.
+      quit.
+   END.
+   define variable v-cashier-code as integer no-undo .
+   define variable v-password     as character no-undo .
+   assign
+      v-cashier-code = gbclcode-get-db-role ( input 'C':U
+                                            , input v-cntxt-db-num
+                                            , input buf_user-account.psn-code
+                                            , input ?
+                                            , output v-password
+                                            )
+   .
+   IF v-cashier-code <= 0
+   OR v-cashier-code  = ?
+   THEN DO:
+      run cur-time in this-procedure
+         (output v-today
+         ,output v-time
+         ).
+      message
+         substitute("На текущий момент (&2) данный пользователь не является кассиром", v-today)
+         skip "Работа с кассой невозможна."
+      view-as alert-box error.
+      quit.
+   END.
+   run gbl/set-gbl.p
+      (input false
+      ,input buf_user-account.user-id
+      ,input p-user-password
+      ) no-error .
+   if error-status :error
+   then do:
+      message
+         vss-workfile vss-revision vss-description skip
+         "Ошибка при установке глобальных переменных" skip
+         error-status :get-message(1) skip
+         return-value skip
+         view-as alert-box error .
+      return .
+   end.
+if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run conf-rd in g#library
+  (input  'lcns-lim':U
+  ,input  '':U
+  ,input  '':U
+  ,input  0
+  ,input  '':U
+  ,input  '':U
+  ,input  '':U
+  ,input  yes
+  ,output conf-par
+  ,output par-type
+  ) no-error .
+   if error-status :error
+   then do:
+      return.
+   end.
+   if par-type <> 'T':U
+   then do:
+      message
+         "Неправильный тип параметра lcns-lim (должно быть date)."
+         view-as alert-box error.
+      return.
+   end.
+   if date (conf-par) <> ?
+   then do:
+      run cur-time in this-procedure
+         (output v-today
+         ,output v-time
+         ).
+      define variable v-license-left-day as integer   no-undo .
+      assign
+         v-license-left-day = date (conf-par) - v-today
+      .
+      if v-license-left-day <= 15
+      then do:
+         message
+         "Срок действия лицензии истекает" date (conf-par) skip
+         substitute("Осталось &1 дней", v-license-left-day) skip
+         view-as alert-box error.
+      end.
+      if v-license-left-day < 0
+      then do:
+         message
+         "Срок действия лицензии закончился" date (conf-par) skip
+         "Вход в систему невозможен" skip
+         view-as alert-box error.
+         return .
+      end.
+   end.
+if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run conf-rd in g#library
+  (input  'is-thpos':U
+  ,input  '':U
+  ,input  '':U
+  ,input  0
+  ,input  '':U
+  ,input  '':U
+  ,input  '':U
+  ,input  yes
+  ,output conf-par
+  ,output par-type
+  ) no-error .
+   if error-status :error
+   then do:
+      return.
+   end.
+   if par-type <> 'L':U
+   then do:
+      message
+         "Неправильный тип параметра is-thpos (должно быть logical)."
+         view-as alert-box error .
+      return.
+   end.
+   IF NOT LOGICAL(conf-par)
+   THEN  DO:
+      message
+         "В данной конфигурации запрещена работа с кассами IBS TH POS"
+         skip
+      view-as alert-box information.
+      return.
+   END.
+   define buffer buf_cd-events      for ub.cd-events .
+   define variable v-version    as integer      no-undo.
+   FIND LAST buf_cd-events NO-LOCK NO-ERROR.
+   IF AVAILABLE buf_cd-events
+   THEN DO:
+      ASSIGN
+         v-version = buf_cd-events.version
+      .
+      RELEASE buf_cd-events.
+   END.
+   ELSE DO:
+      ASSIGN
+         v-version = 0
+      .
+   END.
+   run utl/cdevload.p ( INPUT parparentproc
+                      , input-output v-version
+                      ) .
+   run gbl/maincash.w
+      ( INPUT parparentproc
+      , input v-computer-process-pid
+      , input buf_user-account.user-id
+      , input v-cash-num
+      , input v-emul
+      ) no-error .
+   if error-status :error
+   then do:
+      message
+         "Ошибка вызова основного окна системы" skip
+         error-status :get-message(1) skip
+         return-value skip
+         view-as alert-box error.
+   end.
+end.
+procedure mainmenu_getcntxt :
+   define output parameter p-db-num as integer              no-undo.
+   define output parameter p-user-id as character           no-undo.
+   define output parameter p-cntxt-level as character       no-undo.
+   define output parameter p-cntxt-host-code-obj as integer no-undo.
+   define output parameter p-cntxt-obj-type as character    no-undo.
+   define output parameter p-cntxt-obj-code as integer      no-undo.
+   define output parameter p-cntxt-db-num-obj as integer    no-undo.
+   define output parameter p-cntxt-is-admin as logical      no-undo.
+   do
+   on error undo, return error
+   :
+      assign
+         p-db-num              = v-cntxt-db-num
+         p-user-id             = v-cntxt-userid
+         p-cntxt-level         = v-cntxt-level
+         p-cntxt-host-code-obj = v-cntxt-host-code-obj
+         p-cntxt-obj-type      = v-cntxt-obj-type
+         p-cntxt-obj-code      = v-cntxt-obj-code
+         p-cntxt-db-num-obj    = v-cntxt-db-num-obj
+         p-cntxt-is-admin      = v-cntxt-is-admin
+      .
+   end.
+end procedure.
+procedure init-cntxt :
+   define variable v-login               as character    no-undo.
+   define buffer buf_sys-ctrl    for ub.sys-ctrl .
+   define buffer buf_user-login  for ub.user-login .
+   define buffer buf_clients     for ub.clients .
+   do
+   on error undo, return error
+   :
+         FIND FIRST buf_sys-ctrl no-lock.
+         ASSIGN
+            v-login = USERID("ub")
+            v-cntxt-db-num = buf_sys-ctrl.db-num
+         .
+         FIND FIRST buf_user-login
+              WHERE buf_user-login.db-num     = v-cntxt-db-num
+                AND buf_user-login.user-login = v-login
+              no-lock
+              no-error
+              .
+         IF NOT AVAILABLE buf_user-login
+         THEN DO:
+            message
+               "Не найден логин" v-login
+               skip "для БД"     v-cntxt-db-num
+            view-as alert-box information.
+            QUIT.
+         END.
+         assign
+            v-cntxt-userid = buf_user-login.user-id
+         .
+         FIND FIRST buf_clients
+              WHERE buf_clients.obj-type = 'маг':U
+                AND buf_clients.obj-code = v-obj-code
+              no-lock
+              no-error
+              .
+         IF NOT AVAILABLE buf_clients
+         THEN DO:
+            message
+               "Не найден магазин №" v-obj-code
+               skip
+            view-as alert-box information.
+            QUIT.
+         END.
+         assign
+            v-cntxt-host-code-obj = buf_clients.host-code
+            v-cntxt-obj-type      = buf_clients.obj-type
+            v-cntxt-obj-code      = buf_clients.obj-code
+            v-cntxt-db-num-obj    = buf_clients.db-num
+            v-cntxt-level         = 'object':U
+            v-cntxt-is-admin      = FALSE
+         .
+   end.
+end procedure.
+PROCEDURE get-quest-print :
+  define output parameter p-quest-print as logical no-undo .
+  do
+  on error undo, return error
+  :
+    assign
+      p-quest-print = no
+    .
+  end.
+END PROCEDURE.

@@ -1,0 +1,315 @@
+        1   block-level on error undo, throw.
+        2   TRIGGER PROCEDURE FOR DELETE OF ub.trn-doc .
+        3   define variable vss-revision    as character no-undo initial "$Revision$":U .
+        4   define variable vss-author      as character no-undo initial "$Author$":U .
+        5   define variable vss-date        as character no-undo initial "$Date$":U .
+        6   define variable vss-workfile    as character no-undo initial "$Workfile$":U .
+        7   define variable vss-archive     as character no-undo initial "$Archive$":U .
+        8   define variable vss-description as character no-undo initial "Триггер на удаление документа".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27       assign
+       28         p-vss-parameters = substitute('&1|&2', ub.trn-doc.doc-code, ub.trn-doc.status_)
+       29       .
+       30   end procedure.
+       31   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       32   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       33   define variable v-vssrevis-logger                   as handle    no-undo .
+       34   procedure vss-logevent :
+       35     define input  parameter p-extra-paramters as character no-undo .
+       36     define variable v-vssrevis-parameters as character no-undo .
+       37     do
+       38     on error undo, return error return-value
+       39     :
+       40       if  valid-handle(v-vssrevis-logger)
+       41       and v-vssrevis-logger :get-signature("logevent") <> ""
+       42       then do:
+       43         run vss-get-parameters in this-procedure
+       44           (output v-vssrevis-parameters
+       45           ).
+       46         run logevent in v-vssrevis-logger
+       47           (input vss-workfile
+       48           ,input vss-revision
+       49           ,input v-vssrevis-parameters
+       50           ,input p-extra-paramters
+       51           ).
+       52       end.
+       53     end.
+       54   end procedure.
+       55   assign
+       56     v-vssrevis-logger = g#vssrevis-logger
+       57   .
+       58   if  valid-handle(v-vssrevis-logger)
+       59   and v-vssrevis-logger :get-signature("logevent") <> ""
+       60   then do:
+       61     assign
+       62       v-vssrevis-logevent = true
+       63     .
+       64     run vss-logevent in this-procedure (input vss-description) .
+       65   end.
+       66   define new global shared variable g#language as character no-undo .
+       67   if g#language <> '' and g#language <> 'rus':U then do:
+       68     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       69   end.
+       70   define new global shared variable g#library  as handle no-undo .
+       71   define new global shared variable g#library2 as handle no-undo .
+       72   define   shared variable g#auto as logical no-undo.
+       73   define   shared variable g#news as logical no-undo.
+       74   define   shared variable g#oxml as logical no-undo.
+       75   define   shared variable g#esys as logical no-undo.
+       76   define   shared variable g#news-source-db as integer no-undo.
+       77   define   shared variable g#esys-source-esys as integer no-undo.
+       78   define   shared variable g#db-num as integer   no-undo .
+       79   define   shared variable g#userid as character no-undo .
+       80   define   shared variable g#passwd as character no-undo .
+       81   def var objSrv as class ibs.th.gbl.sys.objsrv no-undo.
+       82   run gbl/getobjsrvhndl.p (input-output ObjSrv).
+       83   define variable v-message as character no-undo .
+       84   define buffer bufz_trn-doc for ub.trn-doc.
+       85   main-block :
+       86   do transaction
+       87   on error  undo main-block, return error substitute("&1. error main-block. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       88   on endkey undo main-block, return error substitute("&1. endkey main-block")
+       89   on stop   undo main-block, return error substitute("&1. stop main-block")
+       90   :
+       91     for each bufz_trn-doc exclusive-lock where
+       92              bufz_trn-doc.doc-code = ub.trn-doc.out-code and
+       93              bufz_trn-doc.status_  = 'готов':U            :
+       94         assign
+       95           bufz_trn-doc.status_ = 'отказ':U
+       96         .
+       97     end.
+       98     if ub.trn-doc.status_ =  'факт':U and
+       99        ub.trn-doc.is-del  <> yes     then do:
+      100       message vss-workfile skip vss-date skip vss-revision skip( 1 ) vss-description skip( 1 )
+      101               "Нельзя удалять документ, закрытый до статуса" 'факт':U skip
+      102               "Документ" ub.trn-doc.doc-code skip
+      103               "Статус документа" ub.trn-doc.status_ skip
+      104       view-as alert-box error .
+      105       undo main-block, return error "Нельзя удалять документ, закрытый до статуса" + 'факт':U.
+      106     end.
+      107     for each ub.doc-line where
+      108              ub.doc-line.doc-code = ub.trn-doc.doc-code
+      109     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      110     :
+      111       delete ub.doc-line .
+      112     end.
+      113     for each ub.inv-line where
+      114              ub.inv-line.doc-code = ub.trn-doc.doc-code
+      115     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      116     :
+      117       message
+      118         vss-workfile skip vss-date skip vss-revision skip( 1 ) vss-description skip( 1 )
+      119         "Найдены записи о нарастающем итоге без основной записи о товаре." skip
+      120         "Документ" ub.trn-doc.doc-code skip
+      121         substitute( "Товар &1 &2 &3", ub.inv-line.artic, ub.inv-line.prod-type, ub.inv-line.prod-code ) skip
+      122         "Удаление невозможно." skip
+      123         view-as alert-box error buttons ok .
+      124       undo main-block, return error "Найдены записи о распределении товара по местам хранени . Удаление невозможно.".
+      125     end.
+      126     for each ub.doc-pl
+      127       where ub.doc-pl.out-code = ub.trn-doc.doc-code
+      128     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      129     :
+      130       message
+      131         vss-workfile skip vss-date skip vss-revision skip( 1 ) vss-description skip( 1 )
+      132         "Найдены записи о распределении товара по местам хранения без основной записи о товаре.." skip
+      133         "Документ" ub.trn-doc.doc-code skip
+      134         "Код товара" ub.doc-pl.gds-code skip
+      135         "Удаление невозможно." skip
+      136         view-as alert-box error buttons ok .
+      137       undo main-block, return error "Найдены записи о распределении товара по местам хранени . Удаление невозможно.".
+      138     end.
+      139     for each ub.parts no-lock where
+      140              ub.parts.out-code = ub.trn-doc.doc-code
+      141     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      142     :
+      143       message vss-workfile skip vss-date skip vss-revision skip( 1 ) vss-description skip( 1 )
+      144               "Найдены не снятые резервы по документу." skip
+      145               "Документ" ub.trn-doc.doc-code skip
+      146               "Артикул" ub.parts.artic ub.parts.prod-type ub.parts.prod-code skip
+      147               "Удаление невозможно." skip
+      148       view-as alert-box error buttons ok .
+      149       undo main-block, return error "Найдены не снятые резервы по документу. Удаление невозможно.".
+      150     end.
+      151     for each ub.parts-root no-lock where
+      152              ub.parts-root.doc-code = ub.trn-doc.doc-code
+      153     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      154     :
+      155       message vss-workfile skip vss-date skip vss-revision skip( 1 ) vss-description skip( 1 )
+      156               "Найдены не снятые резервы по документу." skip
+      157               "Документ" ub.trn-doc.doc-code skip
+      158               "Код товара" ub.parts-root.gds-code skip
+      159               "Удаление невозможно." skip
+      160       view-as alert-box error buttons ok .
+      161       undo main-block, return error "Найдены не снятые резервы по документу. Удаление невозможно.".
+      162     end.
+      163     for each ub.parts-attr no-lock where
+      164              ub.parts-attr.in-code = ub.trn-doc.doc-code
+      165     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      166     :
+      167       message vss-workfile skip vss-date skip vss-revision skip( 1 ) vss-description skip( 1 )
+      168               "Найдены атрибуты партии." skip
+      169               "Документ" ub.trn-doc.doc-code skip
+      170               "Код товара" ub.parts-attr.gds-code skip
+      171               "Код партии" ub.parts-attr.part-code skip
+      172               "Удаление невозможно." skip
+      173       view-as alert-box error buttons ok .
+      174       undo main-block, return error "Найдены атрибуты партии. Удаление невозможно.".
+      175     end.
+      176     for each ub.inv-doc exclusive-lock where
+      177              ub.inv-doc.doc-code = ub.trn-doc.doc-code
+      178     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      179     :
+      180       delete ub.inv-doc.
+      181     end.
+      182     for each ub.marking-attr exclusive-lock where (ub.marking-attr.attr-code = "inv-doc" or ub.marking-attr.attr-code = "inv-doc-scan") and ub.marking-attr.attr-value = ub.trn-doc.doc-code:
+      183       delete ub.marking-attr.
+      184     end.
+      185     if ub.trn-doc.ext-doc-type = 'vt':U
+      186     then do:
+      187       find first ub.utd exclusive-lock where ub.utd.doc-code = ub.trn-doc.doc-code no-error.
+      188       if available (ub.utd)
+      189         then delete ub.utd.
+      190     end.
+      191     else do:
+      192       find first ub.utd exclusive-lock where ub.utd.doc-code = ub.trn-doc.doc-code no-error.
+      193       if available (ub.utd)
+      194       then do:
+      195         for each ub.utd-marking-lines where ub.utd-marking-lines.doc-id =  ub.utd.doc-id and ub.utd-marking-lines.db-num = ub.utd.db-num:
+      196           find first ub.marking where ub.marking.mark = ub.utd-marking-lines.mark no-error.
+      197           if not available (ub.marking) or not ub.marking.sts = objSrv:Env:Marking:Sts:Mark:OutZone:KeyIntDB
+      198             then next.
+      199           ub.marking.sts = objSrv:Env:Marking:Sts:Mark:Checked_:KeyIntDB.
+      200         end.
+      201       end.
+      202     end.
+      203     for each ub.trn-doc-sum exclusive-lock where
+      204              ub.trn-doc-sum.doc-code = ub.trn-doc.doc-code
+      205     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      206     :
+      207       delete ub.trn-doc-sum.
+      208     end.
+      209     for each ub.rvs-doc exclusive-lock where
+      210              ub.rvs-doc.out-code = ub.trn-doc.doc-code
+      211     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      212     :
+      213       delete ub.rvs-doc .
+      214     end.
+      215     for each ub.doc-attr exclusive-lock where
+      216              ub.doc-attr.doc-code = ub.trn-doc.doc-code
+      217     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      218     :
+      219       delete ub.doc-attr.
+      220     end.
+      221     if ub.trn-doc.doc-type = 'инв':U then
+      222     do:
+      223       for first ub.inv-doc-attr where
+      224                 ub.inv-doc-attr.doc-code = ub.trn-doc.out-code
+      225             and ub.inv-doc-attr.attr-code = "create_date"
+      226       on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      227       :
+      228         delete ub.inv-doc-attr.
+      229       end.
+      230       for first ub.inv-doc-attr where
+      231                 ub.inv-doc-attr.doc-code = ub.trn-doc.out-code
+      232             and ub.inv-doc-attr.attr-code = "create_time"
+      233       on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      234       :
+      235         delete ub.inv-doc-attr.
+      236       end.
+      237     end.
+      238     for each ub.fin-ob where ub.fin-ob.host-code    = ub.trn-doc.host-code and
+      239                              ub.fin-ob.trn-doc-code = ub.trn-doc.doc-code  exclusive-lock
+      240     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      241     :
+      242       assign
+      243         ub.fin-ob.is-doc-del = yes.
+      244     end.
+      245     for each ub.fin-ob-trn where ub.fin-ob-trn.trn-doc-code = ub.trn-doc.doc-code  and
+      246                                  ub.fin-ob-trn.host-code    = ub.trn-doc.host-code exclusive-lock
+      247     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      248     :
+      249       find first ub.fin-ob where ub.fin-ob.host-code = ub.fin-ob-trn.host-code and
+      250                                  ub.fin-ob.doc-code  = ub.fin-ob-trn.doc-code  exclusive-lock no-error.
+      251       if available ub.fin-ob then do:
+      252         assign
+      253           ub.fin-ob.is-doc-del = yes.
+      254       end.
+      255       assign
+      256         ub.fin-ob-trn.is-doc-del = yes.
+      257     end.
+      258     for each ub.fin-gds-part where ub.fin-gds-part.obj-type = ub.trn-doc.obj-type and
+      259                                    ub.fin-gds-part.obj-code = ub.trn-doc.obj-code and
+      260                                    ub.fin-gds-part.out-code = ub.trn-doc.doc-code exclusive-lock
+      261     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      262     :
+      263       find first ub.fin-ob where ub.fin-ob.host-code = ub.fin-gds-part.host-code   and
+      264                                  ub.fin-ob.doc-code  = ub.fin-gds-part.fin-ob-code exclusive-lock no-error.
+      265       if available ub.fin-ob then do:
+      266         assign
+      267           ub.fin-ob.is-doc-del = yes.
+      268       end.
+      269       assign
+      270         ub.fin-gds-part.is-doc-del = yes.
+      271     end.
+      272     for each ub.fin-ob-before where ub.fin-ob-before.host-code         = ub.trn-doc.host-code and
+      273                                     ub.fin-ob-before.trn-doc-code-orig = ub.trn-doc.doc-code  exclusive-lock
+      274     on error undo main-block, return error substitute( "&1&2&3", vss-workfile, chr(10), return-value )
+      275     :
+      276       find first ub.fin-ob where ub.fin-ob.host-code = ub.fin-ob-before.host-code and
+      277                                  ub.fin-ob.doc-code  = ub.fin-ob-before.doc-code  exclusive-lock no-error.
+      278       if available ub.fin-ob then do:
+      279         assign
+      280           ub.fin-ob.is-doc-del = yes.
+      281       end.
+      282       assign
+      283         ub.fin-ob-before.is-doc-del = yes.
+      284     end.
+      285     if g#db-num <> 0
+      286        or ( ub.trn-doc.status_ = 'запрос':U
+      287             and ub.trn-doc.ext-doc-type = 'iv':U
+      288           )
+      289     then do:
+      290       run nws/cmd-del.p
+      291         ( input "trn-doc":U
+      292         , input ( buffer ub.trn-doc :handle )
+      293         , input "":U
+      294         ) no-error .
+      295       if error-status :error then do:
+      296         return error substitute( "&1. Ошибка при отправке в новости команды на удаление записи. &2&3&2&4", vss-workfile, chr(10), return-value, error-status :get-message ( error-status :num-messages ) ).
+      297       end.
+      298     end.
+      299     if g#oxml = yes
+      300     then do:
+      301       run str/calloxml.p (
+      302             input 'delete':U
+      303           , input 'trn-doc':U
+      304           , input ( buffer ub.trn-doc:handle )
+      305       ) no-error.
+      306       if error-status :error
+      307       then do:
+      308           undo, return error substitute( "&2&1Ошибка при отправке в систему OpenXML команды на удаление записи&1&3&1&4"
+      309                                , chr(10)
+      310                                , vss-workfile
+      311                                , return-value
+      312                                , error-status :get-message ( 1 ) ).
+      313       end.
+      314     end.
+      315   end.

@@ -1,0 +1,289 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.skt.Commands.*.
+        3   using ibs.th.skt.Adapters.*.
+        4   block-level on error undo, throw.
+        5   class ibs.th.skt.ClientControl:
+        6     define private temp-table ttCommands no-undo
+        7       field CmdCode    as char
+        8       field objCommand as class Progress.Lang.Object
+        9       .
+       10     define private temp-table ttDeferredCommands no-undo
+       11       field objCommand as class Progress.Lang.Object
+       12       field objreq     as class Progress.Lang.Object
+       13       field objResp    as class Progress.Lang.Object
+       14       .
+       15     define private variable logWrite as class   LogWrite no-undo.
+       16     define private variable hLog     as handle  no-undo.
+       17      define variable HTTPOK as longchar no-undo.
+       18      constructor public ClientControl (ilog as handle  ):
+       19         super ().
+       20         hLog = iLog.
+       21         logWrite = new LogWrite().
+       22         HTTPOK = substitute("HTTP/1.1 200 OK&1Server: 4GL&1Content-Type: &3&5&6&1Content-Length: &4&2",
+       23                            chr(13) + chr(10),
+       24                            chr(13) + chr(10) + chr(13) + chr(10) , "&1","&2","&3","&4").
+       25      end constructor.
+       26     method public logical SendRequest ( iCmdCode as char, req as class IRequest, resp as class IResponse ):
+       27       find first ttCommands where ttCommands.CmdCode = iCmdCode no-lock no-error.
+       28       if not available (ttCommands) then
+       29       do:
+       30         logWrite:LogStr = "Для данного клиента не создана комманда.".
+       31         return true.
+       32       end.
+       33       do transaction:
+       34          cast(ttCommands.objCommand, ibs.th.skt.Commands.ICommand):Execute_(req, resp)no-error.
+       35          if error-status:error
+       36          then do:
+       37             return error return-value + " " + error-status:get-message (1).
+       38          end.
+       39          if resp:condition eq resp:STSlist:WriteResponse:NameProp
+       40          then do:
+       41             if not writeSock(req:HndlSocket,resp)
+       42             then
+       43                undo, return true.
+       44          end.
+       45          else if    resp:condition eq resp:STSlist:WaitResult:NameProp
+       46                  or resp:condition eq resp:STSlist:WriteStatusAndWait:NameProp
+       47          then do:
+       48             create ttDeferredCommands.
+       49             assign
+       50               ttDeferredCommands.objCommand = ttCommands.objCommand
+       51               ttDeferredCommands.objreq     = req
+       52               ttDeferredCommands.objResp    = resp
+       53             .
+       54             logWrite:LogStr = substitute ("Wait result Class: &1 &2",resp, resp:ParamWait:getParams()) .
+       55             resp:condition = resp:STSlist:WaitResult:NameProp.
+       56             return false.
+       57          end.
+       58       end.
+       59       return true.
+       60     end method.
+       61     method public logical SendRequest ( iCmdCode as char, req as IRequest, resp as class IResponse, lpar as character ):
+       62       find first ttCommands where ttCommands.CmdCode = iCmdCode no-lock no-error.
+       63       if not available (ttCommands) then
+       64       do:
+       65         logWrite:LogStr = "Для данного клиента не создана комманда.".
+       66         return true .
+       67       end.
+       68       do transaction:
+       69          cast(ttCommands.objCommand, ibs.th.skt.Commands.TSDCommand):Execute_(req, resp, lpar) no-error.
+       70          if error-status:error
+       71          then
+       72             return error return-value + " " + error-status:get-message (1).
+       73          if resp:condition eq resp:STSlist:WriteResponse:NameProp
+       74          then do:
+       75             if not writeSock(req:HndlSocket,resp)
+       76             then
+       77                undo, return true.
+       78          end.
+       79          else if    resp:condition eq resp:STSlist:WaitResult:NameProp
+       80                  or resp:condition eq resp:STSlist:WriteStatusAndWait:NameProp
+       81          then do:
+       82             create ttDeferredCommands.
+       83             assign
+       84               ttDeferredCommands.objCommand = ttCommands.objCommand
+       85               ttDeferredCommands.objreq     = req
+       86               ttDeferredCommands.objResp    = resp
+       87             .
+       88             logWrite:LogStr = substitute ("Wait result Class: &1 &2",resp, resp:ParamWait:getParams()) .
+       89             resp:condition = resp:STSlist:WaitResult:NameProp.
+       90             return false.
+       91          end.
+       92       end.
+       93       return true.
+       94     end method.
+       95     method public void SetCommandForClient ( iCmdCode as char, cmd as class ICommand ):
+       96       create ttCommands.
+       97       assign
+       98         ttCommands.CmdCode = iCmdCode
+       99         ttCommands.objCommand = cmd
+      100         .
+      101     end method.
+      102     method public logical availClient ( iCmdCode as char ):
+      103       find first ttCommands where ttCommands.CmdCode = iCmdCode no-error.
+      104       return available ttCommands.
+      105     end method.
+      106     method public logical checkEnd ():
+      107        SESSION:ERROR-STACK-TRACE=YES.
+      108        define variable req  as ibs.th.skt.Commands.IRequest  no-undo.
+      109        define variable resp as ibs.th.skt.Commands.IResponse no-undo.
+      110        define variable vAvailProc as logical no-undo.
+      111        define variable vDelete as logical no-undo.
+      112        for each ttDeferredCommands:
+      113           vDelete = false.
+      114           req  = cast(ttDeferredCommands.objreq, ibs.th.skt.Commands.IRequest).
+      115           resp = cast(ttDeferredCommands.objResp,ibs.th.skt.Commands.IResponse).
+      116           block-check:
+      117           do transaction:
+      118              cast(ttDeferredCommands.objCommand, ibs.th.skt.Commands.ICommand):ContinueExecution (req,resp).
+      119              if     resp:condition eq resp:STSlist:WriteResponse:NameProp
+      120              then do:
+      121                 if not writeSock(req:HndlSocket,resp)
+      122                 then
+      123                    undo block-check, leave block-check.
+      124              end.
+      125           end.
+      126           if resp:condition eq resp:STSlist:WriteStatusAndWait:NameProp
+      127           then do:
+      128              if valid-handle (hlog)
+      129              then
+      130                 publish "write-to-log" from hLog (substitute ("Wait result Class: &1 &2",resp, resp:ParamWait:getParams())) .
+      131              resp:condition = resp:STSlist:WaitResult:NameProp.
+      132           end.
+      133           if resp:condition ne resp:STSlist:WaitResult:NameProp
+      134              or  not req:HndlSocket:CONNECTED()
+      135           then do:
+      136              define variable resp-head as character no-undo.
+      137              resp-head = if logWrite:LogStr <> "" then logWrite:LogStr else "OK".
+      138              if valid-handle (hlog)
+      139              then
+      140                 publish "write-to-log" from hLog (substitute ("RESPONCE: Class: &1 end result: &2",resp ,resp-head)).
+      141              logWrite:LogStr = "".
+      142              vDelete = yes.
+      143           end.
+      144           else
+      145              vAvailProc = yes.
+      146            define variable v-err-msg as character no-undo .
+      147            catch exAppErrors as class Progress.Lang.AppError :
+      148               v-err-msg = exAppErrors:ReturnValue .
+      149               if v-err-msg > ""
+      150               then .
+      151               else do :
+      152                  v-err-msg = exAppErrors:GetMessage(1) .
+      153                  if v-err-msg > ""
+      154                  then .
+      155                  else v-err-msg = "AppError в модуле c:\tester\Rls_16_0\rc_160_rus\cmpdir\src\ibs\th\skt\clientcontrol.cls" .
+      156               end .
+      157               logWrite:LogStr = v-err-msg + exAppErrors:CallStack.
+      158               vDelete = yes.
+      159            end catch .
+      160            catch exProErrors as class Progress.Lang.ProError :
+      161               v-err-msg = exProErrors:GetMessage(1) .
+      162               if v-err-msg > ""
+      163               then .
+      164               else v-err-msg = "ProError в модуле c:\tester\Rls_16_0\rc_160_rus\cmpdir\src\ibs\th\skt\clientcontrol.cls" .
+      165               logWrite:LogStr = v-err-msg + exProErrors:CallStack.
+      166               vDelete = yes.
+      167            end catch .
+      168            catch exAnyErrors as class Progress.Lang.Error:
+      169               v-err-msg = "Unexpected error в модуле c:\tester\Rls_16_0\rc_160_rus\cmpdir\src\ibs\th\skt\clientcontrol.cls " + exAnyErrors:GetMessage(1).
+      170               logWrite:LogStr = v-err-msg + exAnyErrors:CallStack.
+      171               vDelete = yes.
+      172            end catch .
+      173            finally:
+      174              if vdelete
+      175              then do:
+      176                 if logWrite:LogStr > ""
+      177                 then
+      178                    logWrite:WriteFileToLog(substitute ("Error: Class: &1 end result: &2",resp ,logWrite:LogStr)).
+      179                 socketDisconnect(req:HndlSocket).
+      180                 delete object req.
+      181                 delete object resp.
+      182                 delete ttDeferredCommands.
+      183              end.
+      184           end.
+      185        end.
+      186        return vAvailProc.
+      187     end.
+      188     method private logical writeSock (hndlsocket as handle, resp as ibs.th.skt.Commands.IResponse ):
+      189       define variable glog     as logical  no-undo.
+      190       define variable v-cont-length as integer no-undo.
+      191       define variable VOK as longchar no-undo.
+      192       define variable VrespOK as memptr no-undo.
+      193       VOK = substitute (HTTPOK,resp:Content-Type,
+      194                        string(resp:ContentLength),
+      195                        if resp:content-disposition ne "" then chr(13) + chr(10) + "content-disposition:" + resp:content-disposition else "",
+      196                        if resp:Content-MD5 ne "" then chr(13) + chr(10) + "Content-MD5: " + resp:Content-MD5 else ""
+      197   ).
+      198       copy-lob
+      199         from object VOK
+      200         to object VrespOK
+      201         convert target codepage "UTF-8".
+      202       if not hndlSocket:connected()
+      203       then do:
+      204          LogWrite:WriteFileToLog("Клиент отключился.").
+      205          return false.
+      206       end.
+      207       logWrite:WriteDebugLog("Отправляем ответ:").
+      208       glog = writeSock(hndlsocket,VrespOK).
+      209       if    not glog
+      210       then do:
+      211          set-size(VrespOK) = 0.
+      212          LogWrite:LogStr = LogWrite:LogStr + " " + "Ошибка при отправке сообщения удаленному клиенту.".
+      213          return false.
+      214       end.
+      215       set-size(VrespOK) = 0.
+      216       logWrite:WriteDebugLog("Заголовок отправлен:").
+      217       logWrite:WriteDebugLog(VOK).
+      218       if not hndlSocket:connected()
+      219       then do:
+      220          LogWrite:WriteFileToLog("Клиент отключился.").
+      221          return false.
+      222       end.
+      223       logWrite:WriteDebugLog("Отправляем тело.").
+      224       glog = writeSock(hndlsocket,resp:Content).
+      225       if    not glog
+      226          or hndlsocket:bytes-written ne get-size(resp:Content)
+      227       then do:
+      228          LogWrite:LogStr = LogWrite:LogStr + " " + "Ошибка при отправке сообщения удаленному клиенту.".
+      229          return false.
+      230       end.
+      231       if    resp:ContentLongChar ne ""
+      232       then do:
+      233          logWrite:WriteDebugLog("Тело:").
+      234          logWrite:WriteDebugLog(resp:ContentLongChar).
+      235       end.
+      236       logWrite:WriteDebugLog("Тело отправлено.").
+      237       return true.
+      238     end method.
+      239     method private logical writeSock (hndlsocket as handle, mbuffer as memptr):
+      240      define variable VSize as int64 no-undo.
+      241      define variable VPosBeg as int64 no-undo init 1.
+      242      define variable VWriteByte as int64 no-undo.
+      243      define variable glog as logical no-undo.
+      244      VSize = get-size(mbuffer).
+      245      block-wh:
+      246      do while     hndlsocket:connected ()
+      247               and VSize > VWriteByte:
+      248         glog = hndlsocket:write(mbuffer,VPosBeg,
+      249         VSize - VWriteByte
+      250         ) no-error.
+      251         if not glog
+      252         then do:
+      253           logWrite:WriteFileToLog( "Ошибка при отправке сообщения удаленному клиенту.").
+      254           return false.
+      255         end.
+      256         VWriteByte =  VWriteByte + hndlsocket:bytes-written.
+      257         logWrite:WriteFileToLog( substitute ("Отправлено &1 байт из &2.",VWriteByte, VSize)).
+      258         VPosBeg = VPosBeg + hndlsocket:bytes-written.
+      259      end.
+      260      return true.
+      261   end.
+      262           destructor public ClientControl ( ):
+      263            for each ttDeferredCommands:
+      264               socketDisconnect(cast(ttDeferredCommands.objreq,IRequest):HndlSocket).
+      265               delete object ttDeferredCommands.objreq no-error.
+      266          delete object ttDeferredCommands.objResp no-error.
+      267          delete ttDeferredCommands.
+      268            end.
+      269       for each ttCommands:
+      270         delete object ttCommands.objCommand no-error.
+      271         delete ttCommands.
+      272       end.
+      273       delete object logWrite.
+      274           end destructor.
+      275      method public logical socketDisconnect (hSocket as handle):
+      276         define variable vHost as character no-undo.
+      277         define variable vPort as integer   no-undo.
+      278         assign
+      279            vHost = hSocket:remote-host
+      280            vPort = hSocket:remote-port
+      281         .
+      282         hSocket:disconnect().
+      283         if vhost eq ?
+      284         then
+      285            logWrite:WriteDebugLog(substitute ("Устройстов id подключения &1 уже отключено.",hSocket,vHOST,vPORT)).
+      286         else
+      287            logWrite:WriteDebugLog(substitute ("Отключено устройстов id подключения &1 Ip: &2 Port: &3",hSocket,vHOST,vPORT)).
+      288      end.
+      289   end class.

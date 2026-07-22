@@ -1,0 +1,5269 @@
+DEFINE BUFFER X_clients FOR ub.clients.
+DEFINE BUFFER X_dis-tot_ FOR ub.dis-host.
+DEFINE BUFFER X_dis-tot_host FOR ub.dis-host.
+DEFINE BUFFER X_dis-tot_obj FOR ub.dis-obj.
+DEFINE BUFFER X_prop-ref_ FOR ub.prop-ref.
+DEFINE BUFFER X_prop-ref_host FOR ub.prop-ref.
+DEFINE BUFFER X_prop-ref_obj FOR ub.prop-ref.
+define input parameter parparentproc as widget-handle no-undo .
+define input parameter bttns as character no-undo.
+define input parameter p-curr-host-code as integer no-undo .
+define input parameter p-curr-obj-type as character no-undo .
+define input parameter p-curr-obj-code as integer no-undo .
+define input parameter p-list-mode as character no-undo .
+DEFINE INPUT PARAMETER p-region AS CHARACTER NO-UNDO.
+define input parameter p-dtm-code as integer no-undo .
+define input parameter p-dt-code as integer no-undo .
+define input-output parameter p-rid-list as character no-undo.
+define variable vss-revision    as character no-undo init "$Revision$":U .
+define variable vss-author      as character no-undo init "$Author$":U .
+define variable vss-date        as character no-undo init "$Date$":U .
+define variable vss-workfile    as character no-undo init "$Workfile$":U .
+define variable vss-archive     as character no-undo init "$Archive$":U .
+define variable vss-description as character no-undo init "Список dis-obj".
+procedure vss-get-info :
+  define output parameter p-vss-revision    like vss-revision    no-undo .
+  define output parameter p-vss-author      like vss-author      no-undo .
+  define output parameter p-vss-date        like vss-date        no-undo .
+  define output parameter p-vss-workfile    like vss-workfile    no-undo .
+  define output parameter p-vss-archive     like vss-archive     no-undo .
+  define output parameter p-vss-description like vss-description no-undo .
+  assign
+    p-vss-revision    = vss-revision
+    p-vss-author      = vss-author
+    p-vss-date        = vss-date
+    p-vss-workfile    = vss-workfile
+    p-vss-archive     = vss-archive
+    p-vss-description = vss-description
+  .
+end procedure.
+procedure vss-get-parameters :
+  define output parameter p-vss-parameters as character no-undo .
+end procedure.
+define new global shared variable g#vssrevis-logger as handle    no-undo .
+define variable v-vssrevis-logevent                 as logical   no-undo init false .
+define variable v-vssrevis-logger                   as handle    no-undo .
+procedure vss-logevent :
+  define input  parameter p-extra-paramters as character no-undo .
+  define variable v-vssrevis-parameters as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if  valid-handle(v-vssrevis-logger)
+    and v-vssrevis-logger :get-signature("logevent") <> ""
+    then do:
+      run vss-get-parameters in this-procedure
+        (output v-vssrevis-parameters
+        ).
+      run logevent in v-vssrevis-logger
+        (input vss-workfile
+        ,input vss-revision
+        ,input v-vssrevis-parameters
+        ,input p-extra-paramters
+        ).
+    end.
+  end.
+end procedure.
+assign
+  v-vssrevis-logger = g#vssrevis-logger
+.
+if  valid-handle(v-vssrevis-logger)
+and v-vssrevis-logger :get-signature("logevent") <> ""
+then do:
+  assign
+    v-vssrevis-logevent = true
+  .
+  run vss-logevent in this-procedure (input vss-description) .
+end.
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable v-waitfram-action01         as character   no-undo .
+define variable v-waitfram-action02         as character   no-undo .
+define variable v-waitfram-action03         as character   no-undo .
+define variable mWaitFramTextBeg            as character   no-undo.
+define variable mWaitFramTextEnd            as character   no-undo.
+define variable mWaitFramView               as logical     no-undo.
+define variable mWaitProcEvent              as logical     no-undo init yes.
+define variable mWaitFramInterval           as integer     no-undo init 1 .
+define variable mWaitFramStop               as logical     no-undo.
+define variable mWaitFramStopUser           as logical     no-undo.
+define variable mWaitFramStopTimeOut        as logical     no-undo.
+define variable mWaitFramStartProc          as datetime-tz no-undo.
+define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+define button B-WaitFramStop auto-end-key
+     label "Стоп"
+     size 10 by 1 tooltip "Остоновить процесс".
+define button B-viewProcInfo
+     label "Информация"
+     size 15 by 1 tooltip "Информация о процесс".
+define frame waitfram
+  v-waitfram-action01 format "x(72)" no-label skip
+  v-waitfram-action02 format "x(72)" no-label skip
+  v-waitfram-action03 format "x(72)" no-label skip
+  B-viewProcInfo
+  B-WaitFramStop at row 4 col 30
+  with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+  .
+define new global shared variable mBatchMode as logical no-undo init ?.
+define variable mFramBachModHandle as handle no-undo.
+mFramBachModHandle = frame waitfram:handle.
+define variable mFameOldVis as logical no-undo.
+define variable mVisCUrentVin as logical no-undo.
+if session:batch-mode
+then
+   mBatchMode = yes.
+if mBatchMode = ? then do:
+  mVisCUrentVin = current-window:visible.
+  mFameOldVis = mFramBachModHandle:visible.
+  mFramBachModHandle:visible  = yes.
+  mBatchMode = mFramBachModHandle:visible ne yes.
+  mFramBachModHandle:visible = mFameOldVis.
+  current-window:visible = mVisCUrentVin.
+end.
+ if  log-manager:logfile-name ne ?
+  then DO:
+      log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+  end.
+on choose of B-WaitFramStop in frame waitfram
+do:
+  mWaitFramStop = yes.
+  mWaitFramStopUser = yes.
+end.
+function waitfram-check-timeout returns logical():
+   define variable vtime as int64 no-undo.
+   if mWaitFramStopTimeOut
+   then
+      return yes.
+   vtime = ( now - mWaitFramStartProc ) / 1000 .
+   if     mWaitFramTimeOut ne ?
+      and mWaitFramTimeOut ne 0
+      and mWaitFramTimeOut lt vtime
+   then do:
+      mWaitFramStopTimeOut = yes.
+   end.
+   return mWaitFramStopTimeOut.
+end.
+procedure waitfram-hide :
+  if not session:batch-mode
+  then do
+  on error undo, return error return-value
+  :
+    pause 0 before-hide .
+    if not mBatchMode then
+      hide frame waitfram .
+  if     not mWaitFramView
+     and mWaitProcEvent
+  then
+    process events .
+  end.
+end procedure.
+procedure waitfram-show :
+  define input  parameter p-message as character no-undo .
+  define variable v-left-margin as integer   no-undo .
+  if not session:batch-mode
+  then do
+  on error undo, return error return-value
+  :
+    if length(p-message) <= 70 then do:
+      assign
+        v-left-margin = integer((70 - length(p-message)) / 2)
+      .
+      assign
+        v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      .
+      assign
+        v-waitfram-action01 = " "
+        v-waitfram-action02 = " "
+                                 + fill(" ", v-left-margin)
+                                 + p-message
+        v-waitfram-action03 = " "
+      .
+    end.
+    else do:
+      define variable vRindex1 as integer no-undo.
+      define variable vRindex2 as integer no-undo.
+      vRindex1 = r-index(p-message," ",70).
+      if vRindex1 = 0
+      then
+         vRindex1 = 70.
+      if length(p-message)  <= vRindex1 + 70 then do:
+        assign
+          v-waitfram-action01 = " "
+          v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+          v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+        .
+      end.
+      else do:
+        vRindex2 = r-index(p-message," ",vRindex1 + 70).
+        if vRindex2 <= vRindex1
+        then
+           vRindex2 = vRindex1 + 70.
+        assign
+          v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+          v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+          v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+        .
+      end.
+    end.
+    B-viewProcInfo:visible   in frame waitfram = no.
+    B-viewProcInfo:sensitive in frame waitfram = no.
+    B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+    B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+    if  (   mWaitFramView
+       or  mWaitProcEvent)
+       and not mBatchMode
+    then
+       display
+          v-waitfram-action01 skip
+          v-waitfram-action02 skip
+          v-waitfram-action03 skip
+       with frame waitfram .
+    if     mWaitFramView
+       then do:
+          if     mWaitFramInterval ne ?
+             and not mBatchMode
+          then
+             wait-for go of frame waitfram pause mWaitFramInterval.
+       end.
+       else
+          if     mWaitProcEvent
+             and not mBatchMode
+          then
+             process events .
+  end.
+end procedure.
+   procedure waitfram-show-this:
+      define input  parameter iInterval as int64 no-undo.
+      define variable vtime as int64 no-undo.
+      vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      mWaitFramInterval = iInterval.
+      run waitfram-show (substitute("&1&2 &3&4" ,
+                                    mWaitFramTextBeg ,
+                                    if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+                                    if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+                                    mWaitFramTextEnd
+                                   )
+                        ).
+   end.
+   procedure WaitFramRunPause:
+      define input  parameter iInterval as dec no-undo.
+      define variable vStart  as datetime-tz no-undo.
+      define variable vend    as datetime-tz no-undo.
+      define variable vint as int64 no-undo.
+      define variable vOk as logical no-undo.
+      vStart = now.
+      vend   = vStart.
+      publish "WaitFramPause" (iInterval,output vOk).
+      vend   =  now.
+      vint = vend - vStart.
+      vint = iInterval - vint / 1000.
+      if     not mWaitFramStop
+         and (   vint > 0
+              or (    not vOk
+                  and iInterval eq ?
+                  )
+              )
+      then
+         run waitfram-show-this (iInterval).
+      vend   =  now.
+      vint = vend - vStart.
+      vint = iInterval - vint / 1000.
+      if     not mWaitFramStop
+         and vint > 0
+      then do:
+         run gbl/pause.p (vint * 1000).
+      end.
+      if iInterval ne ?
+      then
+         publish "WaitFramStop".
+      waitfram-check-timeout().
+   end.
+   procedure WaitFramWaitFor:
+      define input  parameter iInterval as dec no-undo.
+      assign
+         mWaitFramStartProc   = now
+         mWaitFramStopUser    = no
+         mWaitFramStopTimeOut = no
+      .
+      block-wait:
+      do while not mWaitFramStop:
+         run WaitFramRunPause (iInterval).
+         if  waitfram-check-timeout()
+         then do:
+            leave block-wait.
+         end.
+      end.
+      run waitfram-hide.
+   end.
+procedure waitfram-join :
+  define input  parameter p-line-1  as character no-undo .
+  define input  parameter p-line-2  as character no-undo .
+  define input  parameter p-line-3  as character no-undo .
+  define output parameter p-message as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+                + substring(p-line-2 + fill(' ', 70), 1, 70)
+                + substring(p-line-3 + fill(' ', 70), 1, 70)
+    .
+  end.
+end procedure.
+function waitfram-join-function returns character
+  (input p-line-1 as character
+  ,input p-line-2 as character
+  ,input p-line-3 as character
+  ).
+  define variable v-message as character no-undo .
+  run waitfram-join in this-procedure
+    (input  p-line-1
+    ,input  p-line-2
+    ,input  p-line-3
+    ,output v-message
+    ) .
+  return v-message .
+end function .
+define new global shared variable g#language as character no-undo .
+if g#language <> '' and g#language <> 'rus':U then do:
+  undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+end.
+define new global shared variable g#library  as handle no-undo .
+define new global shared variable g#library2 as handle no-undo .
+procedure proc-alt-shift-f2:
+  if not ibs.th.gbl.gbl-var:rcode
+then
+  run gbl\inidebug.p .
+end.
+procedure proc-alt-shift-f3:
+  run gbl/prvssinf.p
+    ( input this-procedure
+    ) .
+end.
+define variable v-inform-launched as logical no-undo initial false .
+procedure proc-alt-shift-f4:
+  define variable v-action as character no-undo .
+  if v-inform-launched = false then do:
+    assign
+      v-inform-launched = true
+    .
+    run gbl/d-inform.w
+      (  input self
+      ,  input this-procedure
+      , output v-action
+      ) no-error .
+    run gbl/infrmact.p (input self, input this-procedure, input v-action) no-error .
+    assign
+      v-inform-launched = false
+    .
+  end.
+end.
+procedure proc-alt-f1:
+  run gbl/corrhelp.p
+    (input this-procedure
+    ) .
+end .
+on alt-shift-f2 anywhere do:
+  run proc-alt-shift-f2.
+end.
+on alt-shift-f3 anywhere do:
+  run proc-alt-shift-f3 in this-procedure .
+end.
+on alt-shift-f4 anywhere do:
+  run proc-alt-shift-f4 in this-procedure.
+end.
+on alt-f1 anywhere do:
+  run proc-alt-f1 in this-procedure .
+end.
+define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+FUNCTION mark-string RETURNS CHARACTER
+  ( input p-recid as recid, input mark-list as character  ) :
+  RETURN ( IF LOOKUP( STRING( p-recid), mark-list ) > 0 THEN '*' ELSE '':U ).
+END FUNCTION.
+define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  define variable v-cntxt-db-num        as integer   no-undo .
+  define variable v-cntxt-userid        as character no-undo .
+  define variable v-cntxt-level         as character no-undo .
+  define variable v-cntxt-host-code-obj as integer   no-undo .
+  define variable v-cntxt-obj-type      as character no-undo .
+  define variable v-cntxt-obj-code      as integer   no-undo .
+  define variable v-cntxt-db-num-obj    as integer   no-undo .
+  define variable v-cntxt-is-admin      as logical   no-undo .
+define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable c-point  as character no-undo .
+define variable tbl      as character no-undo .
+define variable join-tbl as character no-undo .
+define variable fld      as character no-undo .
+define variable lab      as character no-undo .
+define variable spr      as character no-undo .
+define variable dim      as character no-undo .
+define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure fltfield-clear :
+  define output parameter loc-fld as character no-undo.
+  define output parameter loc-lab as character no-undo .
+  define output parameter loc-spr as character no-undo .
+  define output parameter loc-dim as character no-undo .
+  assign
+    loc-fld = ""
+    loc-lab = ""
+    loc-spr = ""
+    loc-dim = "0"
+  .
+end procedure .
+procedure fltfield-add :
+  define input        parameter par-fld as character no-undo.
+  define input        parameter par-lab as character no-undo .
+  define input        parameter par-spr as character no-undo .
+  define input-output parameter loc-fld as character no-undo.
+  define input-output parameter loc-lab as character no-undo .
+  define input-output parameter loc-spr as character no-undo .
+  define input-output parameter loc-dim as character no-undo .
+  do
+  on error undo, return error
+  :
+    assign
+    loc-fld = if loc-dim = '0'
+              then par-fld
+              else (loc-fld + chr(44) + par-fld)
+    loc-lab = if loc-dim = '0'
+              then par-lab
+              else (loc-lab + chr(44) + par-lab)
+    loc-spr = if loc-dim = '0'
+              then par-spr
+              else (loc-spr + chr(44) + par-spr)
+    loc-dim = (if num-entries(loc-dim) > 1 then (entry(1, loc-dim) + chr(44)) else "") +
+              string(integer(if num-entries(loc-dim) > 1
+                            then entry(2, loc-dim)
+                            else entry(1, loc-dim)
+                            ) + 1)
+    no-error
+    .
+  end.
+end procedure.
+define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define  shared variable PrintCopiesCounter as integer   no-undo initial 1 .
+define  shared variable RepPathName        as character no-undo .
+define  shared variable PrintRubl          as logical   no-undo .
+define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define  stream PrnLibStream.
+procedure prn-lib-prn-file :
+  define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+  define input parameter p-DIsabledoptions as integer no-undo .
+  define variable v-report-name as character no-undo .
+  define variable v-user-action as character no-undo .
+  define variable v-printed     as logical   no-undo .
+  define variable v-exist       as logical   no-undo .
+  do
+    on error undo, return error
+    :
+    run prn-lib-get-report-name  in this-procedure (
+      input parParentProc
+      ,output v-report-name
+      ).
+define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run filenmln in g#library
+  (input  v-report-name
+  ,input  2
+  ,output v-exist
+  )  .
+    if NOT v-exist then
+    DO:
+      Message
+        "Нет заданий на печать ! "
+        view-as alert-box .
+      Return  .
+    End.
+    run gbl/prnfilen.w
+      (input  ""
+      ,input  p-DisabledOptions
+      ,input  string(v-report-name )
+      ,input  7
+      ,output v-user-action
+      ,output v-printed
+      ) .
+    if v-printed then
+    do:
+      return "YES" .
+    end.
+    else
+    do:
+      return "NO" .
+    end.
+  end.
+end procedure.
+procedure prn-lib-open-stream :
+  define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+  define input parameter p-page-size    as integer no-undo .
+  define input parameter p-is-stream    as logical no-undo .
+  define input parameter p-append       as logical no-undo .
+  define variable v-report-name as character no-undo .
+  do
+    on error undo, return error
+    :
+    run prn-lib-get-report-name  in this-procedure (
+      input parParentProc
+      ,output v-report-name
+      ).
+    if p-is-stream then
+    do:
+      if p-append then
+      do:
+        output stream PrnLibStream to value( v-report-name )
+          page-size value(p-page-size) append .
+      end.
+      if not p-append then
+      do:
+        output stream PrnLibStream to value( v-report-name )
+          page-size value(p-page-size) .
+      end.
+    end.
+    if not p-is-stream then
+    do:
+      if p-append then
+      do:
+        output to value( v-report-name )
+          page-size value(p-page-size) append .
+      end.
+      if not p-append then
+      do:
+        output to value( v-report-name )
+          page-size value(p-page-size) .
+      end.
+    end.
+  end.
+end procedure.
+procedure prn-lib-open-exp :
+  define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+  define input parameter p-is-stream    as logical no-undo .
+  define input parameter p-is-append    as logical no-undo .
+  define output parameter p-ReportFileName as char init "report" no-undo.
+  define output parameter p-process as logical no-undo .
+  define variable glog as logical no-undo .
+  do
+    on error undo, return error
+    :
+    SYSTEM-DIALOG GET-FILE p-ReportFileName
+      TITLE      "Укажите путь"
+      FILTERS "Текстовый файл (*.txt)"   "*.txt"
+      ASK-OVERWRITE
+      CREATE-TEST-FILE
+      SAVE-AS
+      USE-FILENAME
+      DEFAULT-EXTENSION "txt"
+      UPDATE glog
+      .
+    if not glog then  return.
+    p-ReportFileName = trim( string( p-ReportFileName ) ) .
+    if p-is-stream then
+    do:
+      if p-is-append then
+      do:
+        OUTPUT stream PrnLibStream TO value ( p-ReportFileName ) PAGE-SIZE 0 append.
+      end.
+      else
+      do:
+        OUTPUT stream PrnLibStream TO value ( p-ReportFileName ) PAGE-SIZE 0.
+      end.
+    end.
+    else
+    do:
+      if p-is-append then
+      do:
+        OUTPUT TO value ( p-ReportFileName ) PAGE-SIZE 0 append.
+      end.
+      else
+      do:
+        OUTPUT TO value ( p-ReportFileName ) PAGE-SIZE 0.
+      end.
+    end.
+    p-process = yes.
+  end.
+end procedure.
+procedure prn-lib-get-report-name :
+  define input parameter parParentProc  as widget-handle no-undo.
+  define output parameter p-report-name as character no-undo .
+  p-report-name = ibs.th.gbl.gbl-inipar:prn-lib-get-report-name("rpt").
+end procedure.
+procedure prn-lib-reportviewer-report-name :
+  define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+  define input parameter p-report-name-html as character no-undo .
+  ibs.th.gbl.gbl-inipar:prn-lib-reportviewer-report-name(p-report-name-html) no-error.
+end procedure.
+procedure prn-lib-reportviewer :
+  define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+  define input parameter p-report-name-html as character no-undo .
+  define input parameter p-param        as character no-undo .
+  define variable v-excel           as character no-undo init 'TRUE' .
+  define variable v-value-character as character no-undo .
+  define variable v-value-integer   as character no-undo .
+  define variable v-value-date      as date      no-undo .
+  define variable v-value-decimal   as decimal   no-undo .
+  define variable rep-excel         as logical   no-undo .
+  define variable excel-string      as character no-undo .
+  define variable v-param-type      as character no-undo .
+  define variable v-tth             as handle    no-undo .
+  run adm/shattri.p (
+    input "get":U
+    ,input  ""
+    ,input  0
+    ,input  'report-glob':U
+    ,input  'rep-excel':U
+    ,output v-value-character
+    ,output v-value-date
+    ,output v-value-decimal
+    ,output v-value-integer
+    ,output rep-excel
+    ,output v-param-type
+    ,INPUT-OUTPUT table-handle v-tth
+    )  .
+  if rep-excel then v-excel = "TRUE" .
+  else v-excel = "FALSE" .
+  if p-param eq ""
+  then
+     p-param = "EXCEL:" + v-excel.
+  else
+     p-param = p-param + chr(4) + "EXCEL:" + v-excel .
+  ibs.th.gbl.gbl-inipar:prn-lib-reportviewer(p-report-name-html, p-param).
+end procedure.
+define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure cur-time :
+   define output parameter p-today as date      no-undo .
+   define output parameter p-time  as integer   no-undo .
+  do
+  on error undo, return error
+  :
+    define variable v-date1 as date      no-undo .
+    define variable v-date2 as date      no-undo .
+    define variable v-time  as integer   no-undo .
+    assign
+      v-date1 = today
+      v-time  = time
+      v-date2 = today
+    .
+    if v-date1 <> v-date2
+    then do:
+      assign
+        v-date1 = today
+        v-time  = v-time
+      .
+    end.
+    assign
+      p-today = v-date1
+      p-time  = v-time
+    .
+  end.
+end.
+function cur-time-date returns character
+:
+  return string(today, '99/99/9999':U) .
+end.
+function cur-time-mjd returns decimal
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return integer(v-date) - 2400002 + (v-time / 86400) .
+end.
+function cur-time-get-ending-index returns integer
+(input p-number as integer
+)
+:
+  if p-number < 0
+  or p-number = ?
+  then do:
+    return 1 .
+  end.
+  define variable v-rest as integer   no-undo .
+  assign
+    p-number = p-number modulo 100
+  .
+  if p-number < 20
+  then do:
+    assign
+      v-rest = p-number
+    .
+  end.
+  else do:
+    assign
+      v-rest = p-number modulo 10
+    .
+  end.
+  case v-rest :
+    when 1
+    then do:
+      return 2 .
+    end.
+    when 2 or
+    when 3 or
+    when 4
+    then do:
+      return 3 .
+    end.
+    otherwise do:
+      return 1 .
+    end.
+  end case .
+end.
+procedure cur-time-mjd-to-date :
+   define input  parameter i-mjd-diff as decimal no-undo.
+   define output parameter o-Date     as date    no-undo.
+   define output parameter o-Time     as integer no-undo.
+   define variable v-day-number as integer   no-undo .
+   if    i-mjd-diff < 0
+      or i-mjd-diff = ?
+   then do:
+      return "?" .
+   end.
+   assign
+      v-day-number = truncate(i-mjd-diff,0).
+      o-Date = date(v-day-number + 2400002).
+      o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+  .
+end.
+function cur-time-mjd-to-string returns character
+(input p-mjd-diff as decimal
+)
+:
+  define variable v-day-number as integer   no-undo .
+  define variable v-seconds    as integer   no-undo .
+  define variable v-hour       as integer   no-undo .
+  define variable v-min        as integer   no-undo .
+  define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+  define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+  define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+  define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+  if p-mjd-diff < 0
+  or p-mjd-diff = ?
+  then do:
+    return "?" .
+  end.
+  assign
+    v-day-number = integer(truncate(p-mjd-diff,0))
+    v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+  .
+  if v-seconds > 86400
+  then do:
+    assign
+      v-seconds = 86400 - 1
+    .
+  end.
+  if v-seconds < 0
+  then do:
+    assign
+      v-seconds = 0
+    .
+  end.
+  assign
+    v-hour = truncate(v-seconds / 3600, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 3600
+  .
+  assign
+    v-min = truncate(v-seconds / 60, 0)
+  .
+  assign
+    v-seconds = v-seconds modulo 60
+  .
+  return
+      (if v-day-number <> 0
+        then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0
+        then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+        else ""
+      )
+    + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+        then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+        else ""
+      )
+    + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+    .
+end.
+function cur-time-string returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-string-sec returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+end.
+function cur-time-custom  returns character
+(input p-prefix as character
+,input p-date-format as character
+,input p-delimiter as character
+,input p-time-format as character
+,input p-suffix as character
+)
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return
+    p-prefix
+    + string(v-date, p-date-format)
+    + p-delimiter
+    + string(v-time, p-time-format)
+    + p-suffix
+    .
+end.
+function cur-time-print  returns character
+:
+  define variable v-date as date      no-undo .
+  define variable v-time as integer   no-undo .
+  run cur-time in this-procedure
+    (output v-date
+    ,output v-time
+    ) .
+  return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+end.
+function cur-time-datetime returns datetime
+:
+  define variable v-char as character no-undo .
+  define variable v-datetime as datetime no-undo .
+  v-char = cur-time-string().
+  v-datetime = datetime(v-char).
+  return  v-datetime.
+end.
+function cur-time-string-msec returns character
+:
+  define variable v-date as datetime  no-undo .
+  v-date = now.
+  return string(v-date) .
+end.
+define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable v-fltopend-rowid as rowid extent 18 no-undo .
+procedure fltopend_fltopend :
+define input parameter p-parent-handle as handle no-undo .
+define input parameter p-qh as handle no-undo .
+define input parameter p-flt-open-open-query  as character no-undo .
+define input parameter p-where-cond as character no-undo .
+define input parameter p-use-indFIRST-query-tail as character no-undo .
+define input parameter p-use-ind-sort-clmn-by as character no-undo .
+define input parameter p-indexed-reposition as character no-undo .
+  do
+  on error undo, return error
+  :
+define variable v-prepare-string as character no-undo .
+define variable glog as logical no-undo .
+assign
+v-prepare-string = p-flt-open-open-query + " where " + chr(32) +
+                   p-where-cond + chr(32)  +
+                   p-use-indFIRST-query-tail + chr(32) +
+                   p-use-ind-sort-clmn-by + chr(32) +
+                   p-indexed-reposition
+.
+assign
+glog = p-qh:query-prepare(v-prepare-string) no-error .
+if not glog
+or error-status:error then do:
+  message error-status:get-message(1) view-as alert-box .
+  undo, return error .
+end.
+assign
+glog = p-qh:query-open no-error .
+if not glog
+or error-status:error then do:
+  message error-status:get-message(1) view-as alert-box .
+  undo, return error .
+end.
+  end.
+end procedure.
+procedure fltopend_fltfindd :
+define input parameter p-parent-handle as handle no-undo .
+define input parameter p-qh as handle no-undo .
+define input parameter p-rowid as rowid no-undo .
+define input parameter p-next as logical no-undo .
+define input parameter p-lock as integer no-undo .
+define input parameter p-bh as handle no-undo .
+define input parameter p-where-cond as character no-undo .
+define input parameter p-use-index-phrase as character no-undo .
+define variable glog as logical no-undo .
+define variable v-qh as handle no-undo .
+define variable v-bh as handle no-undo .
+define variable v-recid as recid no-undo .
+define variable v-prepare-string as character no-undo .
+do
+on error undo, return error
+on stop undo, return error
+:
+  glog = p-bh:find-by-rowid( p-rowid, p-lock) no-error.
+  create buffer v-bh for table p-bh buffer-name p-bh:name.
+  create query v-qh.
+  v-qh:set-buffers(v-bh).
+  v-prepare-string = substitute("for each &1 &2 &3"
+                                  ,v-bh:name
+                                  ,p-where-cond
+                                  ,p-use-index-phrase).
+  glog = v-qh:query-prepare(v-prepare-string) no-error.
+  if not glog then do:
+    delete object v-qh.
+    delete object v-bh.
+    undo, return error .
+  end.
+  glog = v-qh:query-open no-error .
+  if not glog then do:
+    delete object v-qh.
+    delete object v-bh.
+    undo, return error .
+  end.
+  if p-next then do:
+    v-qh:reposition-to-rowid(p-rowid) no-error .
+    glog = v-qh:get-next( p-lock) no-error .
+    glog = v-qh:get-next( p-lock) no-error .
+    if not glog or v-qh:query-off-end = yes then do:
+      glog = v-qh:get-first( p-lock) no-error .
+    end.
+  end.
+  else do:
+    glog = v-qh:get-first( p-lock) no-error .
+  end.
+  v-recid = v-bh:recid no-error .
+  delete object v-qh.
+  delete object v-bh.
+  return string(v-recid) .
+end.
+end procedure.
+procedure fltopend_fltfindq :
+define input parameter p-parent-handle as handle no-undo .
+define input parameter p-qh as handle no-undo .
+define input parameter p-next as logical no-undo .
+define input parameter p-lock as integer no-undo .
+define input parameter p-flt-open-open-query  as character no-undo .
+define input parameter p-where-cond as character no-undo .
+define input parameter p-use-indFIRST-query-tail as character no-undo .
+define input parameter p-use-ind-sort-clmn-by as character no-undo .
+define input parameter p-indexed-reposition as character no-undo .
+define output parameter p-fltopend-rowid as rowid extent 18 no-undo .
+define variable glog as logical no-undo .
+define variable v-qh as handle no-undo .
+define variable v-bh as handle no-undo extent 18.
+define variable v-rowid as rowid no-undo extent 18.
+define variable v-ii as integer no-undo .
+define variable v-prepare-string as character no-undo .
+do
+on error undo, return error
+on stop undo, return error
+:
+  create query v-qh.
+  do v-ii = 1 to p-qh:num-buffers:
+    create buffer v-bh[v-ii] for table p-qh:get-buffer-handle(v-ii) buffer-name p-qh:get-buffer-handle(v-ii):name .
+    assign
+    v-rowid[v-ii] = p-qh:get-buffer-handle(v-ii):rowid
+    no-error.
+    v-qh:add-buffer(v-bh[v-ii]).
+  end.
+  assign
+  v-prepare-string = p-flt-open-open-query + " where " + chr(32) +
+                    p-where-cond + chr(32)  +
+                    p-use-indFIRST-query-tail + chr(32) +
+                    p-use-ind-sort-clmn-by + chr(32) +
+                    p-indexed-reposition
+  .
+  glog = v-qh:query-prepare( v-prepare-string) no-error .
+  if not glog then do:
+    delete object v-qh.
+    do v-ii = 1 to p-qh:num-buffers:
+      delete object v-bh[v-ii].
+    end.
+    undo, return error .
+  end.
+  glog = v-qh:query-open no-error .
+  if not glog then do:
+    delete object v-qh.
+    do v-ii = 1 to p-qh:num-buffers:
+      delete object v-bh[v-ii].
+    end.
+    undo, return error .
+  end.
+  if p-next then do:
+    glog = v-qh:reposition-to-rowid(v-rowid) no-error .
+    glog = v-qh:get-next( p-lock) no-error .
+    glog = v-qh:get-next( p-lock) no-error .
+    if not glog or v-qh:query-off-end = yes then do:
+      glog = v-qh:get-first( p-lock) no-error .
+    end.
+  end.
+  else do:
+    glog = v-qh:get-first( p-lock) no-error .
+  end.
+  do v-ii = 1 to p-qh:num-buffers:
+    assign
+    p-fltopend-rowid[v-ii] = v-bh[v-ii]:rowid
+    no-error.
+  end.
+  delete object v-qh.
+  do v-ii = 1 to p-qh:num-buffers:
+    delete object v-bh[v-ii].
+  end.
+end.
+end procedure.
+DEFINE VARIABLE v-doc-rec AS RECID NO-UNDO.
+DEFINE VARIABLE link-option AS CHARACTER NO-UNDO.
+define variable v-rid-list as character no-undo .
+define variable sort-column-name as character no-undo .
+define variable v-list-mode as character no-undo .
+define variable filter-point-label as character no-undo init "Итоги по ДК" .
+define variable filter-point0 as character no-undo init "dis-tots" .
+define variable filter-point as character no-undo init "dis-tots" .
+DEFINE BUFFER buf_prop-head FOR ub.prop-head.
+DEFINE BUFFER buf_prop-ref FOR ub.prop-ref.
+DEFINE BUTTON b-card
+     LABEL "Карта"
+     SIZE 10 BY 1.
+DEFINE BUTTON b-dt-code
+     IMAGE-UP FILE "btn-down-arrow":U
+     IMAGE-DOWN FILE "btn-down-arrow":U
+     IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+     LABEL "Btn 3"
+     SIZE 3 BY 1.
+DEFINE BUTTON b-dtm-code
+     IMAGE-UP FILE "btn-down-arrow":U
+     IMAGE-DOWN FILE "btn-down-arrow":U
+     IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+     LABEL "Btn 3"
+     SIZE 3 BY 1.
+DEFINE BUTTON B-Help
+     LABEL "Помо&щь"
+     SIZE 3 BY 1
+     BGCOLOR 8 .
+DEFINE BUTTON b-history
+     LABEL "Ис&тория"
+     SIZE 3 BY 1
+     BGCOLOR 8 .
+DEFINE BUTTON b-lkp
+     LABEL "&Просмотр"
+     SIZE 10 BY 1.
+DEFINE BUTTON b-mark
+     LABEL "&*"
+     SIZE 4 BY 1.
+DEFINE BUTTON B-print
+     LABEL "Пе&чать"
+     SIZE 3 BY 1.
+DEFINE BUTTON b-quit AUTO-END-KEY
+     LABEL "&Выход"
+     SIZE 10 BY 1
+     BGCOLOR 8 .
+DEFINE BUTTON b-sch
+     LABEL "&Фильтр"
+     SIZE 3 BY 1.
+DEFINE BUTTON b-sel AUTO-GO
+     LABEL "Выбор"
+     SIZE 10 BY 1.
+DEFINE VARIABLE f-dt-code AS INTEGER FORMAT "->,>>>,>>9":U INITIAL 0
+     LABEL "Код итога"
+     VIEW-AS FILL-IN NATIVE
+     SIZE 8.5 BY 1 NO-UNDO.
+DEFINE VARIABLE f-dtm-code AS INTEGER FORMAT "->,>>>,>>9":U INITIAL 0
+     LABEL "Код объекта"
+     VIEW-AS FILL-IN NATIVE
+     SIZE 8.5 BY 1 NO-UNDO.
+DEFINE VARIABLE f-dtm-name AS CHARACTER FORMAT "X(256)":U
+     VIEW-AS FILL-IN NATIVE
+     SIZE 72.5 BY 1
+     FGCOLOR 4  NO-UNDO.
+DEFINE VARIABLE f-sum-id AS CHARACTER FORMAT "X(256)":U
+     VIEW-AS FILL-IN NATIVE
+     SIZE 31.5 BY 1
+     FGCOLOR 4  NO-UNDO.
+DEFINE VARIABLE mark-num AS INTEGER FORMAT "->,>>>,>>9":U INITIAL 0
+      VIEW-AS TEXT
+     SIZE 9 BY .67
+     FGCOLOR 10  NO-UNDO.
+DEFINE VARIABLE rs-curr AS CHARACTER
+     VIEW-AS RADIO-SET HORIZONTAL
+     RADIO-BUTTONS
+          "Нац.вал.", "1",
+"Баз.вал.", "2",
+"Нац.вал.и баз.вал.", "3"
+     SIZE 40.5 BY 1 NO-UNDO.
+DEFINE VARIABLE rs-region AS CHARACTER
+     VIEW-AS RADIO-SET HORIZONTAL
+     RADIO-BUTTONS
+          "Объекты", "1",
+"Фирмы", "2",
+"Глобально", "3"
+     SIZE 30 BY 1 NO-UNDO.
+DEFINE QUERY br-dis-tot_ FOR
+                X_dis-tot_,
+                X_prop-ref_ SCROLLING.
+DEFINE QUERY br-dis-tot_host FOR
+                X_dis-tot_host,
+                X_prop-ref_host SCROLLING.
+DEFINE QUERY br-dis-tot_obj FOR X_dis-tot_obj, X_prop-ref_obj scrolling.
+DEFINE BROWSE br-dis-tot_
+  QUERY br-dis-tot_ NO-LOCK DISPLAY
+      mark-string(recid(X_dis-tot_), v-rid-list) Format "X(1)" COLUMN-LABEL "*"
+X_prop-ref_.sum-id COLUMN-LABEL "Идентификатор"
+X_prop-ref_.caller_id COLUMN-LABEL "Доп!Идентификатор"
+X_prop-ref_.dtm-code COLUMN-LABEL "Код!объекта-!операнда" format ">>9"
+X_dis-tot_.d-card COLUMN-LABEL "№ ДК" FORMAT "X(19)"
+X_dis-tot_.gds-tot-rubl COLUMN-LABEL "Сумма товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.gds-dis-rubl COLUMN-LABEL "Скидка товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.pay-tot-rubl COLUMN-LABEL "Сумма оплат!нац.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_.gds-tot-base COLUMN-LABEL "Сумма товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.gds-dis-base COLUMN-LABEL "Скидка товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.pay-tot-base COLUMN-LABEL "Сумма оплат!баз.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_.num-chk COLUMN-LABEL "Число чеков" format "->>>,>>9"
+    WITH NO-ROW-MARKERS SEPARATORS SIZE 97 BY 18.87 FIT-LAST-COLUMN.
+DEFINE BROWSE br-dis-tot_host
+  QUERY br-dis-tot_host NO-LOCK DISPLAY
+      mark-string(recid(X_dis-tot_host), v-rid-list) Format "X(1)" COLUMN-LABEL "*"
+X_prop-ref_host.sum-id COLUMN-LABEL "Идентификатор"
+X_prop-ref_host.caller_id COLUMN-LABEL "Доп!Идентификатор"
+X_prop-ref_host.dtm-code COLUMN-LABEL "Код!объекта-!операнда" format ">>9"
+X_dis-tot_host.d-card COLUMN-LABEL "№ ДК" FORMAT "X(19)"
+X_dis-tot_host.host-code COLUMN-LABEL "Код!фирмы" FORMAT ">>>>9"
+X_dis-tot_host.gds-tot-rubl COLUMN-LABEL "Сумма товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.gds-dis-rubl COLUMN-LABEL "Скидка товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.pay-tot-rubl COLUMN-LABEL "Сумма оплат!нац.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_host.gds-tot-base COLUMN-LABEL "Сумма товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.gds-dis-base COLUMN-LABEL "Скидка товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.pay-tot-base COLUMN-LABEL "Сумма оплат!баз.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_host.num-chk COLUMN-LABEL "Число чеков" format "->>>,>>9"
+    WITH NO-ROW-MARKERS SEPARATORS SIZE 97 BY 18.87 FIT-LAST-COLUMN.
+DEFINE BROWSE br-dis-tot_obj
+  QUERY br-dis-tot_obj NO-LOCK DISPLAY
+      mark-string(recid(X_dis-tot_obj), v-rid-list) Format "X(1)" COLUMN-LABEL "*"
+X_prop-ref_obj.sum-id COLUMN-LABEL "Идентификатор"
+X_prop-ref_obj.caller_id COLUMN-LABEL "Доп!Идентификатор"
+X_prop-ref_obj.dtm-code COLUMN-LABEL "Код!объекта-!операнда" format ">>9"
+X_dis-tot_obj.d-card COLUMN-LABEL "№ ДК" FORMAT "X(19)"
+X_dis-tot_obj.obj-code COLUMN-LABEL "Код!объекта" FORMAT ">>>>9"
+X_dis-tot_obj.obj-type COLUMN-LABEL "Тип!объекта" FORMAT "X(3)"
+X_dis-tot_obj.gds-tot-rubl COLUMN-LABEL "Сумма товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.gds-dis-rubl COLUMN-LABEL "Скидка товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.pay-tot-rubl COLUMN-LABEL "Сумма оплат!нац.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_obj.gds-tot-base COLUMN-LABEL "Сумма товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.gds-dis-base COLUMN-LABEL "Скидка товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.pay-tot-base COLUMN-LABEL "Сумма оплат!баз.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_obj.num-chk COLUMN-LABEL "Число чеков" format "->>>,>>9"
+    WITH NO-ROW-MARKERS SEPARATORS SIZE 97 BY 18.87 FIT-LAST-COLUMN.
+DEFINE FRAME Dialog-Frame
+     b-quit AT ROW 1 COL 1
+     b-mark AT ROW 1 COL 21 WIDGET-ID 12
+     b-sel AT ROW 1 COL 25 WIDGET-ID 10
+     rs-region AT ROW 1 COL 35 NO-LABEL WIDGET-ID 26
+     b-lkp AT ROW 1 COL 66 WIDGET-ID 6
+     b-card AT ROW 1 COL 76 WIDGET-ID 16
+     b-sch AT ROW 1 COL 86 WIDGET-ID 2
+     B-print AT ROW 1 COL 89 WIDGET-ID 20
+     b-history AT ROW 1 COL 92 WIDGET-ID 18
+     B-Help AT ROW 1 COL 95
+     f-dtm-code AT ROW 2 COL 1 WIDGET-ID 34
+     b-dtm-code AT ROW 2 COL 22.5 WIDGET-ID 32
+     f-dtm-name AT ROW 2 COL 25.5 NO-LABEL WIDGET-ID 30
+     f-dt-code AT ROW 3 COL 3 WIDGET-ID 36
+     b-dt-code AT ROW 3 COL 22.5 WIDGET-ID 38
+     f-sum-id AT ROW 3 COL 25.5 NO-LABEL WIDGET-ID 40
+     rs-curr AT ROW 3 COL 58 NO-LABEL WIDGET-ID 22
+     br-dis-tot_obj AT ROW 4 COL 1.5 WIDGET-ID 100
+     br-dis-tot_host AT ROW 4 COL 1.5 WIDGET-ID 200
+     br-dis-tot_ AT ROW 4 COL 1.5 WIDGET-ID 300
+     mark-num AT ROW 1 COL 9 COLON-ALIGNED NO-LABEL WIDGET-ID 14
+     SPACE(78.50) SKIP(21.21)
+    WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+         SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+         TITLE ""
+         CANCEL-BUTTON b-quit.
+ASSIGN
+       FRAME Dialog-Frame:SCROLLABLE       = FALSE
+       FRAME Dialog-Frame:HIDDEN           = TRUE.
+ON GO OF FRAME Dialog-Frame
+DO:
+  p-rid-list = v-rid-list.
+END.
+ON WINDOW-CLOSE OF FRAME Dialog-Frame
+DO:
+  APPLY "END-ERROR":U TO SELF.
+END.
+ON CHOOSE OF b-card IN FRAME Dialog-Frame
+DO:
+DEFINE VARIABLE v-d-card AS CHARACTER NO-UNDO.
+DEFINE variable v-ri as recid no-undo .
+define buffer buf_dis-card for ub.dis-card.
+CASE rs-region:
+  WHEN 'объект':U THEN DO:
+    IF NOT AVAILABLE X_dis-tot_obj THEN RETURN NO-APPLY.
+    v-d-card = X_dis-tot_obj.d-card.
+  END.
+  WHEN 'фирма':U THEN DO:
+    IF NOT AVAILABLE X_dis-tot_host THEN RETURN NO-APPLY.
+    v-d-card = X_dis-tot_host.d-card.
+  END.
+  WHEN "global" THEN DO:
+    IF NOT AVAILABLE X_dis-tot_ THEN RETURN NO-APPLY.
+    v-d-card = X_dis-tot_.d-card.
+  END.
+END CASE.
+find first buf_dis-card no-lock where
+           buf_dis-card.d-card = v-d-card no-error .
+if avail buf_dis-card then do:
+  assign
+  v-ri = recid( buf_dis-card )
+ .
+  run ref/dcardi.w (
+                input parparentproc
+              , input 'ПРОСМОТР':U
+              , input buf_dis-card.emitent-host-code
+              , input p-curr-host-code
+              , input p-curr-obj-type
+              , input p-curr-obj-code
+              , input ?
+              , input-output v-ri ) .
+END.
+END.
+ON CHOOSE OF b-dt-code IN FRAME Dialog-Frame
+DO:
+DEFINE variable v-ref-list AS CHARACTER NO-UNDO.
+DEFINE BUFFER buf_prop-ref FOR ub.prop-ref.
+run ref/proprefs.w (
+                input parparentproc
+              ,input 'b-sel'
+              ,input 'dis-tot':U
+              ,input (if f-dtm-code = ? then 0 else f-dtm-code)
+              ,input '':U
+              ,input '':U
+              ,input-output  v-ref-list) no-error.
+if error-status:error or v-ref-list = '':u then do:
+  v-list-mode = p-list-mode.
+  assign
+  f-dt-code = ?
+  f-sum-id = '':U.
+  DISPLAY
+  f-sum-id
+  f-dt-code
+  WITH FRAME Dialog-Frame.
+  run openbr in this-procedure ( input yes, input no, input '':U).
+  return.
+end.
+find first buf_prop-ref no-lock where
+          recid(buf_prop-ref) = integer(v-ref-list) no-error.
+if not available buf_prop-ref then return.
+if buf_prop-ref.dt-code = f-dtm-code then return no-apply.
+ASSIGN
+f-dt-code = buf_prop-ref.dt-code
+f-sum-id = buf_prop-ref.sum-id.
+DISPLAY
+f-sum-id
+f-dt-code
+WITH FRAME Dialog-Frame.
+v-list-mode ="dt-code".
+run openbr in this-procedure ( input yes, input no, input '':U).
+END.
+ON CHOOSE OF b-dtm-code IN FRAME Dialog-Frame
+DO:
+DEFINE VARIABLE v-rid-list AS CHARACTER NO-UNDO.
+DEFINE BUFFER buf_prop-head FOR ub.prop-head.
+ run rul/prop-head-s.w ( INPUT parparentproc
+                         ,INPUT "b-sel"
+                         ,input "general-view"
+                         ,input 'dis-card-type':U
+                         ,input-output v-rid-list ) NO-ERROR.
+ IF ERROR-STATUS:error OR v-rid-list = '':U THEN DO:
+    UNDO, RETURN NO-APPLY.
+ END.
+ FIND FIRST buf_prop-head NO-LOCK WHERE
+           recid(buf_prop-head) = INTEGER(v-rid-list) NO-ERROR.
+ IF NOT AVAILABLE buf_prop-head  THEN DO:
+  v-list-mode = p-list-mode.
+  run openbr in this-procedure ( input yes, input no, input '':U).
+  UNDO, RETURN NO-APPLY.
+ END.
+ if buf_prop-head.dtm-code = f-dtm-code then return no-apply.
+ assign
+ f-dtm-code = buf_prop-head.dtm-code
+ f-dtm-name = buf_prop-head.prop-label
+ .
+ display
+ f-dtm-code
+ f-dtm-name
+ with frame Dialog-Frame .
+ v-list-mode = "dtm-code".
+ run openbr in this-procedure ( input yes, input no, input '':U).
+END.
+ON CHOOSE OF b-history IN FRAME Dialog-Frame
+DO:
+define variable parref-list as character no-undo .
+CASE rs-region:
+  when 'объект':U then do:
+    if available X_dis-tot_obj  then do:
+      run ref/cdchist.w (
+                        INPUT parparentproc
+                        ,input p-curr-host-code
+                        ,input p-curr-obj-type
+                        ,input p-curr-obj-code
+                        ,input "":U
+                        ,input "subject":U
+                        ,input X_dis-tot_obj.d-card
+                        ,input ?
+                        ,input X_dis-tot_obj.obj-type
+                        ,input X_dis-tot_obj.obj-code
+                        ,input X_dis-tot_obj.host-code
+                        ,input ?
+                        ,input "":U
+                        ,input 'dis-obj':U
+                        ,input ?
+                        ,input-output parref-list
+                    ) no-error .
+        apply "entry" to br-dis-tot_obj.
+     end.
+   end.
+   when 'фирма':U then do:
+     if available X_dis-tot_host then do:
+      run ref/cdchist.w (
+                          INPUT parparentproc
+                          ,input p-curr-host-code
+                          ,input p-curr-obj-type
+                          ,input p-curr-obj-code
+                          ,input "":U
+                          ,input "subject"
+                          ,input X_dis-tot_host.d-card
+                          ,input ?
+                          ,input '':U
+                          ,input 0
+                          ,input X_dis-tot_host.host-code
+                          ,input ?
+                          ,input "":U
+                          ,input 'dis-host':U
+                          ,input ?
+                          ,input-output parref-list
+                      ) no-error .
+        apply "entry" to br-dis-tot_host.
+      end.
+    end.
+    when "global" then do:
+     if available X_dis-tot_ then do:
+      run ref/cdchist.w (
+                          INPUT parparentproc
+                          ,input p-curr-host-code
+                          ,input p-curr-obj-type
+                          ,input p-curr-obj-code
+                          ,input "":U
+                          ,input "subject"
+                          ,input X_dis-tot_.d-card
+                          ,input ?
+                          ,input '':U
+                          ,input 0
+                          ,input 0
+                          ,input ?
+                          ,input "":U
+                          ,input 'dis-host':U
+                          ,input ?
+                          ,input-output parref-list
+                      ) no-error .
+        apply "entry" to br-dis-tot_host.
+      end.
+    END.
+  END CASE.
+END.
+ON CHOOSE OF b-lkp IN FRAME Dialog-Frame
+DO:
+define variable v-rec as recid no-undo.
+DEFINE VARIABLE v-d-card AS CHARACTER NO-UNDO.
+DEFINE variable v-ri as recid no-undo .
+define buffer buf_dis-card for ub.dis-card.
+CASE rs-region:
+    WHEN 'объект':U THEN DO:
+      IF NOT AVAILABLE X_dis-tot_obj THEN RETURN NO-APPLY.
+      v-d-card = X_dis-tot_obj.d-card.
+    END.
+    WHEN 'фирма':U THEN DO:
+      IF NOT AVAILABLE X_dis-tot_host THEN RETURN NO-APPLY.
+      v-d-card = X_dis-tot_host.d-card.
+    END.
+    WHEN "global" THEN DO:
+      IF NOT AVAILABLE X_dis-tot_ THEN RETURN NO-APPLY.
+      v-d-card = X_dis-tot_.d-card.
+    END.
+ END CASE.
+find first buf_dis-card no-lock where
+           buf_dis-card.d-card = v-d-card no-error .
+if avail buf_dis-card then do:
+  assign
+  v-ri = recid( buf_dis-card )
+ .
+  if buf_dis-card.emitent-host-code = p-curr-host-code
+  or buf_dis-card.emitent-host-code = 0 then do:
+      run ref/dc-view.w ( input parparentproc
+                    ,input p-curr-host-code
+                    ,input p-curr-obj-type
+                    ,input p-curr-obj-code
+                    ,input buf_dis-card.d-card
+                    ,input NO
+                    ,input NO
+                    ) NO-ERROR.
+  end.
+  else do:
+      message "Данная дисконтная карта принадлежит другой фирме - просмотр запрещен!"
+      view-as alert-box ERROR.
+  end.
+end.
+END.
+ON CHOOSE OF b-mark IN FRAME Dialog-Frame
+DO:
+    define variable glog as logical no-undo .
+  if available X_dis-tot_obj then do:
+define variable vss-include-info11 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable v-str-recid12 as character no-undo .
+define variable v-num-entry12 as integer   no-undo .
+assign
+  v-str-recid12 = trim( string( recid( X_dis-tot_obj ) , "->>>>>>>>>>>9":U ) )
+  v-num-entry12 = lookup( v-str-recid12 , v-rid-list )
+.
+if v-num-entry12 > 0 then do:
+  assign
+    entry( v-num-entry12, v-rid-list ) = "":U
+    v-rid-list = trim( replace( v-rid-list , chr(44) + chr(44) , chr(44) ) , chr(44) )
+  .
+end.
+else do:
+  assign
+    v-rid-list = v-rid-list + ( if v-rid-list = "":U then "":U else chr(44) ) + v-str-recid12
+  .
+end.
+  glog = br-dis-tot_obj:refresh() .
+  if last-event:function <> "MOUSE-SELECT-DBLCLICK" then do:
+      glog = br-dis-tot_obj:select-next-row ().
+      apply "VALUE-CHANGED" to br-dis-tot_obj in frame Dialog-Frame.
+  end.
+  if num-entries( v-rid-list ) = 0
+  then
+      hide mark-num in frame Dialog-Frame.
+  else
+      disp num-entries( v-rid-list ) @ mark-num with frame Dialog-Frame.
+end.
+apply "entry" to br-dis-tot_obj in frame Dialog-Frame.
+END.
+ON CHOOSE OF B-print IN FRAME Dialog-Frame
+DO:
+define variable v-doc-rec as recid no-undo .
+ CASE rs-region:
+     WHEN 'объект':U THEN DO:
+      v-doc-rec = recid( X_dis-tot_obj ).
+      DO WHILE available X_dis-tot_obj :
+        GET prev br-dis-tot_obj.
+      END.
+      run PrintProc IN THIS-PROCEDURE ( f-dtm-code, rs-region) .
+      reposition br-dis-tot_obj to recid v-doc-rec no-error.
+      apply "entry" to br-dis-tot_obj in frame Dialog-Frame.
+   END.
+   WHEN 'фирма':U THEN DO:
+      v-doc-rec = recid( X_dis-tot_host ).
+      DO WHILE available X_dis-tot_host :
+          GET prev br-dis-tot_host.
+      END.
+      run PrintProc IN THIS-PROCEDURE ( f-dtm-code, rs-region) .
+      reposition br-dis-tot_host to recid v-doc-rec no-error.
+      apply "entry" to br-dis-tot_host in frame Dialog-Frame.
+  END.
+  WHEN "global" THEN DO:
+      v-doc-rec = recid( X_dis-tot_ ).
+      DO WHILE available X_dis-tot_ :
+          GET prev br-dis-tot_.
+      END.
+      run PrintProc IN THIS-PROCEDURE ( f-dtm-code, rs-region) .
+      reposition br-dis-tot_ to recid v-doc-rec no-error.
+      apply "entry" to br-dis-tot_ in frame Dialog-Frame.
+  END.
+ END CASE.
+END.
+ON CHOOSE OF b-sch IN FRAME Dialog-Frame
+DO:
+  RUN proc-b-sch IN THIS-PROCEDURE (INPUT rs-region) NO-ERROR.
+  IF ERROR-STATUS:ERROR THEN RETURN NO-APPLY.
+END.
+ON CHOOSE OF b-sel IN FRAME Dialog-Frame
+DO:
+  if available X_dis-tot_obj then do:
+    if  ( v-rid-list = "" ) or b-mark:sensitive = no
+    then  v-rid-list = string( recid( X_dis-tot_obj ) ) .
+  end.
+END.
+ON VALUE-CHANGED OF rs-curr IN FRAME Dialog-Frame
+DO:
+  ASSIGN
+  rs-curr.
+  CASE rs-curr:
+    WHEN 'rubl':U THEN DO:
+        ASSIGN
+        X_dis-tot_.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_ = NO
+        X_dis-tot_.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_ = NO
+        X_dis-tot_.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_ = NO
+        X_dis-tot_host.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_host = NO
+        X_dis-tot_host.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_host = NO
+        X_dis-tot_host.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_host = NO
+        X_dis-tot_obj.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_Obj = NO
+        X_dis-tot_obj.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_Obj = NO
+        X_dis-tot_obj.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_Obj = NO
+        .
+    END.
+    WHEN 'base':U THEN DO:
+        ASSIGN
+        X_dis-tot_.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_ = NO
+        X_dis-tot_.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_ = NO
+        X_dis-tot_.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_ = NO
+        X_dis-tot_.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_host.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_host = NO
+        X_dis-tot_host.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_host = NO
+        X_dis-tot_host.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_host = NO
+        X_dis-tot_host.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_obj.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = NO
+        X_dis-tot_obj.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = NO
+        X_dis-tot_obj.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = NO
+        X_dis-tot_obj.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        .
+    END.
+    OTHERWISE DO:
+        ASSIGN
+        X_dis-tot_.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_ = YES
+        X_dis-tot_host.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_host = YES
+        X_dis-tot_host.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_host = yes
+        X_dis-tot_host.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_host = yes
+        X_dis-tot_host.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_host = yes
+        X_dis-tot_obj.gds-tot-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.gds-dis-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.pay-tot-rubl:VISIBLE IN BROWSE br-dis-tot_Obj = YES
+        X_dis-tot_obj.gds-tot-base:VISIBLE IN BROWSE br-dis-tot_Obj = yes
+        X_dis-tot_obj.gds-dis-base:VISIBLE IN BROWSE br-dis-tot_Obj = yes
+        X_dis-tot_obj.pay-tot-base:VISIBLE IN BROWSE br-dis-tot_Obj = yes
+        .
+    END.
+  END CASE.
+END.
+ON VALUE-CHANGED OF rs-region IN FRAME Dialog-Frame
+DO:
+  ASSIGN
+  rs-region.
+  RUN Openbr IN THIS-PROCEDURE ( INPUT YES, INPUT NO, INPUT '':U).
+END.
+define variable vss-include-info13 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+on f5 of frame Dialog-Frame anywhere
+do:
+   v-doc-rec = recid(X_dis-tot_obj).    RUn OpenBR in this-procedure ( input yes, input no, input '':U).  REPOSITION br-dis-tot_obj to recid v-doc-rec No-ERROR.   apply 'value-changed' to br-dis-tot_obj.
+    apply "VALUE-CHANGED" to br-dis-tot_.
+end.
+define variable vss-include-info14 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+on help of frame Dialog-Frame
+do:
+  run gbl/app_help.p
+    (input this-procedure :file-name
+    ,input ''
+    ,input ?
+    ) no-error.
+  if error-status :error then do:
+    message
+      "Ошибка при вызове помощи"
+      error-status :get-message(1)
+      view-as alert-box .
+  end.
+end.
+run minbtn-set in this-procedure .
+on choose of b-help in frame Dialog-Frame
+do:
+  apply "help":u to frame Dialog-Frame .
+end.
+define variable vss-include-info15 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure minbtn-set :
+    do
+        on error undo, return error return-value
+        :
+        define variable ii              as integer       no-undo .
+        define variable fh              as widget-handle no-undo .
+        define variable hh              as widget-handle no-undo .
+        define variable v-h             as handle        extent 4 no-undo .
+        define variable v-name-button   as character     no-undo .
+        define variable v-help-old-x    as decimal       no-undo .
+        define variable v-help-old-y    as decimal       no-undo .
+        define variable v-help-old-size as decimal       no-undo .
+        define variable v-frame-width   as decimal       no-undo .
+        define variable jj              as integer       no-undo .
+        do
+            on error undo, return error
+            :
+            assign
+                v-frame-width = frame Dialog-Frame:width - 0.3
+                fh            = frame Dialog-Frame:first-child
+                hh            = fh:first-child
+                ii            = 1
+                .
+            do while valid-handle(hh):
+                if LOOKUP(lc(hh:name), "b-help,b-print,b-history,b-hist,b-hist-user,b-sch") > 0  then
+                do:
+                    case lc(hh:name) :
+                        when "b-help" then
+                            do:
+                                hh:load-image-up("cmp/b-help.bmp":u) .
+                                hh:load-image-down("cmp/b-help.bmp":u) .
+                                hh:load-image-insensitive("cmp/b-help.bmp":u) .
+                                hh:TOOLTIP = "Помощь" .
+                                v-help-old-x = hh:column .
+                                v-help-old-y = hh:row    .
+                                v-help-old-size = hh:width .
+                                hh:width-chars = 2.5 .
+                            end.
+                        when "b-print" then
+                            do:
+                                hh:load-image("cmp/b-print.bmp":u) .
+                                hh:TOOLTIP = "Печать" .
+                                v-h[ii] = hh:handle .
+                                ii = ii + 1 .
+                                hh:width-chars = 3 .
+                            end.
+                        when "b-history" or
+                        when "b-hist" then
+                            do:
+                                hh:load-image("cmp/b-hist.bmp":u) .
+                                hh:TOOLTIP = "История" .
+                                v-h[ii] = hh:handle .
+                                ii = ii + 1 .
+                                hh:width-chars = 3 .
+                            end.
+                        when "b-sch" then
+                            do:
+                                hh:load-image("cmp/b-sch.bmp":u) .
+                                hh:TOOLTIP = "Установка Фильтра" .
+                                v-h[ii] = hh:handle .
+                                ii = ii + 1 .
+                                hh:width-chars = 3 .
+                            end.
+                        when "b-hist-user" then
+                            do:
+                                hh:load-image("cmp/b-hist.bmp":u) .
+                                hh:TOOLTIP = "История пользователя" .
+                                ii = ii + 1 .
+                            end.
+                    end case.
+                end.
+                hh = hh:next-sibling.
+            end.
+            b-help:column = v-frame-width - b-help:width-chars.
+            jj = 0.
+            repeat ii = 4 to 1 by -1 :
+                if valid-handle (v-h[ii] ) then
+                do:
+                    jj  = jj + 1 .
+                    v-h[ii]:column = v-frame-width - b-help:width-chars - ( 3 * jj ).
+                    v-h[ii]:row    = v-help-old-y .
+                end.
+            end.
+        end.
+    end.
+end procedure.
+define variable vss-include-info16 as character format "x(65)" no-undo initial "@(#)$Workfile$ Библиотека изменения размеров окна".
+define variable v-diasize-need-maximize        as logical   no-undo init true  .
+define variable v-diasize-orig-frame-height    as decimal   no-undo .
+define variable v-diasize-orig-frame-width     as decimal   no-undo .
+define variable v-diasize-current-frame-width  as decimal   no-undo .
+define variable v-diasize-current-frame-height as decimal   no-undo .
+define variable v-diasize-change-size          as logical   no-undo .
+define variable v-diasize-resize-button        as handle    no-undo .
+define variable v-diasize-wndmax               as logical   no-undo .
+define variable v-diasize-wndstore             as logical   no-undo .
+define variable v-diasize-proc-name            as character no-undo .
+define variable v-diasize-browse-handle        as handle    no-undo .
+define variable v-diasize-browse-number        as integer   no-undo .
+define variable v-diasize-need-full-display    as logical   no-undo init false .
+define temp-table temp-diasize-handle no-undo
+  field handle-value  as handle
+  field save-position as decimal
+  index xpk is primary unique handle-value
+  .
+define temp-table temp-browse-handle no-undo
+  field browse-type   as character
+  field browse-number as integer
+  field browse-handle as handle
+  field original-size as decimal
+  index xpk is primary unique browse-type browse-number
+  index xie browse-type browse-handle
+.
+procedure diasize_change-height :
+  define input  parameter p-change-value  as decimal   no-undo .
+  define input  parameter p-move-resize   as logical   no-undo .
+  define variable v-field-group-handle    as handle    no-undo .
+  define variable v-object-handle         as handle    no-undo .
+  define variable v-frame-height          as decimal   no-undo .
+  define variable v-frame-virtual-height  as decimal   no-undo .
+  define variable v-browse-height         as decimal   no-undo .
+  define variable v-window-height         as decimal   no-undo .
+  define variable v-window-virtual-height as decimal   no-undo .
+  define variable v-change-sign           as integer   no-undo .
+  define buffer buf_temp-diasize-handle for temp-diasize-handle .
+  define buffer buf_temp-browse-handle  for temp-browse-handle .
+  if p-change-value > 0
+  then do:
+    if frame Dialog-Frame :height + p-change-value
+        > decimal(session :work-area-height-pixels) / session :pixels-per-row
+    then do:
+      assign
+        p-change-value = decimal(session :work-area-height-pixels) / session :pixels-per-row
+                        - (frame Dialog-Frame :height-chars)
+      .
+      if p-change-value <= 0
+      then do:
+        run diasize_position-resize-button in this-procedure .
+        return .
+      end.
+    end.
+  end.
+  if p-change-value < 0
+  then do:
+    if frame Dialog-Frame :height + p-change-value < v-diasize-orig-frame-height
+    then do:
+      assign
+        p-change-value = v-diasize-orig-frame-height
+                       - (frame Dialog-Frame :height-chars)
+      .
+      if p-change-value >= 0
+      then do:
+        run diasize_position-resize-button in this-procedure .
+        return .
+      end.
+    end.
+  end.
+  if p-change-value >= 0
+  then do:
+    assign
+      v-change-sign = 1
+    .
+  end.
+  else do:
+    assign
+      v-change-sign = -1
+    .
+  end.
+  assign
+    p-change-value = truncate(abs(p-change-value), 0) * v-change-sign
+  .
+  if p-change-value = 0
+  then do:
+    run diasize_position-resize-button in this-procedure .
+    return .
+  end.
+  move_block:
+  do
+  on error undo move_block, retry move_block
+  :
+    if retry
+    then do:
+      do
+      on error undo move_block, leave move_block
+      :
+        if p-change-value > 0
+        then do:
+          for each buf_temp-diasize-handle
+          on error undo, next
+          :
+            assign
+              v-object-handle = buf_temp-diasize-handle.handle-value
+            .
+            if v-object-handle <> v-diasize-resize-button
+            then do:
+              assign
+                v-object-handle :row = buf_temp-diasize-handle.save-position
+              .
+            end.
+          end.
+          assign
+            v-diasize-browse-handle :height = v-browse-height
+          .
+          for each buf_temp-browse-handle
+            where buf_temp-browse-handle.browse-type = 'height':u
+          on error undo, next
+          :
+            assign
+              buf_temp-browse-handle.browse-handle :height = buf_temp-browse-handle.original-size
+            .
+          end.
+          assign
+            frame Dialog-Frame :height = v-frame-height
+          .
+          if frame Dialog-Frame :scrollable = true
+          then do:
+            assign
+              frame Dialog-Frame :virtual-height = v-frame-virtual-height
+            .
+          end.
+          run diasize_position-resize-button in this-procedure .
+        end.
+        else do:
+          if frame Dialog-Frame :scrollable = true
+          then do:
+            assign
+              frame Dialog-Frame :virtual-height = v-frame-virtual-height
+            .
+          end.
+          assign
+            frame Dialog-Frame :height = v-frame-height
+          .
+          assign
+            v-diasize-browse-handle :height = v-browse-height
+          .
+          for each buf_temp-browse-handle
+            where buf_temp-browse-handle.browse-type = 'height':u
+          on error undo, next
+          :
+            assign
+              buf_temp-browse-handle.browse-handle :height = buf_temp-browse-handle.original-size
+            .
+          end.
+          for each buf_temp-diasize-handle
+          on error undo, next
+          :
+            assign
+              v-object-handle = buf_temp-diasize-handle.handle-value
+            .
+            if v-object-handle <> v-diasize-resize-button
+            then do:
+              assign
+                v-object-handle :row = buf_temp-diasize-handle.save-position
+              .
+            end.
+          end.
+          run diasize_position-resize-button in this-procedure .
+        end.
+        assign
+          v-diasize-change-size = false
+        .
+        leave move_block .
+      end.
+    end.
+    assign
+      v-diasize-need-full-display = true
+    .
+    if v-diasize-change-size = false
+    then do:
+      assign
+        v-diasize-change-size = true
+      .
+    end.
+    else do:
+      return .
+    end.
+    assign
+      v-frame-height = frame Dialog-Frame :height
+      v-frame-virtual-height = frame Dialog-Frame :virtual-height
+      v-browse-height = v-diasize-browse-handle :height
+    .
+    for each buf_temp-browse-handle
+      where buf_temp-browse-handle.browse-type = 'height':u
+    :
+      assign
+        buf_temp-browse-handle.original-size = buf_temp-browse-handle.browse-handle :height
+      .
+    end.
+    for each buf_temp-diasize-handle
+    :
+      delete buf_temp-diasize-handle .
+    end.
+    assign
+      v-field-group-handle = frame Dialog-Frame :first-child
+    .
+    do while valid-handle(v-field-group-handle)
+    :
+      assign
+        v-object-handle = v-field-group-handle :first-child
+      .
+      do while valid-handle(v-object-handle)
+      :
+        if  v-object-handle <> v-diasize-browse-handle :handle
+        and can-query(v-object-handle, "row")
+        and can-query(v-object-handle, "height")
+        and ( v-object-handle :row > v-diasize-browse-handle :row )
+        then do:
+          find first buf_temp-browse-handle
+            where buf_temp-browse-handle.browse-type   = 'height':u
+              and buf_temp-browse-handle.browse-handle = v-object-handle
+            no-error .
+          if available buf_temp-browse-handle
+          then do:
+          end.
+          else do:
+            create buf_temp-diasize-handle .
+            assign
+              buf_temp-diasize-handle.handle-value  = v-object-handle
+              buf_temp-diasize-handle.save-position = v-object-handle :row
+            .
+          end.
+        end.
+        assign
+          v-object-handle = v-object-handle :next-sibling
+        .
+      end.
+      assign
+        v-field-group-handle = v-field-group-handle :next-sibling
+      .
+    end.
+    do with frame Dialog-Frame
+    :
+      hide v-diasize-resize-button .
+      assign
+        v-diasize-resize-button :row    = 1
+        v-diasize-resize-button :column = 1
+      .
+    end.
+    if p-change-value > 0
+    then do:
+      if frame Dialog-Frame :scrollable = true
+      then do:
+        assign
+          frame Dialog-Frame :virtual-height = frame Dialog-Frame :virtual-height + p-change-value
+          no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block .
+        end.
+      end.
+      assign
+        frame Dialog-Frame :height = frame Dialog-Frame :height + p-change-value
+        no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block .
+      end.
+      assign
+        v-diasize-browse-handle :height = v-diasize-browse-handle :height + p-change-value
+        no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block .
+      end.
+      for each buf_temp-browse-handle
+        where buf_temp-browse-handle.browse-type = 'height':u
+      on error undo move_block, retry move_block
+      :
+        assign
+          buf_temp-browse-handle.browse-handle :height
+            = buf_temp-browse-handle.browse-handle :height + p-change-value
+          no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block .
+        end.
+      end.
+      for each buf_temp-diasize-handle
+      on error undo move_block, retry move_block
+      :
+        assign
+          v-object-handle = buf_temp-diasize-handle.handle-value
+        .
+        if v-object-handle <> v-diasize-resize-button
+        then do:
+          assign
+            v-object-handle :row = v-object-handle :row + p-change-value
+            no-error .
+          if error-status :error
+          or error-status :get-message(1) <> ""
+          then do:
+            undo move_block, retry move_block .
+          end.
+        end.
+      end.
+    end.
+    else do:
+      for each buf_temp-diasize-handle
+      on error undo move_block, retry move_block
+      :
+        assign
+          v-object-handle = buf_temp-diasize-handle.handle-value
+        .
+        if v-object-handle <> v-diasize-resize-button
+        then do:
+          assign
+            v-object-handle :row = v-object-handle :row + p-change-value
+            no-error .
+          if error-status :error
+          or error-status :get-message(1) <> ""
+          then do:
+            undo move_block, retry move_block .
+          end.
+        end.
+      end.
+      assign
+        v-diasize-browse-handle :height = v-diasize-browse-handle :height + p-change-value
+        no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block .
+      end.
+      for each buf_temp-browse-handle
+        where buf_temp-browse-handle.browse-type = 'height':u
+      on error undo move_block, retry move_block
+      :
+        assign
+          buf_temp-browse-handle.browse-handle :height
+            = buf_temp-browse-handle.browse-handle :height + p-change-value
+          no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block .
+        end.
+      end.
+      assign
+        frame Dialog-Frame :height = frame Dialog-Frame :height + p-change-value
+        no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block .
+      end.
+      if frame Dialog-Frame :scrollable = true
+      then do:
+        assign
+          frame Dialog-Frame :virtual-height = frame Dialog-Frame :virtual-height + p-change-value
+          no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block .
+        end.
+      end.
+    end.
+    if p-move-resize = true
+    then do:
+      run diasize_position-resize-button in this-procedure .
+    end.
+    if v-diasize-wndstore = true
+    then do:
+      if connected("ub") = true
+      then do:
+        define variable v-cntxt-db-num        as integer   no-undo .
+        define variable v-cntxt-userid        as character no-undo .
+        RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+                                          , OUTPUT v-cntxt-userid
+                                          ) .
+        run gbl/wndsizew.p
+          (input  v-cntxt-db-num
+          ,input  v-cntxt-userid
+          ,input  v-diasize-proc-name
+          ,input  'height':u
+          ,input  string(frame Dialog-Frame :height - v-diasize-orig-frame-height)
+          ) .
+      end.
+    end.
+  end.
+  assign
+    v-diasize-change-size = false
+  .
+end procedure.
+procedure diasize_set-height :
+  define input  parameter p-new-height  as decimal   no-undo .
+  define input  parameter p-move-resize as logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run diasize_change-height in this-procedure
+      (input  (p-new-height - frame Dialog-Frame :height)
+      ,input  p-move-resize
+      ) .
+  end.
+end procedure.
+procedure diasize_change-width :
+  define input  parameter p-change-value as decimal   no-undo .
+  define input  parameter p-move-resize  as logical   no-undo .
+  define variable v-field-group-handle   as handle    no-undo .
+  define variable v-object-handle        as handle    no-undo .
+  define variable v-frame-width          as decimal   no-undo .
+  define variable v-frame-virtual-width  as decimal   no-undo .
+  define variable v-browse-width         as decimal   no-undo .
+  define variable v-window-width         as decimal   no-undo .
+  define variable v-window-virtual-width as decimal   no-undo .
+  define variable v-change-sign          as integer   no-undo .
+  define buffer buf_temp-diasize-handle for temp-diasize-handle .
+  define buffer buf_temp-browse-handle  for temp-browse-handle .
+  if p-change-value > 0
+  then do:
+    if frame Dialog-Frame :width + p-change-value >
+        session :width-chars
+    then do:
+      assign
+        p-change-value = session :width-chars - frame Dialog-Frame :width
+      .
+      if p-change-value <= 0
+      then do:
+        run diasize_position-resize-button in this-procedure .
+        return .
+      end.
+    end.
+  end.
+  if p-change-value < 0
+  then do:
+    if frame Dialog-Frame :width + p-change-value < v-diasize-orig-frame-width
+    then do:
+      assign
+        p-change-value = v-diasize-orig-frame-width
+                       - frame Dialog-Frame :width
+      .
+      if p-change-value >= 0
+      then do:
+        run diasize_position-resize-button in this-procedure .
+        return .
+      end.
+    end.
+  end.
+  if p-change-value >= 0
+  then do:
+    assign
+      v-change-sign = 1
+    .
+  end.
+  else do:
+    assign
+      v-change-sign = -1
+    .
+  end.
+  assign
+    p-change-value = truncate(abs(p-change-value), 0) * v-change-sign
+  .
+  if p-change-value = 0
+  then do:
+    run diasize_position-resize-button in this-procedure .
+    return .
+  end.
+  move_block:
+  do
+  on error undo move_block, leave move_block
+  :
+    if retry
+    then do:
+      do
+      on error undo move_block, leave move_block
+      :
+        if p-change-value > 0
+        then do:
+          for each buf_temp-diasize-handle
+          on error undo, next
+          :
+            assign
+              v-object-handle = buf_temp-diasize-handle.handle-value
+            .
+            if v-object-handle <> v-diasize-resize-button
+            then do:
+              assign
+                v-object-handle :col = buf_temp-diasize-handle.save-position
+              .
+            end.
+          end.
+          assign
+            v-diasize-browse-handle :width = v-browse-width
+          .
+          for each buf_temp-browse-handle
+            where buf_temp-browse-handle.browse-type = 'width':u
+          on error undo, next
+          :
+            assign
+              buf_temp-browse-handle.browse-handle :width = buf_temp-browse-handle.original-size
+            .
+          end.
+          assign
+            frame Dialog-Frame :width = v-frame-width
+          .
+          if frame Dialog-Frame :scrollable = true
+          then do:
+            assign
+              frame Dialog-Frame :virtual-width = v-frame-virtual-width
+            .
+          end.
+          run diasize_position-resize-button in this-procedure .
+        end.
+        else do:
+          if frame Dialog-Frame :scrollable = true
+          then do:
+            assign
+              frame Dialog-Frame :virtual-width = v-frame-virtual-width
+            .
+          end.
+          assign
+            frame Dialog-Frame :width = v-frame-width
+          .
+          for each buf_temp-browse-handle
+            where buf_temp-browse-handle.browse-type = 'width':u
+          on error undo, next
+          :
+            assign
+              buf_temp-browse-handle.browse-handle :width = buf_temp-browse-handle.original-size
+            .
+          end.
+          assign
+            v-diasize-browse-handle :width = v-browse-width
+          .
+          for each buf_temp-diasize-handle
+          on error undo, next
+          :
+            assign
+              v-object-handle = buf_temp-diasize-handle.handle-value
+            .
+            if v-object-handle <> v-diasize-resize-button
+            then do:
+              assign
+                v-object-handle :col = buf_temp-diasize-handle.save-position
+              .
+            end.
+          end.
+          run diasize_position-resize-button in this-procedure .
+        end.
+        assign
+          v-diasize-change-size = false
+        .
+        leave move_block .
+      end.
+    end.
+    assign
+      v-diasize-need-full-display = true
+    .
+    if v-diasize-change-size = false
+    then do:
+      assign
+        v-diasize-change-size = true
+      .
+    end.
+    else do:
+      return .
+    end.
+    assign
+      v-frame-width = frame Dialog-Frame :width
+      v-frame-virtual-width = frame Dialog-Frame :virtual-width
+      v-browse-width = v-diasize-browse-handle :width
+    .
+    for each buf_temp-browse-handle
+      where buf_temp-browse-handle.browse-type = 'width':u
+    :
+      assign
+        buf_temp-browse-handle.original-size = buf_temp-browse-handle.browse-handle :width
+      .
+    end.
+    for each buf_temp-diasize-handle
+    :
+      delete buf_temp-diasize-handle .
+    end.
+    assign
+      v-field-group-handle = frame Dialog-Frame :first-child
+    .
+    do while valid-handle(v-field-group-handle)
+    :
+      assign
+        v-object-handle = v-field-group-handle :first-child
+      .
+      do while valid-handle(v-object-handle)
+      :
+        if  v-object-handle <> v-diasize-browse-handle :handle
+        and v-object-handle <> v-diasize-resize-button
+        and can-query(v-object-handle, "row")
+        and can-query(v-object-handle, "height")
+        and ( v-object-handle :col + v-object-handle :width
+              > v-diasize-browse-handle :col + v-diasize-browse-handle :width
+            )
+        then do:
+          find first buf_temp-browse-handle
+            where buf_temp-browse-handle.browse-type   = 'width':u
+              and buf_temp-browse-handle.browse-handle = v-object-handle
+            no-error .
+          if available buf_temp-browse-handle
+          then do:
+          end.
+          else do:
+            create buf_temp-diasize-handle .
+            assign
+              buf_temp-diasize-handle.handle-value  = v-object-handle
+              buf_temp-diasize-handle.save-position = v-object-handle :col
+            .
+          end.
+        end.
+        assign
+          v-object-handle = v-object-handle :next-sibling
+        .
+      end.
+      assign
+        v-field-group-handle = v-field-group-handle :next-sibling
+      .
+    end.
+    do with frame Dialog-Frame
+    :
+      hide v-diasize-resize-button .
+      v-diasize-resize-button :row = 1.
+      v-diasize-resize-button :column = 1.
+    end.
+    if p-change-value > 0
+    then do:
+      if frame Dialog-Frame :scrollable = true
+      then do:
+        assign
+          frame Dialog-Frame :virtual-width = frame Dialog-Frame :virtual-width + p-change-value
+          no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block.
+        end.
+      end.
+      assign
+        frame Dialog-Frame :width = v-frame-width + p-change-value
+        no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block.
+      end.
+      assign
+        v-diasize-browse-handle :width = v-browse-width + p-change-value
+      no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block.
+      end.
+      for each buf_temp-browse-handle
+        where buf_temp-browse-handle.browse-type = 'width':u
+      on error undo move_block, retry move_block
+      :
+        assign
+          buf_temp-browse-handle.browse-handle :width
+            = buf_temp-browse-handle.browse-handle :width + p-change-value
+          no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block .
+        end.
+      end.
+      for each buf_temp-diasize-handle
+      on error undo move_block, retry move_block
+      :
+        assign
+          v-object-handle = buf_temp-diasize-handle.handle-value
+        .
+        if v-object-handle <> v-diasize-resize-button
+        then do:
+          assign
+            v-object-handle :col = v-object-handle :col + p-change-value
+            no-error .
+          if error-status :error
+          or error-status :get-message(1) <> ""
+          then do:
+            undo move_block, retry move_block .
+          end.
+        end.
+      end.
+    end.
+    else do:
+      for each buf_temp-diasize-handle
+      on error undo move_block, retry move_block
+      :
+        assign
+          v-object-handle = buf_temp-diasize-handle.handle-value
+        .
+        if v-object-handle <> v-diasize-resize-button
+        then do:
+          assign
+            v-object-handle :col = v-object-handle :col + p-change-value
+            no-error .
+          if error-status :error
+          or error-status :get-message(1) <> ""
+          then do:
+            undo move_block, retry move_block .
+          end.
+        end.
+      end.
+      for each buf_temp-browse-handle
+        where buf_temp-browse-handle.browse-type = 'width':u
+      on error undo move_block, retry move_block
+      :
+        assign
+          buf_temp-browse-handle.browse-handle :width
+            = buf_temp-browse-handle.browse-handle :width + p-change-value
+          no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block .
+        end.
+      end.
+      assign
+        v-diasize-browse-handle :width = v-diasize-browse-handle :width + p-change-value
+        no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block.
+      end.
+      assign
+        frame Dialog-Frame :width = frame Dialog-Frame :width + p-change-value
+      no-error .
+      if error-status :error
+      or error-status :get-message(1) <> ""
+      then do:
+        undo move_block, retry move_block.
+      end.
+      if frame Dialog-Frame :scrollable = true
+      then do:
+        assign
+          frame Dialog-Frame :virtual-width = frame Dialog-Frame :virtual-width + p-change-value
+        no-error .
+        if error-status :error
+        or error-status :get-message(1) <> ""
+        then do:
+          undo move_block, retry move_block.
+        end.
+      end.
+    end.
+    if p-move-resize
+    then do:
+      run diasize_position-resize-button in this-procedure .
+    end.
+    if v-diasize-wndstore = true
+    then do:
+      if connected("ub") = true
+      then do:
+        define variable v-cntxt-db-num        as integer   no-undo .
+        define variable v-cntxt-userid        as character no-undo .
+        RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+                                          , OUTPUT v-cntxt-userid
+                                          ) .
+        run gbl/wndsizew.p
+          (input  v-cntxt-db-num
+          ,input  v-cntxt-userid
+          ,input  v-diasize-proc-name
+          ,input  'width':u
+          ,input  string(frame Dialog-Frame :width - v-diasize-orig-frame-width)
+          ) .
+      end.
+    end.
+  end.
+  assign
+    v-diasize-change-size = false
+  .
+end procedure.
+procedure diasize_set-width :
+  define input  parameter p-new-width  as decimal   no-undo .
+  define input  parameter p-move-resize as logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run diasize_change-width in this-procedure
+      (input  (p-new-width - frame Dialog-Frame :width)
+      ,input  p-move-resize
+      ) .
+  end.
+end procedure.
+procedure diasize_position-resize-button :
+  do with frame Dialog-Frame
+  :
+    hide v-diasize-resize-button .
+    assign
+      v-diasize-resize-button :row = frame Dialog-Frame :height - v-diasize-resize-button :height
+                  - 1
+                  - (frame Dialog-Frame :border-bottom-pixels / session :pixels-per-row)
+      v-diasize-resize-button :col = frame Dialog-Frame :width - v-diasize-resize-button :width
+                  - 1
+                  - (frame Dialog-Frame :border-right-pixels / session :pixels-per-column)
+    .
+    view v-diasize-resize-button .
+  end.
+end procedure.
+on alt-right anywhere
+do:
+  run diasize_change-width in this-procedure
+    (input 1
+    ,input true
+    ) .
+  return no-apply .
+end.
+on alt-left anywhere
+do:
+  run diasize_change-width in this-procedure
+    (input -1
+    ,input true
+    ) .
+  return no-apply .
+end.
+on alt-down anywhere
+do:
+  run diasize_change-height in this-procedure
+    (input 1
+    ,input true
+    ) .
+  return no-apply .
+end.
+on alt-up anywhere
+do:
+  run diasize_change-height in this-procedure
+    (input -1
+    ,input true
+    ) .
+  return no-apply .
+end.
+on alt-enter of frame Dialog-Frame
+do:
+  run diasize_maximize in this-procedure
+    (input  ?
+    ).
+  return no-apply .
+end.
+procedure diasize_end-move :
+  do
+  on error undo, return error return-value
+  :
+    define variable v-row-delta as decimal   no-undo .
+    define variable v-col-delta as decimal   no-undo .
+    define variable v-new-row as decimal   no-undo .
+    define variable v-new-col as decimal   no-undo .
+    assign
+      v-new-row = decimal(last-event :y) / (session :pixels-per-row)
+      v-new-col = decimal(last-event :x) / (session :pixels-per-column)
+    .
+    assign
+      v-row-delta = v-new-row - frame Dialog-Frame :height
+      v-col-delta = v-new-col - frame Dialog-Frame :width
+    .
+    run diasize_change-height in this-procedure
+      (input v-row-delta
+      ,input true
+      ) .
+    run diasize_change-width in this-procedure
+      (input v-col-delta
+      ,input true
+      ) .
+  end.
+end procedure.
+procedure diasize_maximize :
+  define input  parameter p-action as logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    if p-action = ?
+    then do:
+      if v-diasize-need-maximize = true
+      then do:
+        assign
+          p-action = true
+        .
+      end.
+      else do:
+        assign
+          p-action = false
+        .
+      end.
+    end.
+    if p-action = true
+    then do:
+      run diasize_change-height in this-procedure
+        (input decimal(session :work-area-height-pixels) / session :pixels-per-row
+            - frame Dialog-Frame :height-chars
+        ,input true
+        ) .
+      run diasize_change-width in this-procedure
+        (input session :width-chars
+            - frame Dialog-Frame :width-chars
+        ,input true
+        ) .
+      assign
+        v-diasize-need-maximize = false
+      .
+    end.
+    else do:
+      run diasize_change-width in this-procedure
+        (input v-diasize-orig-frame-width
+            - frame Dialog-Frame :width-chars
+        ,input true
+        ) .
+      run diasize_change-height in this-procedure
+        (input v-diasize-orig-frame-height
+            - frame Dialog-Frame :height-chars
+        ,input true
+        ) .
+      assign
+        v-diasize-need-maximize = true
+      .
+    end.
+  end.
+end procedure.
+procedure diasize_restore-orig-size :
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-diasize-current-frame-width  = frame Dialog-Frame :width
+      v-diasize-current-frame-height = frame Dialog-Frame :height
+    .
+    run diasize_set-height in this-procedure
+      (input  v-diasize-orig-frame-height
+      ,input  true
+      ) .
+    run diasize_set-width in this-procedure
+      (input  v-diasize-orig-frame-width
+      ,input  true
+      ) .
+  end.
+end procedure.
+procedure diasize_restore-current-size :
+  do
+  on error undo, return error return-value
+  :
+    run diasize_set-height in this-procedure
+      (input  v-diasize-current-frame-height
+      ,input  true
+      ) .
+    run diasize_set-width in this-procedure
+      (input  v-diasize-current-frame-width
+      ,input  true
+      ) .
+  end.
+end procedure.
+procedure diasize_set-browse-handle :
+  define input  parameter p-browse-handle as handle   no-undo .
+  define buffer buf_temp-browse-handle for temp-browse-handle .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-diasize-browse-handle = p-browse-handle
+    .
+    for each buf_temp-browse-handle
+    on error undo, return error return-value
+    :
+      delete buf_temp-browse-handle .
+    end.
+  end.
+end procedure.
+procedure diasize_add_browse :
+  define input  parameter p-browse-type   as character no-undo .
+  define input  parameter p-browse-handle as handle    no-undo .
+  define buffer buf_temp-browse-handle for temp-browse-handle .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      v-diasize-browse-number = v-diasize-browse-number + 1
+    .
+    create buf_temp-browse-handle .
+    assign
+      buf_temp-browse-handle.browse-type   = p-browse-type
+      buf_temp-browse-handle.browse-number = v-diasize-browse-number
+      buf_temp-browse-handle.browse-handle = p-browse-handle
+    .
+  end.
+end procedure.
+procedure diasize_init :
+  define variable v-default-value    as logical   no-undo .
+  define variable v-restore-saved    as logical   no-undo .
+  define variable v-resize-value-str as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    do with frame Dialog-Frame
+    :
+      assign
+        v-diasize-orig-frame-height = frame Dialog-Frame :height
+        v-diasize-orig-frame-width  = frame Dialog-Frame :width
+        v-diasize-browse-handle     = browse br-dis-tot_ :handle
+      .
+      create button v-diasize-resize-button
+      assign
+        parent        = frame Dialog-Frame :first-child
+        label         = "s"
+        height-pixels = 16
+        width-pixels  = 16
+        visible       = true
+        sensitive     = true
+        movable       = true
+        triggers:
+          on end-move persistent run diasize_end-move in this-procedure .
+        end triggers.
+      v-diasize-resize-button :load-mouse-pointer("SIZE") .
+      v-diasize-resize-button :load-image("exe/grip.bmp":U) .
+      v-diasize-resize-button :load-image-down("exe/grip.bmp":U) .
+      v-diasize-resize-button :load-image-insensitive("exe/grip.bmp":U) .
+      assign
+        v-diasize-wndmax = false
+      .
+      if connected("ub") = true
+      then do:
+        define variable v-cntxt-db-num        as integer   no-undo .
+        define variable v-cntxt-userid        as character no-undo .
+        RUN get-context in this-procedure ( OUTPUT v-cntxt-db-num
+                                          , OUTPUT v-cntxt-userid
+                                          ) .
+        run gbl/wndpar_r.p
+          (input  v-cntxt-db-num
+          ,input  v-cntxt-userid
+          ,input  'wndmax':U
+          ,output v-diasize-wndmax
+          ,output v-default-value
+          ) .
+      end.
+      assign
+        v-diasize-wndstore = false
+      .
+      if connected("ub") = true
+      then do:
+        run gbl/wndpar_r.p
+          (input  v-cntxt-db-num
+          ,input  v-cntxt-userid
+          ,input  'wndstore':U
+          ,output v-diasize-wndstore
+          ,output v-default-value
+          ) .
+      end.
+      assign
+        v-diasize-proc-name = entry(1, program-name(2), '.')
+      .
+      if v-diasize-wndstore = true
+      then do:
+        assign
+          v-restore-saved = false
+        .
+        if connected("ub") = true
+        then do:
+          run gbl/wndsizer.p
+            (input  v-cntxt-db-num
+            ,input  v-cntxt-userid
+            ,input  v-diasize-proc-name
+            ,input  'height':u
+            ,output v-resize-value-str
+            ) .
+          if v-resize-value-str <> '':U
+          then do:
+            run diasize_change-height in this-procedure
+              (input  integer(v-resize-value-str)
+              ,input  true
+              ) .
+            assign
+              v-restore-saved = true
+            .
+          end.
+        end.
+        if connected("ub") = true
+        then do:
+          run gbl/wndsizer.p
+            (input  v-cntxt-db-num
+            ,input  v-cntxt-userid
+            ,input  v-diasize-proc-name
+            ,input  'width':u
+            ,output v-resize-value-str
+            ) .
+          if v-resize-value-str <> '':U
+          then do:
+            run diasize_change-width in this-procedure
+              (input  integer(v-resize-value-str)
+              ,input  true
+              ) .
+            assign
+              v-restore-saved = true
+            .
+          end.
+        end.
+        if v-restore-saved <> true
+        then do:
+          if v-diasize-wndmax = true
+          then do:
+            run diasize_maximize in this-procedure
+              (input  true
+              ) .
+          end.
+        end.
+      end.
+      else do:
+        if v-diasize-wndmax = true
+        then do:
+          run diasize_maximize in this-procedure
+            (input  true
+            ) .
+        end.
+      end.
+    end.
+  end.
+end procedure.
+procedure diasize_need-full-display :
+  define output parameter p-need-full-display as logical   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      p-need-full-display = v-diasize-need-full-display
+    .
+    assign
+      v-diasize-need-full-display = false
+    .
+  end.
+end procedure.
+procedure get-context :
+   define output parameter p-db-num as integer          no-undo.
+   define output parameter p-user-id as character        no-undo.
+   define variable v-login               as character    no-undo.
+   define buffer buf_sys-ctrl    for ub.sys-ctrl .
+   define buffer buf_user-login  for ub.user-login .
+   do
+   on error undo, return error
+   :
+         FIND FIRST buf_sys-ctrl no-lock.
+         ASSIGN
+            v-login = USERID("ub")
+            p-db-num = buf_sys-ctrl.db-num
+         .
+         FIND FIRST buf_user-login
+              WHERE buf_user-login.db-num = p-db-num
+                AND buf_user-login.user-login = v-login
+              no-lock
+              no-error
+              .
+         IF AVAILABLE buf_user-login
+         THEN DO:
+            assign
+               p-user-id = buf_user-login.user-id
+            .
+         END.
+   end.
+end procedure.
+    run diasize_init in this-procedure .
+define variable vss-include-info17 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+procedure set-filter-name :
+define input parameter p-filter-name as character no-undo .
+  do with frame Dialog-Frame:
+    if p-filter-name > "" then do:
+      assign
+        frame Dialog-Frame:title
+          = frame Dialog-Frame:title + "   ФИЛЬТР: " + p-filter-name.
+      .
+      assign
+        b-sch :tooltip = "Установлен фильтр " + p-filter-name
+      .
+    end.
+    else do:
+      assign
+        b-sch :tooltip = ""
+      .
+    end.
+  end.
+end procedure.
+IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+MAIN-BLOCK:
+DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+   ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+  IF lookup(p-list-mode, 'все':U + chr(44) + "dtm-code" + chr(44) + "dt-code") = 0  THEN DO:
+    MESSAGE
+    vss-workfile vss-revision vss-description SKIP
+    "Неверное значение параметра p-list-mode" p-list-mode
+    VIEW-AS ALERT-BOX.
+    UNDO, RETURN ERROR.
+  END.
+  if lookup(p-region, 'объект':U + chr(44) + 'фирма':U + chr(44) + "global")  = 0 then do:
+        MESSAGE
+        vss-workfile vss-revision vss-description SKIP
+        "Неверное значение параметра p-region" p-region SKIP
+        "Нет хранилища данных"  p-region
+        VIEW-AS ALERT-BOX.
+        UNDO, RETURN ERROR.
+  end.
+  IF p-list-mode = "dtm-code" THEN DO:
+    FIND FIRST buf_prop-head NO-LOCK WHERE
+              buf_prop-head.dtm-code = p-dtm-code NO-ERROR.
+    IF NOT AVAILABLE buf_prop-head THEN DO:
+        MESSAGE
+        vss-workfile vss-revision vss-description SKIP
+        "Неверное значение параметра p-dtm-code" p-dtm-code SKIP
+        "Нет объекта-операнда c кодом"  p-dtm-code
+        VIEW-AS ALERT-BOX.
+        UNDO, RETURN ERROR.
+    END.
+  END.
+  IF p-list-mode = "dt-code"
+  OR (p-list-mode = "dtm-code" AND p-dt-code > 0) THEN DO:
+    FIND FIRST buf_prop-ref NO-LOCK WHERE
+              buf_prop-ref.dt-code = p-dt-code NO-ERROR.
+    IF NOT AVAILABLE buf_prop-ref THEN DO:
+        MESSAGE
+        vss-workfile vss-revision vss-description SKIP
+        "Неверное значение параметра p-dt-code" p-dt-code SKIP
+        "Нет итога c кодом"  p-dt-code
+        VIEW-AS ALERT-BOX.
+        UNDO, RETURN ERROR.
+    END.
+    IF p-list-mode = "dtm-code"
+    AND p-dtm-code <> buf_prop-ref.dtm-code THEN DO:
+        MESSAGE
+        vss-workfile vss-revision vss-description SKIP
+        "Неверное значение параметра p-dt-code" p-dt-code SKIP
+        substitute("Код итога &1 соответствует  коду объекта &2, хотя p-dtm-code = &3"
+                   , p-dt-code
+                   , buf_prop-ref.dtm-code
+                   , p-dtm-code)
+        VIEW-AS ALERT-BOX.
+        UNDO, RETURN ERROR.
+    END.
+  END.
+define variable vss-include-info18 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+  run mainmenu_getcntxt in parparentproc
+    (output v-cntxt-db-num
+    ,output v-cntxt-userid
+    ,output v-cntxt-level
+    ,output v-cntxt-host-code-obj
+    ,output v-cntxt-obj-type
+    ,output v-cntxt-obj-code
+    ,output v-cntxt-db-num-obj
+    ,output v-cntxt-is-admin
+    ) .
+   v-list-mode = p-list-mode.
+  run Myenable in this-procedure .
+  v-rid-list = p-rid-list.
+  WAIT-FOR GO OF FRAME Dialog-Frame.
+END.
+RUN disable_UI.
+PROCEDURE disable_UI :
+  HIDE FRAME Dialog-Frame.
+END PROCEDURE.
+PROCEDURE enable_UI :
+  DISPLAY rs-region f-dtm-code f-dtm-name f-dt-code f-sum-id rs-curr mark-num
+      WITH FRAME Dialog-Frame.
+  ENABLE b-quit b-mark b-sel rs-region b-lkp b-card b-sch B-print b-history
+         B-Help b-dtm-code b-dt-code rs-curr br-dis-tot_obj br-dis-tot_host
+         br-dis-tot_ mark-num
+      WITH FRAME Dialog-Frame.
+  VIEW FRAME Dialog-Frame.
+  OPEN QUERY br-dis-tot_ FOR EACH X_dis-tot_ NO-LOCK,            FIRST X_prop-ref_ NO-LOCK WHERE          X_prop-ref_.dt-code = X_dis-tot_.dt-code INDEXED-REPOSITION.    OPEN QUERY br-dis-tot_host FOR EACH X_dis-tot_host NO-LOCK,            FIRST X_prop-ref_host NO-LOCK WHERE          X_prop-ref_host.dt-code = X_dis-tot_host.dt-code INDEXED-REPOSITION.    OPEN QUERY br-dis-tot_obj FOR EACH X_dis-tot_obj NO-LOCK,            FIRST X_prop-ref_obj NO-LOCK WHERE          X_prop-ref_obj.dt-code = X_dis-tot_obj.dt-code INDEXED-REPOSITION.
+END PROCEDURE.
+PROCEDURE MyEnable :
+DEFINE VARIABLE v-curr-r-b AS CHARACTER NO-UNDO.
+define variable vss-include-info19 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+  (output v-curr-r-b
+  )  .
+ASSIGN
+rs-curr:RADIO-BUTTONS IN FRAME Dialog-Frame= "Нац.вал." + chr(44) + 'rubl':U + chr(44) +
+                        "Баз.вал." + chr(44) + 'base':U + chr(44) +
+                        "все" + chr(44) + 'все':U
+rs-curr = v-curr-r-b
+rs-region:RADIO-BUTTONS = "Объекты" + chr(44) + 'объект':U + chr(44) +
+                        "Фирмы" + chr(44) + 'фирма':U + chr(44) +
+                        "Глобально" + chr(44) + "global"
+rs-region = (IF p-region = '':U
+             THEN 'объект':U
+             ELSE p-region)
+.
+if p-list-mode = "dtm-code" then do:
+  assign
+  f-dtm-code  = buf_prop-head.dtm-code
+  f-dtm-name  = buf_prop-head.prop-label
+  .
+  if p-dtm-code = 1 then do:
+    assign
+    X_prop-ref_.sum-id:visible in browse br-dis-tot_ = no
+    X_prop-ref_.caller_id:visible in browse br-dis-tot_ = no
+    X_prop-ref_host.sum-id:visible in browse br-dis-tot_host = no
+    X_prop-ref_host.caller_id:visible in browse br-dis-tot_host = no
+    X_prop-ref_obj.sum-id:visible in browse br-dis-tot_obj = no
+    X_prop-ref_obj.caller_id:visible in browse br-dis-tot_obj = no
+    .
+  end.
+  assign
+  X_prop-ref_.dtm-code:visible in browse br-dis-tot_ = no
+  X_prop-ref_host.dtm-code:visible in browse br-dis-tot_host = no
+  X_prop-ref_obj.dtm-code:visible in browse br-dis-tot_obj = no
+  .
+end.
+else do:
+  f-dtm-code = ?.
+end.
+if p-list-mode = "dt-code"
+or (p-list-mode = "dtm-code" and p-dt-code > 0)
+then do:
+  assign
+  f-dt-code  = buf_prop-ref.dtm-code
+  f-sum-id   = buf_prop-ref.sum-id
+  .
+end.
+else do:
+  f-dt-code = ?.
+end.
+display
+f-dtm-code
+f-dtm-name
+f-dt-code
+f-sum-id
+rs-region
+with frame Dialog-Frame .
+ENABLE
+rs-curr
+rs-region
+b-quit
+b-lkp
+B-Help
+b-mark when lookup("b-mark", bttns) > 0
+b-sel when lookup("b-sel", bttns) > 0
+b-card
+b-sch
+b-print
+b-history
+b-dtm-code WHEN (p-list-mode <> "dtm-code")
+b-dt-code WHEN (p-list-mode <> "dt-code"
+                AND NOT (p-list-mode = "dtm-code" AND p-dt-code > 0)
+                and NOT (p-list-mode = "dtm-code" AND p-dtm-code = 1)
+                )
+br-dis-tot_obj
+br-dis-tot_host
+br-dis-tot_
+WITH FRAME Dialog-Frame.
+VIEW FRAME Dialog-Frame.
+run Openbr in this-procedure ( input yes, input no, input '':U).
+APPLY "VALUE-CHANGED" to rs-curr.
+END PROCEDURE.
+PROCEDURE Openbr :
+define input  parameter p-open-query     as logical   no-undo .
+define input  parameter p-find-next      as logical   no-undo .
+define input  parameter p-find-condition as character no-undo .
+CASE rs-region:
+  WHEN 'объект':U THEN DO:
+    RUN Openbr_obj ( INPUT p-open-query
+                    ,INPUT p-find-next
+                    ,INPUT p-find-condition).
+    br-dis-tot_obj:move-to-top() in frame Dialog-Frame .
+    apply "ENTRY" to br-dis-tot_obj.
+    apply "VALUE-CHANGED" to br-dis-tot_obj.
+  END.
+  WHEN 'фирма':U THEN DO:
+    RUN Openbr_host ( INPUT p-open-query
+                      ,INPUT p-find-next
+                      ,INPUT p-find-condition).
+    br-dis-tot_host:move-to-top().
+    apply "ENTRY" to br-dis-tot_host.
+    apply "VALUE-CHANGED" to br-dis-tot_host.
+  END.
+  WHEN "global" THEN DO:
+    RUN Openbr_ ( INPUT p-open-query
+                      ,INPUT p-find-next
+                      ,INPUT p-find-condition).
+     br-dis-tot_:move-to-top().
+     apply "ENTRY" to br-dis-tot_.
+     apply "VALUE-CHANGED" to br-dis-tot_.
+  END.
+END CASE.
+END PROCEDURE.
+PROCEDURE Openbr_ :
+define input  parameter p-open-query     as logical   no-undo .
+define input  parameter p-find-next      as logical   no-undo .
+define input  parameter p-find-condition as character no-undo .
+define variable l-query-was-opened as logical no-undo .
+run waitfram-show in this-procedure ("Ждите...").
+define variable sort-column-phrase as character no-undo .
+case sort-column-name :
+  when "" then do:
+    assign
+      sort-column-phrase = ""
+    .
+  end.
+  otherwise do:
+    assign
+      sort-column-phrase = "by " + sort-column-name
+    .
+  end.
+end case.
+define variable l-open-query as logical   no-undo .
+filter-point = filter-point0 + v-list-mode.
+CASE v-list-mode :
+  WHEN 'все':U        THEN DO:
+    assign
+    filter-point-label = substitute("Все итоги по ДК по фирмам")
+    frame Dialog-Frame:title = filter-point-label
+    .
+define variable vss-include-info20 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-21  as logical   no-undo .
+define variable  l-filter-open-21    as logical   .
+define variable  flt-rec-21       as recid     no-undo .
+define variable  filter-name-21      as character no-undo .
+define variable  where-phrase-21     as character no-undo .
+define variable  sort-phrase-21      as character no-undo .
+define variable  where-phrase-rus-21 as character no-undo .
+define variable  sort-phrase-rus-21  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-21
+  ,output filter-name-21
+  ,output where-phrase-21
+  ,output sort-phrase-21
+  ,output where-phrase-rus-21
+  ,output sort-phrase-rus-21
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-21
+      ) no-error .
+  assign
+    l-filter-open-21 = false
+  .
+  if flt-rec-21 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-21 as character no-undo .
+    define variable  parameter-3-21 as character no-undo .
+    define variable  parameter-4-21 as character no-undo .
+    define variable  parameter-5-21 as character no-undo .
+    define variable  parameter-6-21 as character no-undo .
+    define variable  parameter-7-21 as character no-undo .
+      assign
+      parameter-3-21 =
+                              "FOR EACH X_dis-tot_ NO-LOcK"
+      parameter-4-21 =
+        (
+          if (" X_dis-tot_.host-code = 0 " + " " + where-phrase-21) <> ""
+          then " X_dis-tot_.host-code = 0 " + " " + where-phrase-21
+          else "true"
+        )
+      parameter-5-21 = (" " + "" + " " + ", FIRST X_prop-ref_ NO-LOCK WHERE X_prop-ref_.dt-code = X_dis-tot_.dt-code")
+      parameter-6-21 = if sort-phrase-21 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-21
+        )
+      parameter-7-21 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-21 =
+          (" X_dis-tot_.host-code = 0 " + " " + where-phrase-21 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input parameter-3-21
+                          ,input parameter-4-21
+                          ,input parameter-5-21
+                          ,input parameter-6-21
+                          ,input parameter-7-21
+                          )
+      .
+      assign
+        l-filter-open-21 = true
+      .
+    end.
+    if l-filter-open-21 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-21 = false then do:
+    OPEN QUERY br-dis-tot_ FOR EACH X_dis-tot_ NO-LOcK
+      where  X_dis-tot_.host-code = 0
+    , FIRST X_prop-ref_ NO-LOCK WHERE X_prop-ref_.dt-code = X_dis-tot_.dt-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_ )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_:handle:get-buffer-handle(1) = (buffer X_dis-tot_:handle) then do:
+      assign
+      parameter-2-21 = (if p-find-next then "true":u else "false":u )
+      parameter-4-21 =
+        "where ":u + " X_dis-tot_.host-code = 0 " + " ":u + where-phrase-21 + " ":u + p-find-condition + " " + ""
+      parameter-5-21 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input rowid(X_dis-tot_)
+                          ,input logical(parameter-2-21)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_:handle)
+                          ,input parameter-4-21
+                          ,input parameter-5-21
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-21 = (if p-find-next then "true":u else "false":u )
+      parameter-3-21 =  "FOR EACH X_dis-tot_ NO-LOcK"
+      parameter-4-21 =
+        (
+          if (" X_dis-tot_.host-code = 0 " + " " + where-phrase-21) <> ""
+          then " X_dis-tot_.host-code = 0 " + " " + where-phrase-21
+          else "true"
+        )
+      parameter-5-21 = (" " + "" + " " + ", FIRST X_prop-ref_ NO-LOCK WHERE X_prop-ref_.dt-code = X_dis-tot_.dt-code" + " " + p-find-condition)
+      parameter-6-21 = if sort-phrase-21 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-21
+        )
+      parameter-7-21 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input logical(parameter-2-21)
+                          ,input no-lock
+                          ,input parameter-3-21
+                          ,input parameter-4-21
+                          ,input parameter-5-21
+                          ,input parameter-6-21
+                          ,input parameter-7-21
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+    END.
+    when "dtm-code" then do:
+        assign
+        filter-point-label = substitute("Все итоги по ДК по фирмам по объекту-операнду &1", f-dtm-code)
+        frame Dialog-Frame:title = filter-point-label
+        .
+define variable vss-include-info22 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-23  as logical   no-undo .
+define variable  l-filter-open-23    as logical   .
+define variable  flt-rec-23       as recid     no-undo .
+define variable  filter-name-23      as character no-undo .
+define variable  where-phrase-23     as character no-undo .
+define variable  sort-phrase-23      as character no-undo .
+define variable  where-phrase-rus-23 as character no-undo .
+define variable  sort-phrase-rus-23  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-23
+  ,output filter-name-23
+  ,output where-phrase-23
+  ,output sort-phrase-23
+  ,output where-phrase-rus-23
+  ,output sort-phrase-rus-23
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-23
+      ) no-error .
+  assign
+    l-filter-open-23 = false
+  .
+  if flt-rec-23 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-23 as character no-undo .
+    define variable  parameter-3-23 as character no-undo .
+    define variable  parameter-4-23 as character no-undo .
+    define variable  parameter-5-23 as character no-undo .
+    define variable  parameter-6-23 as character no-undo .
+    define variable  parameter-7-23 as character no-undo .
+      assign
+      parameter-3-23 =
+                              "FOR EACH X_dis-tot_ NO-LOcK"
+      parameter-4-23 =
+        (
+          if (" X_dis-tot_.host-code = 0 " + " " + where-phrase-23) <> ""
+          then " X_dis-tot_.host-code = 0 " + " " + where-phrase-23
+          else "true"
+        )
+      parameter-5-23 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_ NO-LOCK WHERE                                           X_prop-ref_.dt-code = X_dis-tot_.dt-code AND                                           X_prop-ref_.dtm-code = &1', f-dtm-code))
+      parameter-6-23 = if sort-phrase-23 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-23
+        )
+      parameter-7-23 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-23 =
+          (" X_dis-tot_.host-code = 0 " + " " + where-phrase-23 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input parameter-3-23
+                          ,input parameter-4-23
+                          ,input parameter-5-23
+                          ,input parameter-6-23
+                          ,input parameter-7-23
+                          )
+      .
+      assign
+        l-filter-open-23 = true
+      .
+    end.
+    if l-filter-open-23 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-23 = false then do:
+    OPEN QUERY br-dis-tot_ FOR EACH X_dis-tot_ NO-LOcK
+      where  X_dis-tot_.host-code = 0
+    , FIRST X_prop-ref_ NO-LOCK WHERE                                           X_prop-ref_.dt-code = X_dis-tot_.dt-code AND                                           X_prop-ref_.dtm-code = f-dtm-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_ )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_:handle:get-buffer-handle(1) = (buffer X_dis-tot_:handle) then do:
+      assign
+      parameter-2-23 = (if p-find-next then "true":u else "false":u )
+      parameter-4-23 =
+        "where ":u + " X_dis-tot_.host-code = 0 " + " ":u + where-phrase-23 + " ":u + p-find-condition + " " + ""
+      parameter-5-23 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input rowid(X_dis-tot_)
+                          ,input logical(parameter-2-23)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_:handle)
+                          ,input parameter-4-23
+                          ,input parameter-5-23
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-23 = (if p-find-next then "true":u else "false":u )
+      parameter-3-23 =  "FOR EACH X_dis-tot_ NO-LOcK"
+      parameter-4-23 =
+        (
+          if (" X_dis-tot_.host-code = 0 " + " " + where-phrase-23) <> ""
+          then " X_dis-tot_.host-code = 0 " + " " + where-phrase-23
+          else "true"
+        )
+      parameter-5-23 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_ NO-LOCK WHERE                                           X_prop-ref_.dt-code = X_dis-tot_.dt-code AND                                           X_prop-ref_.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-23 = if sort-phrase-23 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-23
+        )
+      parameter-7-23 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input logical(parameter-2-23)
+                          ,input no-lock
+                          ,input parameter-3-23
+                          ,input parameter-4-23
+                          ,input parameter-5-23
+                          ,input parameter-6-23
+                          ,input parameter-7-23
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+  END.
+  when "dt-code" then do:
+        assign
+        filter-point-label = substitute("Все итоги &1 по ДК по фирмам по объекту-операнду &2"
+                                        , f-sum-id
+                                        , f-dtm-code)
+        frame Dialog-Frame:title = filter-point-label
+        .
+define variable vss-include-info24 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-25  as logical   no-undo .
+define variable  l-filter-open-25    as logical   .
+define variable  flt-rec-25       as recid     no-undo .
+define variable  filter-name-25      as character no-undo .
+define variable  where-phrase-25     as character no-undo .
+define variable  sort-phrase-25      as character no-undo .
+define variable  where-phrase-rus-25 as character no-undo .
+define variable  sort-phrase-rus-25  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-25
+  ,output filter-name-25
+  ,output where-phrase-25
+  ,output sort-phrase-25
+  ,output where-phrase-rus-25
+  ,output sort-phrase-rus-25
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-25
+      ) no-error .
+  assign
+    l-filter-open-25 = false
+  .
+  if flt-rec-25 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-25 as character no-undo .
+    define variable  parameter-3-25 as character no-undo .
+    define variable  parameter-4-25 as character no-undo .
+    define variable  parameter-5-25 as character no-undo .
+    define variable  parameter-6-25 as character no-undo .
+    define variable  parameter-7-25 as character no-undo .
+      assign
+      parameter-3-25 =
+                              "FOR EACH X_dis-tot_ NO-LOcK"
+      parameter-4-25 =
+        (
+          if ("X_dis-tot_.host-code = 0 and X_dis-tot_.dt-code = f-dt-code " + " " + where-phrase-25) <> ""
+          then  substitute(' X_dis-tot_.host-code = 0 and X_dis-tot_.dt-code = &1', f-dt-code)  + " " + where-phrase-25
+          else "true"
+        )
+      parameter-5-25 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_ NO-LOCK WHERE                                           X_prop-ref_.dt-code = X_dis-tot_.dt-code AND                                           X_prop-ref_.dtm-code = &1', f-dtm-code))
+      parameter-6-25 = if sort-phrase-25 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-25
+        )
+      parameter-7-25 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-25 =
+          ("X_dis-tot_.host-code = 0 and X_dis-tot_.dt-code = f-dt-code " + " " + where-phrase-25 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input parameter-3-25
+                          ,input parameter-4-25
+                          ,input parameter-5-25
+                          ,input parameter-6-25
+                          ,input parameter-7-25
+                          )
+      .
+      assign
+        l-filter-open-25 = true
+      .
+    end.
+    if l-filter-open-25 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-25 = false then do:
+    OPEN QUERY br-dis-tot_ FOR EACH X_dis-tot_ NO-LOcK
+      where X_dis-tot_.host-code = 0 and X_dis-tot_.dt-code = f-dt-code
+    , FIRST X_prop-ref_ WHERE                                            X_prop-ref_.dt-code = X_dis-tot_.dt-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_ )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_:handle:get-buffer-handle(1) = (buffer X_dis-tot_:handle) then do:
+      assign
+      parameter-2-25 = (if p-find-next then "true":u else "false":u )
+      parameter-4-25 =
+        "where ":u +  substitute(' X_dis-tot_.host-code = 0 and X_dis-tot_.dt-code = &1', f-dt-code)  + " ":u + where-phrase-25 + " ":u + p-find-condition + " " + ""
+      parameter-5-25 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input rowid(X_dis-tot_)
+                          ,input logical(parameter-2-25)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_:handle)
+                          ,input parameter-4-25
+                          ,input parameter-5-25
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-25 = (if p-find-next then "true":u else "false":u )
+      parameter-3-25 =  "FOR EACH X_dis-tot_ NO-LOcK"
+      parameter-4-25 =
+        (
+          if ("X_dis-tot_.host-code = 0 and X_dis-tot_.dt-code = f-dt-code " + " " + where-phrase-25) <> ""
+          then  substitute(' X_dis-tot_.host-code = 0 and X_dis-tot_.dt-code = &1', f-dt-code)  + " " + where-phrase-25
+          else "true"
+        )
+      parameter-5-25 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_ NO-LOCK WHERE                                           X_prop-ref_.dt-code = X_dis-tot_.dt-code AND                                           X_prop-ref_.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-25 = if sort-phrase-25 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-25
+        )
+      parameter-7-25 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_:handle
+                          ,input logical(parameter-2-25)
+                          ,input no-lock
+                          ,input parameter-3-25
+                          ,input parameter-4-25
+                          ,input parameter-5-25
+                          ,input parameter-6-25
+                          ,input parameter-7-25
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+  END.
+END CASE.
+if not p-open-query then
+REPOSITION br-dis-tot_ to recid v-doc-rec No-ERROR.
+if not p-open-query and v-fltopend-rowid[1] <> ? then
+query br-dis-tot_:handle:reposition-to-rowid(v-fltopend-rowid) No-ERROR.
+run waitfram-hide in this-procedure.
+APPLY "ENTRY" TO br-dis-tot_.
+APPLY "VALUE-CHANGED" TO br-dis-tot_ in frame Dialog-Frame.
+END PROCEDURE.
+PROCEDURE Openbr_host :
+define input  parameter p-open-query     as logical   no-undo .
+define input  parameter p-find-next      as logical   no-undo .
+define input  parameter p-find-condition as character no-undo .
+define variable l-query-was-opened as logical no-undo .
+run waitfram-show in this-procedure ("Ждите...").
+define variable sort-column-phrase as character no-undo .
+case sort-column-name :
+  when "" then do:
+    assign
+      sort-column-phrase = ""
+    .
+  end.
+  otherwise do:
+    assign
+      sort-column-phrase = "by " + sort-column-name
+    .
+  end.
+end case.
+define variable l-open-query as logical   no-undo .
+filter-point = filter-point0 + v-list-mode + "_host".
+CASE v-list-mode :
+  WHEN 'все':U        THEN DO:
+    assign
+    filter-point-label = substitute("Все итоги по ДК по фирмам")
+    frame Dialog-Frame:title = filter-point-label
+    .
+define variable vss-include-info26 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-27  as logical   no-undo .
+define variable  l-filter-open-27    as logical   .
+define variable  flt-rec-27       as recid     no-undo .
+define variable  filter-name-27      as character no-undo .
+define variable  where-phrase-27     as character no-undo .
+define variable  sort-phrase-27      as character no-undo .
+define variable  where-phrase-rus-27 as character no-undo .
+define variable  sort-phrase-rus-27  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-27
+  ,output filter-name-27
+  ,output where-phrase-27
+  ,output sort-phrase-27
+  ,output where-phrase-rus-27
+  ,output sort-phrase-rus-27
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-27
+      ) no-error .
+  assign
+    l-filter-open-27 = false
+  .
+  if flt-rec-27 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-27 as character no-undo .
+    define variable  parameter-3-27 as character no-undo .
+    define variable  parameter-4-27 as character no-undo .
+    define variable  parameter-5-27 as character no-undo .
+    define variable  parameter-6-27 as character no-undo .
+    define variable  parameter-7-27 as character no-undo .
+      assign
+      parameter-3-27 =
+                              "FOR EACH X_dis-tot_host NO-LOcK"
+      parameter-4-27 =
+        (
+          if (" X_dis-tot_host.host-code > 0  " + " " + where-phrase-27) <> ""
+          then " X_dis-tot_host.host-code > 0  " + " " + where-phrase-27
+          else "true"
+        )
+      parameter-5-27 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_ NO-LOCK WHERE                                           X_prop-ref_.dt-code = X_dis-tot_.dt-code AND                                           X_prop-ref_.dtm-code = &1', f-dtm-code))
+      parameter-6-27 = if sort-phrase-27 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-27
+        )
+      parameter-7-27 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-27 =
+          (" X_dis-tot_host.host-code > 0  " + " " + where-phrase-27 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input parameter-3-27
+                          ,input parameter-4-27
+                          ,input parameter-5-27
+                          ,input parameter-6-27
+                          ,input parameter-7-27
+                          )
+      .
+      assign
+        l-filter-open-27 = true
+      .
+    end.
+    if l-filter-open-27 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-27 = false then do:
+    OPEN QUERY br-dis-tot_host FOR EACH X_dis-tot_host NO-LOcK
+      where  X_dis-tot_host.host-code > 0
+    , FIRST X_prop-ref_host NO-LOCK WHERE X_prop-ref_host.dt-code = X_dis-tot_host.dt-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_host )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_host:handle:get-buffer-handle(1) = (buffer X_dis-tot_host:handle) then do:
+      assign
+      parameter-2-27 = (if p-find-next then "true":u else "false":u )
+      parameter-4-27 =
+        "where ":u + " X_dis-tot_host.host-code > 0  " + " ":u + where-phrase-27 + " ":u + p-find-condition + " " + ""
+      parameter-5-27 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input rowid(X_dis-tot_host)
+                          ,input logical(parameter-2-27)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_host:handle)
+                          ,input parameter-4-27
+                          ,input parameter-5-27
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-27 = (if p-find-next then "true":u else "false":u )
+      parameter-3-27 =  "FOR EACH X_dis-tot_host NO-LOcK"
+      parameter-4-27 =
+        (
+          if (" X_dis-tot_host.host-code > 0  " + " " + where-phrase-27) <> ""
+          then " X_dis-tot_host.host-code > 0  " + " " + where-phrase-27
+          else "true"
+        )
+      parameter-5-27 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_ NO-LOCK WHERE                                           X_prop-ref_.dt-code = X_dis-tot_.dt-code AND                                           X_prop-ref_.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-27 = if sort-phrase-27 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-27
+        )
+      parameter-7-27 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input logical(parameter-2-27)
+                          ,input no-lock
+                          ,input parameter-3-27
+                          ,input parameter-4-27
+                          ,input parameter-5-27
+                          ,input parameter-6-27
+                          ,input parameter-7-27
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+    END.
+    when "dtm-code" then do:
+        assign
+        filter-point-label = substitute("Все итоги по ДК по фирмам по объекту-операнду &1", f-dtm-code)
+        frame Dialog-Frame:title = filter-point-label
+        .
+define variable vss-include-info28 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-29  as logical   no-undo .
+define variable  l-filter-open-29    as logical   .
+define variable  flt-rec-29       as recid     no-undo .
+define variable  filter-name-29      as character no-undo .
+define variable  where-phrase-29     as character no-undo .
+define variable  sort-phrase-29      as character no-undo .
+define variable  where-phrase-rus-29 as character no-undo .
+define variable  sort-phrase-rus-29  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-29
+  ,output filter-name-29
+  ,output where-phrase-29
+  ,output sort-phrase-29
+  ,output where-phrase-rus-29
+  ,output sort-phrase-rus-29
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-29
+      ) no-error .
+  assign
+    l-filter-open-29 = false
+  .
+  if flt-rec-29 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-29 as character no-undo .
+    define variable  parameter-3-29 as character no-undo .
+    define variable  parameter-4-29 as character no-undo .
+    define variable  parameter-5-29 as character no-undo .
+    define variable  parameter-6-29 as character no-undo .
+    define variable  parameter-7-29 as character no-undo .
+      assign
+      parameter-3-29 =
+                              "FOR EACH X_dis-tot_host NO-LOcK"
+      parameter-4-29 =
+        (
+          if (" X_dis-tot_host.host-code > 0 " + " " + where-phrase-29) <> ""
+          then " X_dis-tot_host.host-code > 0 " + " " + where-phrase-29
+          else "true"
+        )
+      parameter-5-29 = (" " + "" + " " + substitute('   , FIRST X_prop-ref_host NO-LOCK WHERE                                           X_prop-ref_host.dt-code = X_dis-tot_host.dt-code AND                                           X_prop-ref_host.dtm-code = &1', f-dtm-code))
+      parameter-6-29 = if sort-phrase-29 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-29
+        )
+      parameter-7-29 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-29 =
+          (" X_dis-tot_host.host-code > 0 " + " " + where-phrase-29 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input parameter-3-29
+                          ,input parameter-4-29
+                          ,input parameter-5-29
+                          ,input parameter-6-29
+                          ,input parameter-7-29
+                          )
+      .
+      assign
+        l-filter-open-29 = true
+      .
+    end.
+    if l-filter-open-29 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-29 = false then do:
+    OPEN QUERY br-dis-tot_host FOR EACH X_dis-tot_host NO-LOcK
+      where  X_dis-tot_host.host-code > 0
+    , FIRST X_prop-ref_host NO-LOCK WHERE                                           X_prop-ref_host.dt-code = X_dis-tot_host.dt-code AND                                           X_prop-ref_host.dtm-code = f-dtm-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_host )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_host:handle:get-buffer-handle(1) = (buffer X_dis-tot_host:handle) then do:
+      assign
+      parameter-2-29 = (if p-find-next then "true":u else "false":u )
+      parameter-4-29 =
+        "where ":u + " X_dis-tot_host.host-code > 0 " + " ":u + where-phrase-29 + " ":u + p-find-condition + " " + ""
+      parameter-5-29 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input rowid(X_dis-tot_host)
+                          ,input logical(parameter-2-29)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_host:handle)
+                          ,input parameter-4-29
+                          ,input parameter-5-29
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-29 = (if p-find-next then "true":u else "false":u )
+      parameter-3-29 =  "FOR EACH X_dis-tot_host NO-LOcK"
+      parameter-4-29 =
+        (
+          if (" X_dis-tot_host.host-code > 0 " + " " + where-phrase-29) <> ""
+          then " X_dis-tot_host.host-code > 0 " + " " + where-phrase-29
+          else "true"
+        )
+      parameter-5-29 = (" " + "" + " " + substitute('   , FIRST X_prop-ref_host NO-LOCK WHERE                                           X_prop-ref_host.dt-code = X_dis-tot_host.dt-code AND                                           X_prop-ref_host.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-29 = if sort-phrase-29 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-29
+        )
+      parameter-7-29 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input logical(parameter-2-29)
+                          ,input no-lock
+                          ,input parameter-3-29
+                          ,input parameter-4-29
+                          ,input parameter-5-29
+                          ,input parameter-6-29
+                          ,input parameter-7-29
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+  END.
+  when "dt-code" then do:
+        assign
+        filter-point-label = substitute("Все итоги &1 по ДК по фирмам по объекту-операнду &2"
+                                        , f-sum-id
+                                        , f-dtm-code)
+        frame Dialog-Frame:title = filter-point-label
+        .
+define variable vss-include-info30 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-31  as logical   no-undo .
+define variable  l-filter-open-31    as logical   .
+define variable  flt-rec-31       as recid     no-undo .
+define variable  filter-name-31      as character no-undo .
+define variable  where-phrase-31     as character no-undo .
+define variable  sort-phrase-31      as character no-undo .
+define variable  where-phrase-rus-31 as character no-undo .
+define variable  sort-phrase-rus-31  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-31
+  ,output filter-name-31
+  ,output where-phrase-31
+  ,output sort-phrase-31
+  ,output where-phrase-rus-31
+  ,output sort-phrase-rus-31
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-31
+      ) no-error .
+  assign
+    l-filter-open-31 = false
+  .
+  if flt-rec-31 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-31 as character no-undo .
+    define variable  parameter-3-31 as character no-undo .
+    define variable  parameter-4-31 as character no-undo .
+    define variable  parameter-5-31 as character no-undo .
+    define variable  parameter-6-31 as character no-undo .
+    define variable  parameter-7-31 as character no-undo .
+      assign
+      parameter-3-31 =
+                              "FOR EACH X_dis-tot_host NO-LOcK"
+      parameter-4-31 =
+        (
+          if (" X_dis-tot_host.host-code > 0 and  X_dis-tot_host.dt-code = f-dt-code " + " " + where-phrase-31) <> ""
+          then  substitute('X_dis-tot_host.host-code > 0 and  X_dis-tot_host.dt-code = &1', f-dt-code ) + " " + where-phrase-31
+          else "true"
+        )
+      parameter-5-31 = (" " + "" + " " + substitute('   , FIRST X_prop-ref_host NO-LOCK WHERE                                           X_prop-ref_host.dt-code = X_dis-tot_host.dt-code AND                                           X_prop-ref_host.dtm-code = &1', f-dtm-code))
+      parameter-6-31 = if sort-phrase-31 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-31
+        )
+      parameter-7-31 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-31 =
+          (" X_dis-tot_host.host-code > 0 and  X_dis-tot_host.dt-code = f-dt-code " + " " + where-phrase-31 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input parameter-3-31
+                          ,input parameter-4-31
+                          ,input parameter-5-31
+                          ,input parameter-6-31
+                          ,input parameter-7-31
+                          )
+      .
+      assign
+        l-filter-open-31 = true
+      .
+    end.
+    if l-filter-open-31 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-31 = false then do:
+    OPEN QUERY br-dis-tot_host FOR EACH X_dis-tot_host NO-LOcK
+      where  X_dis-tot_host.host-code > 0 and  X_dis-tot_host.dt-code = f-dt-code
+    , FIRST X_prop-ref_host WHERE                                            X_prop-ref_host.dt-code = X_dis-tot_host.dt-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_host )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_host:handle:get-buffer-handle(1) = (buffer X_dis-tot_host:handle) then do:
+      assign
+      parameter-2-31 = (if p-find-next then "true":u else "false":u )
+      parameter-4-31 =
+        "where ":u +  substitute('X_dis-tot_host.host-code > 0 and  X_dis-tot_host.dt-code = &1', f-dt-code ) + " ":u + where-phrase-31 + " ":u + p-find-condition + " " + ""
+      parameter-5-31 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input rowid(X_dis-tot_host)
+                          ,input logical(parameter-2-31)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_host:handle)
+                          ,input parameter-4-31
+                          ,input parameter-5-31
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-31 = (if p-find-next then "true":u else "false":u )
+      parameter-3-31 =  "FOR EACH X_dis-tot_host NO-LOcK"
+      parameter-4-31 =
+        (
+          if (" X_dis-tot_host.host-code > 0 and  X_dis-tot_host.dt-code = f-dt-code " + " " + where-phrase-31) <> ""
+          then  substitute('X_dis-tot_host.host-code > 0 and  X_dis-tot_host.dt-code = &1', f-dt-code ) + " " + where-phrase-31
+          else "true"
+        )
+      parameter-5-31 = (" " + "" + " " + substitute('   , FIRST X_prop-ref_host NO-LOCK WHERE                                           X_prop-ref_host.dt-code = X_dis-tot_host.dt-code AND                                           X_prop-ref_host.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-31 = if sort-phrase-31 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-31
+        )
+      parameter-7-31 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_host:handle
+                          ,input logical(parameter-2-31)
+                          ,input no-lock
+                          ,input parameter-3-31
+                          ,input parameter-4-31
+                          ,input parameter-5-31
+                          ,input parameter-6-31
+                          ,input parameter-7-31
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+  END.
+END CASE.
+if not p-open-query then
+REPOSITION br-dis-tot_host to recid v-doc-rec No-ERROR.
+if not p-open-query and v-fltopend-rowid[1] <> ? then
+query br-dis-tot_host:handle:reposition-to-rowid(v-fltopend-rowid) No-ERROR.
+run waitfram-hide in this-procedure.
+APPLY "ENTRY" TO br-dis-tot_host.
+APPLY "VALUE-CHANGED" TO br-dis-tot_host in frame Dialog-Frame.
+END PROCEDURE.
+PROCEDURE Openbr_obj :
+define input  parameter p-open-query     as logical   no-undo .
+define input  parameter p-find-next      as logical   no-undo .
+define input  parameter p-find-condition as character no-undo .
+define variable l-query-was-opened as logical no-undo .
+run waitfram-show in this-procedure ("Ждите...").
+define variable sort-column-phrase as character no-undo .
+case sort-column-name :
+  when "" then do:
+    assign
+      sort-column-phrase = ""
+    .
+  end.
+  otherwise do:
+    assign
+      sort-column-phrase = "by " + sort-column-name
+    .
+  end.
+end case.
+define variable l-open-query as logical   no-undo .
+filter-point = filter-point0 + v-list-mode + "_obj".
+CASE v-list-mode :
+  WHEN 'все':U        THEN DO:
+    assign
+    filter-point-label = substitute("Все итоги по ДК по объектам")
+    frame Dialog-Frame:title = filter-point-label
+    .
+define variable vss-include-info32 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-33  as logical   no-undo .
+define variable  l-filter-open-33    as logical   .
+define variable  flt-rec-33       as recid     no-undo .
+define variable  filter-name-33      as character no-undo .
+define variable  where-phrase-33     as character no-undo .
+define variable  sort-phrase-33      as character no-undo .
+define variable  where-phrase-rus-33 as character no-undo .
+define variable  sort-phrase-rus-33  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-33
+  ,output filter-name-33
+  ,output where-phrase-33
+  ,output sort-phrase-33
+  ,output where-phrase-rus-33
+  ,output sort-phrase-rus-33
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-33
+      ) no-error .
+  assign
+    l-filter-open-33 = false
+  .
+  if flt-rec-33 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-33 as character no-undo .
+    define variable  parameter-3-33 as character no-undo .
+    define variable  parameter-4-33 as character no-undo .
+    define variable  parameter-5-33 as character no-undo .
+    define variable  parameter-6-33 as character no-undo .
+    define variable  parameter-7-33 as character no-undo .
+      assign
+      parameter-3-33 =
+                              "FOR EACH X_dis-tot_obj NO-LOcK"
+      parameter-4-33 =
+        (
+          if (" true " + " " + where-phrase-33) <> ""
+          then " true " + " " + where-phrase-33
+          else "true"
+        )
+      parameter-5-33 = (" " + "" + " " + substitute('   , FIRST X_prop-ref_host NO-LOCK WHERE                                           X_prop-ref_host.dt-code = X_dis-tot_host.dt-code AND                                           X_prop-ref_host.dtm-code = &1', f-dtm-code))
+      parameter-6-33 = if sort-phrase-33 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-33
+        )
+      parameter-7-33 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-33 =
+          (" true " + " " + where-phrase-33 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input parameter-3-33
+                          ,input parameter-4-33
+                          ,input parameter-5-33
+                          ,input parameter-6-33
+                          ,input parameter-7-33
+                          )
+      .
+      assign
+        l-filter-open-33 = true
+      .
+    end.
+    if l-filter-open-33 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-33 = false then do:
+    OPEN QUERY br-dis-tot_obj FOR EACH X_dis-tot_obj NO-LOcK
+      where  true
+    , FIRST X_prop-ref_obj NO-LOCK WHERE X_prop-ref_obj.dt-code = X_dis-tot_obj.dt-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_obj )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_obj:handle:get-buffer-handle(1) = (buffer X_dis-tot_obj:handle) then do:
+      assign
+      parameter-2-33 = (if p-find-next then "true":u else "false":u )
+      parameter-4-33 =
+        "where ":u + " true " + " ":u + where-phrase-33 + " ":u + p-find-condition + " " + ""
+      parameter-5-33 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input rowid(X_dis-tot_obj)
+                          ,input logical(parameter-2-33)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_obj:handle)
+                          ,input parameter-4-33
+                          ,input parameter-5-33
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-33 = (if p-find-next then "true":u else "false":u )
+      parameter-3-33 =  "FOR EACH X_dis-tot_obj NO-LOcK"
+      parameter-4-33 =
+        (
+          if (" true " + " " + where-phrase-33) <> ""
+          then " true " + " " + where-phrase-33
+          else "true"
+        )
+      parameter-5-33 = (" " + "" + " " + substitute('   , FIRST X_prop-ref_host NO-LOCK WHERE                                           X_prop-ref_host.dt-code = X_dis-tot_host.dt-code AND                                           X_prop-ref_host.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-33 = if sort-phrase-33 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-33
+        )
+      parameter-7-33 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input logical(parameter-2-33)
+                          ,input no-lock
+                          ,input parameter-3-33
+                          ,input parameter-4-33
+                          ,input parameter-5-33
+                          ,input parameter-6-33
+                          ,input parameter-7-33
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+    END.
+    when "dtm-code" then do:
+        assign
+        filter-point-label = substitute("Все итоги по ДК по объектам по объекту-операнду &1", f-dtm-code)
+        frame Dialog-Frame:title = filter-point-label
+        .
+define variable vss-include-info34 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-35  as logical   no-undo .
+define variable  l-filter-open-35    as logical   .
+define variable  flt-rec-35       as recid     no-undo .
+define variable  filter-name-35      as character no-undo .
+define variable  where-phrase-35     as character no-undo .
+define variable  sort-phrase-35      as character no-undo .
+define variable  where-phrase-rus-35 as character no-undo .
+define variable  sort-phrase-rus-35  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-35
+  ,output filter-name-35
+  ,output where-phrase-35
+  ,output sort-phrase-35
+  ,output where-phrase-rus-35
+  ,output sort-phrase-rus-35
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-35
+      ) no-error .
+  assign
+    l-filter-open-35 = false
+  .
+  if flt-rec-35 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-35 as character no-undo .
+    define variable  parameter-3-35 as character no-undo .
+    define variable  parameter-4-35 as character no-undo .
+    define variable  parameter-5-35 as character no-undo .
+    define variable  parameter-6-35 as character no-undo .
+    define variable  parameter-7-35 as character no-undo .
+      assign
+      parameter-3-35 =
+                              "FOR EACH X_dis-tot_obj NO-LOcK"
+      parameter-4-35 =
+        (
+          if (" true" + " " + where-phrase-35) <> ""
+          then " true" + " " + where-phrase-35
+          else "true"
+        )
+      parameter-5-35 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_obj NO-LOCK WHERE                                           X_prop-ref_obj.dt-code = X_dis-tot_obj.dt-code AND                                           X_prop-ref_obj.dtm-code = &1', f-dtm-code))
+      parameter-6-35 = if sort-phrase-35 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-35
+        )
+      parameter-7-35 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-35 =
+          (" true" + " " + where-phrase-35 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input parameter-3-35
+                          ,input parameter-4-35
+                          ,input parameter-5-35
+                          ,input parameter-6-35
+                          ,input parameter-7-35
+                          )
+      .
+      assign
+        l-filter-open-35 = true
+      .
+    end.
+    if l-filter-open-35 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-35 = false then do:
+    OPEN QUERY br-dis-tot_obj FOR EACH X_dis-tot_obj NO-LOcK
+      where  true
+    , FIRST X_prop-ref_obj NO-LOCK WHERE                                           X_prop-ref_obj.dt-code = X_dis-tot_obj.dt-code AND                                           X_prop-ref_obj.dtm-code = f-dtm-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_obj )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_obj:handle:get-buffer-handle(1) = (buffer X_dis-tot_obj:handle) then do:
+      assign
+      parameter-2-35 = (if p-find-next then "true":u else "false":u )
+      parameter-4-35 =
+        "where ":u + " true" + " ":u + where-phrase-35 + " ":u + p-find-condition + " " + ""
+      parameter-5-35 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input rowid(X_dis-tot_obj)
+                          ,input logical(parameter-2-35)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_obj:handle)
+                          ,input parameter-4-35
+                          ,input parameter-5-35
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-35 = (if p-find-next then "true":u else "false":u )
+      parameter-3-35 =  "FOR EACH X_dis-tot_obj NO-LOcK"
+      parameter-4-35 =
+        (
+          if (" true" + " " + where-phrase-35) <> ""
+          then " true" + " " + where-phrase-35
+          else "true"
+        )
+      parameter-5-35 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_obj NO-LOCK WHERE                                           X_prop-ref_obj.dt-code = X_dis-tot_obj.dt-code AND                                           X_prop-ref_obj.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-35 = if sort-phrase-35 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-35
+        )
+      parameter-7-35 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input logical(parameter-2-35)
+                          ,input no-lock
+                          ,input parameter-3-35
+                          ,input parameter-4-35
+                          ,input parameter-5-35
+                          ,input parameter-6-35
+                          ,input parameter-7-35
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+  END.
+  when "dt-code" then do:
+        assign
+        filter-point-label = substitute("Все итоги &1 по ДК по объектам по объекту-операнду &2"
+                                        , f-sum-id
+                                        , f-dtm-code)
+        frame Dialog-Frame:title = filter-point-label
+        .
+define variable vss-include-info36 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define variable  l-disable-where-37  as logical   no-undo .
+define variable  l-filter-open-37    as logical   .
+define variable  flt-rec-37       as recid     no-undo .
+define variable  filter-name-37      as character no-undo .
+define variable  where-phrase-37     as character no-undo .
+define variable  sort-phrase-37      as character no-undo .
+define variable  where-phrase-rus-37 as character no-undo .
+define variable  sort-phrase-rus-37  as character no-undo .
+  run waitfram-show in this-procedure
+    (input "ЖДИТЕ ..."
+    ).
+run gbl/flt-get.p
+  (input filter-point
+  ,output flt-rec-37
+  ,output filter-name-37
+  ,output where-phrase-37
+  ,output sort-phrase-37
+  ,output where-phrase-rus-37
+  ,output sort-phrase-rus-37
+  ).
+if p-open-query then do:
+    run set-filter-name in this-procedure
+      (INPUT filter-name-37
+      ) no-error .
+  assign
+    l-filter-open-37 = false
+  .
+  if flt-rec-37 <> ?
+    or sort-column-phrase > ""
+  then do:
+    define variable  parameter-2-37 as character no-undo .
+    define variable  parameter-3-37 as character no-undo .
+    define variable  parameter-4-37 as character no-undo .
+    define variable  parameter-5-37 as character no-undo .
+    define variable  parameter-6-37 as character no-undo .
+    define variable  parameter-7-37 as character no-undo .
+      assign
+      parameter-3-37 =
+                              "FOR EACH X_dis-tot_obj NO-LOcK"
+      parameter-4-37 =
+        (
+          if (" X_dis-tot_obj.dt-code = f-dt-code " + " " + where-phrase-37) <> ""
+          then  substitute('X_prop-ref_obj.dt-code = &1', f-dt-code)  + " " + where-phrase-37
+          else "true"
+        )
+      parameter-5-37 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_obj NO-LOCK WHERE                                           X_prop-ref_obj.dt-code = X_dis-tot_obj.dt-code AND                                           X_prop-ref_obj.dtm-code = &1', f-dtm-code))
+      parameter-6-37 = if sort-phrase-37 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-37
+        )
+      parameter-7-37 =
+        " indexed-reposition  "
+    .
+    do
+    on stop undo, leave
+    on error undo, leave
+    :
+      assign
+        l-disable-where-37 =
+          (" X_dis-tot_obj.dt-code = f-dt-code " + " " + where-phrase-37 = "")
+      .
+      run fltopend_fltopend in this-procedure  ( input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input parameter-3-37
+                          ,input parameter-4-37
+                          ,input parameter-5-37
+                          ,input parameter-6-37
+                          ,input parameter-7-37
+                          )
+      .
+      assign
+        l-filter-open-37 = true
+      .
+    end.
+    if l-filter-open-37 = false then do:
+      message
+        "Ошибка при фильтрации / сортировке" skip
+        "Будут показаны записи без учета фильтра" skip
+        view-as alert-box .
+    end.
+    else do:
+        assign
+          l-query-was-opened = true
+        .
+    end.
+  end.
+  if l-filter-open-37 = false then do:
+    OPEN QUERY br-dis-tot_obj FOR EACH X_dis-tot_obj NO-LOcK
+      where  X_dis-tot_obj.dt-code = f-dt-code
+    , FIRST X_prop-ref_obj WHERE                                            X_prop-ref_Obj.dt-code = X_dis-tot_obj.dt-code
+      indexed-reposition
+  .
+      assign
+        l-query-was-opened = true
+      .
+  end.
+end.
+else do:
+  assign
+    v-doc-rec = recid( X_dis-tot_obj )
+  .
+  do
+  on stop undo, leave
+  on error undo, leave
+  :
+    if QUERY br-dis-tot_obj:handle:get-buffer-handle(1) = (buffer X_dis-tot_obj:handle) then do:
+      assign
+      parameter-2-37 = (if p-find-next then "true":u else "false":u )
+      parameter-4-37 =
+        "where ":u +  substitute('X_prop-ref_obj.dt-code = &1', f-dt-code)  + " ":u + where-phrase-37 + " ":u + p-find-condition + " " + ""
+      parameter-5-37 = "  "
+    .
+      run fltopend_fltfindd in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input rowid(X_dis-tot_obj)
+                          ,input logical(parameter-2-37)
+                          ,input no-lock
+                          ,input (buffer X_dis-tot_obj:handle)
+                          ,input parameter-4-37
+                          ,input parameter-5-37
+                          ) no-error.
+      .
+      assign
+        v-doc-rec = integer(return-value)
+        v-fltopend-rowid[1] = ?
+      .
+    end.
+    else do:
+      assign
+      parameter-2-37 = (if p-find-next then "true":u else "false":u )
+      parameter-3-37 =  "FOR EACH X_dis-tot_obj NO-LOcK"
+      parameter-4-37 =
+        (
+          if (" X_dis-tot_obj.dt-code = f-dt-code " + " " + where-phrase-37) <> ""
+          then  substitute('X_prop-ref_obj.dt-code = &1', f-dt-code)  + " " + where-phrase-37
+          else "true"
+        )
+      parameter-5-37 = (" " + "" + " " + substitute('  , FIRST X_prop-ref_obj NO-LOCK WHERE                                           X_prop-ref_obj.dt-code = X_dis-tot_obj.dt-code AND                                           X_prop-ref_obj.dtm-code = &1', f-dtm-code) + " " + p-find-condition)
+      parameter-6-37 = if sort-phrase-37 = ''
+                           then
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + " "
+        )
+                           else
+        (
+        " " + "  " +
+          " " + sort-column-phrase +
+        " " + sort-phrase-37
+        )
+      parameter-7-37 =
+        " indexed-reposition  "
+    .
+      run fltopend_fltfindq in this-procedure  (
+                          input this-procedure:handle
+                          ,input QUERY br-dis-tot_obj:handle
+                          ,input logical(parameter-2-37)
+                          ,input no-lock
+                          ,input parameter-3-37
+                          ,input parameter-4-37
+                          ,input parameter-5-37
+                          ,input parameter-6-37
+                          ,input parameter-7-37
+                          ,output v-fltopend-rowid
+                          ) no-error.
+      .
+      v-doc-rec = ?.
+    end.
+    assign
+      l-query-was-opened = true
+    .
+  end.
+end.
+  run waitfram-hide in this-procedure .
+  END.
+END CASE.
+if not p-open-query then
+REPOSITION br-dis-tot_obj to recid v-doc-rec No-ERROR.
+if not p-open-query and v-fltopend-rowid[1] <> ? then
+query br-dis-tot_obj:handle:reposition-to-rowid(v-fltopend-rowid) No-ERROR.
+run waitfram-hide in this-procedure.
+APPLY "ENTRY" TO br-dis-tot_obj.
+APPLY "VALUE-CHANGED" TO br-dis-tot_obj in frame Dialog-Frame.
+END PROCEDURE.
+PROCEDURE Printproc :
+DEFINE INPUT PARAMETER p-dtm-code AS INTEGER NO-UNDO.
+DEFINE INPUT PARAMETER p-region AS CHARACTER NO-UNDO.
+define variable  date_string        as character no-undo.
+define variable  Line               as character no-undo.
+define variable  for-time           as character no-undo .
+define variable  accum-count        as integer   no-undo .
+define variable  accum-gds-tot-base as decimal   no-undo .
+define variable  accum-gds-tot-rubl as decimal   no-undo .
+define variable  accum-gds-dis-base as decimal   no-undo .
+define variable  accum-gds-dis-rubl as decimal   no-undo .
+define variable  accum-pay-tot-base as decimal   no-undo .
+define variable  accum-pay-tot-rubl as decimal   no-undo .
+define variable  accum-num-chk      as integer   no-undo .
+DEFINE FRAME dis-tot_
+X_prop-ref_.sum-id COLUMN-LABEL "Идентификатор"
+X_prop-ref_.caller_id COLUMN-LABEL "Доп!Идентификатор"
+X_prop-ref_.dtm-code COLUMN-LABEL "Код!объекта-!операнда" format ">>9"
+X_dis-tot_.d-card COLUMN-LABEL "№ ДК" FORMAT "X(19)"
+X_dis-tot_.gds-tot-rubl COLUMN-LABEL "Сумма товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.gds-dis-rubl COLUMN-LABEL "Скидка товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.pay-tot-rubl COLUMN-LABEL "Сумма оплат!нац.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_.gds-tot-base COLUMN-LABEL "Сумма товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.gds-dis-base COLUMN-LABEL "Скидка товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_.pay-tot-base COLUMN-LABEL "Сумма оплат!баз.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_.num-chk COLUMN-LABEL "Число чеков" format ">>>,>>9"
+HEADER  date_string AT 5 format "X(35)"
+string( "Страница " ) format "X(9)" AT 115 PAGE-NUMBER(PrnLibStream) AT 125 FORMAT ">>>>9" SKIP
+Line format "X(198)" AT 1
+with width 232 down stream-io use-text    .
+DEFINE FRAME dis-tot_host
+X_prop-ref_host.sum-id COLUMN-LABEL "Идентификатор"
+X_prop-ref_host.caller_id COLUMN-LABEL "Доп!Идентификатор"
+X_prop-ref_host.dtm-code COLUMN-LABEL "Код!объекта-!операнда" format ">>9"
+X_dis-tot_host.d-card COLUMN-LABEL "№ ДК" FORMAT "X(19)"
+X_dis-tot_host.host-code COLUMN-LABEL "Код!фирмы" FORMAT ">>>>9"
+X_dis-tot_host.gds-tot-rubl COLUMN-LABEL "Сумма товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.gds-dis-rubl COLUMN-LABEL "Скидка товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.pay-tot-rubl COLUMN-LABEL "Сумма оплат!нац.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_host.gds-tot-base COLUMN-LABEL "Сумма товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.gds-dis-base COLUMN-LABEL "Скидка товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_host.pay-tot-base COLUMN-LABEL "Сумма оплат!баз.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_host.num-chk COLUMN-LABEL "Число чеков" format ">>>,>>9"
+HEADER  date_string AT 5 format "X(35)"
+string( "Страница " ) format "X(9)" AT 115 PAGE-NUMBER(PrnLibStream) AT 125 FORMAT ">>>>9" SKIP
+Line format "X(198)" AT 1
+with width 232 down stream-io use-text    .
+DEFINE FRAME dis-tot_obj
+X_prop-ref_obj.sum-id COLUMN-LABEL "Идентификатор"
+X_prop-ref_obj.caller_id COLUMN-LABEL "Доп!Идентификатор"
+X_prop-ref_obj.dtm-code COLUMN-LABEL "Код!объекта-!операнда" format ">>9"
+X_dis-tot_obj.d-card COLUMN-LABEL "№ ДК" FORMAT "X(19)"
+X_dis-tot_obj.obj-code COLUMN-LABEL "Код!объекта" FORMAT ">>>>9"
+X_dis-tot_obj.obj-type COLUMN-LABEL "Тип!объекта" FORMAT "X(3)"
+X_dis-tot_obj.gds-tot-rubl COLUMN-LABEL "Сумма товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.gds-dis-rubl COLUMN-LABEL "Скидка товарная!нац.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.pay-tot-rubl COLUMN-LABEL "Сумма оплат!нац.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_obj.gds-tot-base COLUMN-LABEL "Сумма товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.gds-dis-base COLUMN-LABEL "Скидка товарная!баз.вал." format "->>,>>>,>>>,>>>,>>9.99"
+X_dis-tot_obj.pay-tot-base COLUMN-LABEL "Сумма оплат!баз.вал." FORMAT "->>,>>>,>>>,>>>,>>>.<<"
+X_dis-tot_obj.num-chk COLUMN-LABEL "Число чеков" format ">>>,>>9"
+HEADER  date_string AT 5 format "X(35)"
+string( "Страница " ) format "X(9)" AT 115 PAGE-NUMBER(PrnLibStream) AT 125 FORMAT ">>>>9" SKIP
+Line format "X(198)" AT 1
+with width 232 down stream-io use-text    .
+Line = fill("-", 198).
+date_string = cur-time-print() .
+run prn-lib-open-stream  in this-procedure (
+                                             input parParentProc
+                                            ,input 43
+                                            ,input yes
+                                            ,input no
+                                            ).
+PUT  STREAM PrnLibStream unformatted
+SPACE(25) ( frame Dialog-Frame:title )
+format "x(90)" SKIP(0)
+(if f-dtm-code <> 0 then f-dtm-name else '':U) skip(0)
+(if f-dt-code <> ? then f-sum-id else '':U)
+.
+FORM HEADER
+Line format "X(177)" AT 1 SKIP
+"Продолжение - на следующей странице" AT 30 SKIP
+with FRAME BottomFrame width 232 PAGE-BOTTOM NO-LABELS NO-BOX .
+VIEW  STREAM PrnLibStream FRAME BottomFrame .
+CASE p-region:
+  when "global" then do:
+    FORM with FRAME dis-tot_ .
+    run waitfram-show in this-procedure ( input "Ждите...").
+    GET next br-dis-tot_  no-lock.
+    DO WHILE available X_dis-tot_:
+      Display STREAM PrnLibStream
+      X_prop-ref_.sum-id
+      X_prop-ref_.caller_id
+      X_prop-ref_.dtm-code
+      X_dis-tot_.d-card
+      X_dis-tot_.gds-tot-rubl
+      X_dis-tot_.gds-dis-rubl
+      X_dis-tot_.pay-tot-rubl
+      X_dis-tot_.gds-tot-base
+      X_dis-tot_.gds-dis-base
+      X_dis-tot_.pay-tot-base
+      X_dis-tot_.num-chk
+      with FRAME dis-tot_ .
+      DOWN STREAM PrnLibStream 1 with FRAME dis-tot_ .
+      assign
+      accum-count = accum-count + 1
+      accum-gds-tot-base = accum-gds-tot-base + X_dis-tot_.gds-tot-base
+      accum-gds-tot-rubl = accum-gds-tot-rubl + X_dis-tot_.gds-tot-rubl
+      accum-gds-dis-base = accum-gds-dis-base + X_dis-tot_.gds-dis-base
+      accum-gds-dis-rubl = accum-gds-dis-rubl + X_dis-tot_.gds-dis-rubl
+      accum-pay-tot-base = accum-pay-tot-base + X_dis-tot_.pay-tot-base
+      accum-pay-tot-rubl = accum-pay-tot-rubl + X_dis-tot_.pay-tot-rubl
+      accum-num-chk = accum-num-chk + X_dis-tot_.num-chk
+      .
+      GET next br-dis-tot_ no-lock.
+    END.
+    UNDERLINE  STREAM PrnLibStream
+    X_prop-ref_.sum-id
+    X_prop-ref_.caller_id
+    X_prop-ref_.dtm-code
+    X_dis-tot_.d-card
+    X_dis-tot_.gds-tot-rubl
+    X_dis-tot_.gds-dis-rubl
+    X_dis-tot_.pay-tot-rubl
+    X_dis-tot_.gds-tot-base
+    X_dis-tot_.gds-dis-base
+    X_dis-tot_.pay-tot-base
+    X_dis-tot_.num-chk
+    with FRAME dis-tot_ .
+    DISPLAY STREAM PrnLibStream
+    "Итого" @ X_prop-ref_.sum-id
+    accum-count @ X_dis-tot_.d-card
+    accum-gds-tot-base @   X_dis-tot_.gds-tot-rubl
+    accum-gds-tot-rubl @   X_dis-tot_.gds-dis-rubl
+    accum-gds-dis-base @   X_dis-tot_.pay-tot-rubl
+    accum-gds-dis-rubl @   X_dis-tot_.gds-tot-base
+    accum-pay-tot-base @   X_dis-tot_.gds-dis-base
+    accum-pay-tot-rubl @   X_dis-tot_.pay-tot-base
+    accum-num-chk      @   X_dis-tot_.num-chk
+    with frame dis-tot_.
+  end.
+  when 'фирма':U then do:
+    FORM with FRAME dis-tot_host .
+    run waitfram-show in this-procedure ( input "Ждите...").
+    GET next br-dis-tot_host  no-lock.
+    DO WHILE available X_dis-tot_host:
+      Display STREAM PrnLibStream
+      X_prop-ref_host.sum-id
+      X_prop-ref_host.caller_id
+      X_prop-ref_host.dtm-code
+      X_dis-tot_host.d-card
+      X_dis-tot_host.host-code
+      X_dis-tot_host.gds-tot-rubl
+      X_dis-tot_host.gds-dis-rubl
+      X_dis-tot_host.pay-tot-rubl
+      X_dis-tot_host.gds-tot-base
+      X_dis-tot_host.gds-dis-base
+      X_dis-tot_host.pay-tot-base
+      X_dis-tot_host.num-chk
+      with FRAME dis-tot_host .
+      DOWN STREAM PrnLibStream 1 with FRAME dis-tot_host .
+      assign
+      accum-count = accum-count + 1
+      accum-gds-tot-base = accum-gds-tot-base + X_dis-tot_host.gds-tot-base
+      accum-gds-tot-rubl = accum-gds-tot-rubl + X_dis-tot_host.gds-tot-rubl
+      accum-gds-dis-base = accum-gds-dis-base + X_dis-tot_host.gds-dis-base
+      accum-gds-dis-rubl = accum-gds-dis-rubl + X_dis-tot_host.gds-dis-rubl
+      accum-pay-tot-base = accum-pay-tot-base + X_dis-tot_host.pay-tot-base
+      accum-pay-tot-rubl = accum-pay-tot-rubl + X_dis-tot_host.pay-tot-rubl
+      accum-num-chk = accum-num-chk + X_dis-tot_host.num-chk
+      .
+      GET next br-dis-tot_host no-lock.
+    END.
+    UNDERLINE  STREAM PrnLibStream
+    X_prop-ref_host.sum-id
+    X_prop-ref_host.caller_id
+    X_prop-ref_host.dtm-code
+    X_dis-tot_host.d-card
+    X_dis-tot_host.host-code
+    X_dis-tot_host.gds-tot-rubl
+    X_dis-tot_host.gds-dis-rubl
+    X_dis-tot_host.pay-tot-rubl
+    X_dis-tot_host.gds-tot-base
+    X_dis-tot_host.gds-dis-base
+    X_dis-tot_host.pay-tot-base
+    X_dis-tot_host.num-chk
+    with FRAME dis-tot_host .
+    DISPLAY STREAM PrnLibStream
+    "Итого" @ X_prop-ref_host.sum-id
+    accum-count @ X_dis-tot_host.d-card
+    accum-gds-tot-base @   X_dis-tot_host.gds-tot-rubl
+    accum-gds-tot-rubl @   X_dis-tot_host.gds-dis-rubl
+    accum-gds-dis-base @   X_dis-tot_host.pay-tot-rubl
+    accum-gds-dis-rubl @   X_dis-tot_host.gds-tot-base
+    accum-pay-tot-base @   X_dis-tot_host.gds-dis-base
+    accum-pay-tot-rubl @   X_dis-tot_host.pay-tot-base
+    accum-num-chk      @   X_dis-tot_host.num-chk
+    with frame dis-tot_host.
+  end.
+  when 'объект':U then do:
+    FORM with FRAME dis-tot_obj .
+    run waitfram-show in this-procedure ( input "Ждите...").
+    GET next br-dis-tot_obj  no-lock.
+    DO WHILE available X_dis-tot_obj:
+      Display STREAM PrnLibStream
+      X_prop-ref_obj.sum-id
+      X_prop-ref_obj.caller_id
+      X_prop-ref_obj.dtm-code
+      X_dis-tot_obj.d-card
+      X_dis-tot_obj.obj-code
+      X_dis-tot_obj.obj-type
+      X_dis-tot_obj.gds-tot-rubl
+      X_dis-tot_obj.gds-dis-rubl
+      X_dis-tot_obj.pay-tot-rubl
+      X_dis-tot_obj.gds-tot-base
+      X_dis-tot_obj.gds-dis-base
+      X_dis-tot_obj.pay-tot-base
+      X_dis-tot_obj.num-chk
+      with FRAME dis-tot_obj .
+      DOWN STREAM PrnLibStream 1 with FRAME dis-tot_obj .
+      assign
+      accum-count = accum-count + 1
+      accum-gds-tot-base = accum-gds-tot-base + X_dis-tot_obj.gds-tot-base
+      accum-gds-tot-rubl = accum-gds-tot-rubl + X_dis-tot_obj.gds-tot-rubl
+      accum-gds-dis-base = accum-gds-dis-base + X_dis-tot_obj.gds-dis-base
+      accum-gds-dis-rubl = accum-gds-dis-rubl + X_dis-tot_obj.gds-dis-rubl
+      accum-pay-tot-base = accum-pay-tot-base + X_dis-tot_obj.pay-tot-base
+      accum-pay-tot-rubl = accum-pay-tot-rubl + X_dis-tot_obj.pay-tot-rubl
+      accum-num-chk = accum-num-chk + X_dis-tot_obj.num-chk
+      .
+      GET next br-dis-tot_obj no-lock.
+    END.
+    UNDERLINE  STREAM PrnLibStream
+    X_prop-ref_obj.sum-id
+    X_prop-ref_obj.caller_id
+    X_prop-ref_obj.dtm-code
+    X_dis-tot_obj.d-card
+    X_dis-tot_obj.obj-code
+    X_dis-tot_obj.obj-type
+    X_dis-tot_obj.gds-tot-rubl
+    X_dis-tot_obj.gds-dis-rubl
+    X_dis-tot_obj.pay-tot-rubl
+    X_dis-tot_obj.gds-tot-base
+    X_dis-tot_obj.gds-dis-base
+    X_dis-tot_obj.pay-tot-base
+    X_dis-tot_obj.num-chk
+    with FRAME dis-tot_obj .
+    DISPLAY STREAM PrnLibStream
+    "Итого" @ X_prop-ref_obj.sum-id
+    accum-count @ X_dis-tot_obj.d-card
+    accum-gds-tot-base @   X_dis-tot_obj.gds-tot-rubl
+    accum-gds-tot-rubl @   X_dis-tot_obj.gds-dis-rubl
+    accum-gds-dis-base @   X_dis-tot_obj.pay-tot-rubl
+    accum-gds-dis-rubl @   X_dis-tot_obj.gds-tot-base
+    accum-pay-tot-base @   X_dis-tot_obj.gds-dis-base
+    accum-pay-tot-rubl @   X_dis-tot_obj.pay-tot-base
+    accum-num-chk      @   X_dis-tot_obj.num-chk
+    with frame dis-tot_obj.
+  end.
+end case.
+HIDE  STREAM PrnLibStream FRAME BottomFrame .
+HIDE  STREAM PrnLibStream FRAME CheckList.
+output  STREAM PrnLibStream CLOSE.
+run waitfram-hide in this-procedure .
+run prn-lib-prn-file in this-procedure (
+                                          input parParentProc
+                                          ,input 8
+                                          ).
+END PROCEDURE.
+PROCEDURE proc-b-link :
+DEFINE INPUT PARAMETER p-option AS CHARACTER NO-UNDO.
+DEFINE variable v-rid-list AS CHARACTER NO-undo.
+CASE p-option:
+END CASE.
+END PROCEDURE.
+PROCEDURE proc-b-sch :
+DEFINE INPUT PARAMETER p-region AS CHARACTER NO-UNDO.
+define variable loc-point as character no-undo .
+define variable loc-label as character no-undo .
+CASE p-region:
+  WHEN 'объект':U THEN DO:
+    run fltfield-add in this-procedure('obj-type*obj-code', 'Объект', 'cli',
+    input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+    run fltfield-add in this-procedure('host-code', 'Фирма', '',
+    input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+    assign
+      tbl = 'dis-obj'
+      join-tbl = 'X_dis-tot_obj'
+      fld = ""
+      lab = ""
+      spr = ""
+      dim = '0'
+      loc-point = substitute('&1_obj', filter-point)
+      loc-label = substitute('&1 ОБъект', filter-point-label)
+      .
+  END.
+  WHEN 'фирма':U THEN DO:
+     run fltfield-add in this-procedure('host-code', 'Фирма', '',
+     input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+     assign
+       tbl = 'dis-host'
+       join-tbl = 'X_dis-tot_host'
+       fld = ""
+       lab = ""
+       spr = ""
+       dim = '0'
+      loc-point = substitute('&1_host', filter-point)
+      loc-label = substitute('&1 Фирма', filter-point-label)
+       .
+  END.
+  WHEN "global" THEN DO:
+      assign
+        tbl = 'dis-host'
+        join-tbl = 'X_dis-tot_'
+        fld = ""
+        lab = ""
+        spr = ""
+        dim = '0'
+      loc-point = substitute('&1', filter-point)
+      loc-label = substitute('&1', filter-point-label)
+        .
+  END.
+END CASE.
+run fltfield-add in this-procedure('d-card', '№ карты', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+run fltfield-add in this-procedure('gds-tot-base', 'Сум. тов. в ценах продажи баз вал.', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+run fltfield-add in this-procedure('gds-tot-rubl', 'Сум. тов. в ценах продажи нац вал.', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+run fltfield-add in this-procedure('gds-dis-base', 'Скидка в ценах продажи баз вал.', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+run fltfield-add in this-procedure('gds-dis-rubl', 'Скидка в ценах продажи нац вал.', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+run fltfield-add in this-procedure('pay-tot-base', 'Сумма оплат в баз вал.', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+run fltfield-add in this-procedure('pay-tot-rubl', 'Сумма оплат в нац вал.', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+run fltfield-add in this-procedure('num-chk', 'Кол-во чеков', '',
+input-output fld, input-output lab, input-output spr, input-output dim)  no-error.
+Filter-Block:
+DO ON STOP    UNDO Filter-Block, LEAVE Filter-Block
+    ON ERROR   UNDO Filter-Block, LEAVE Filter-Block
+    ON END-KEY UNDO Filter-Block, LEAVE Filter-Block :
+  run gbl/filter.w ( input parparentproc
+                   , INPUT (loc-point + chr(4) + loc-label)
+                   , INPUT tbl
+                   , INPUT join-tbl
+                   , INPUT fld
+                   , INPUT lab
+                   , INPUT spr
+                   , INPUT dim ).
+  RUN OpenBr in this-procedure ( input yes, input no, input '':U).
+END.
+END PROCEDURE.

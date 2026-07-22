@@ -1,0 +1,133 @@
+        1   block-level on error undo, throw.
+        2   do
+        3   on error undo, return error
+        4   :
+        5   DEFINE INPUT     PARAMETER parParentProc  AS WIDGET-HANDLE NO-UNDO.
+        6   define variable vss-revision    as character no-undo init "$Revision: 5baf537283c9, 2487, rls $":U .
+        7   define variable vss-author      as character no-undo init "$Author: SSlivenko $":U .
+        8   define variable vss-date        as character no-undo init "$Date: Пт июн 26 16:47:04 2020 +0300 $":U .
+        9   define variable vss-workfile    as character no-undo init "$Workfile: delfbr.p $":U .
+       10   define variable vss-archive     as character no-undo init "$Archive: utl/delfbr.p $":U .
+       11   define variable vss-description as character no-undo init "Удаление складских документов производства, не привязанных к документам производства".
+       12   procedure vss-get-info :
+       13     define output parameter p-vss-revision    like vss-revision    no-undo .
+       14     define output parameter p-vss-author      like vss-author      no-undo .
+       15     define output parameter p-vss-date        like vss-date        no-undo .
+       16     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       17     define output parameter p-vss-archive     like vss-archive     no-undo .
+       18     define output parameter p-vss-description like vss-description no-undo .
+       19     assign
+       20       p-vss-revision    = vss-revision
+       21       p-vss-author      = vss-author
+       22       p-vss-date        = vss-date
+       23       p-vss-workfile    = vss-workfile
+       24       p-vss-archive     = vss-archive
+       25       p-vss-description = vss-description
+       26     .
+       27   end procedure.
+       28   procedure vss-get-parameters :
+       29     define output parameter p-vss-parameters as character no-undo .
+       30   end procedure.
+       31   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       32   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       33   define variable v-vssrevis-logger                   as handle    no-undo .
+       34   procedure vss-logevent :
+       35     define input  parameter p-extra-paramters as character no-undo .
+       36     define variable v-vssrevis-parameters as character no-undo .
+       37     do
+       38     on error undo, return error return-value
+       39     :
+       40       if  valid-handle(v-vssrevis-logger)
+       41       and v-vssrevis-logger :get-signature("logevent") <> ""
+       42       then do:
+       43         run vss-get-parameters in this-procedure
+       44           (output v-vssrevis-parameters
+       45           ).
+       46         run logevent in v-vssrevis-logger
+       47           (input vss-workfile
+       48           ,input vss-revision
+       49           ,input v-vssrevis-parameters
+       50           ,input p-extra-paramters
+       51           ).
+       52       end.
+       53     end.
+       54   end procedure.
+       55   assign
+       56     v-vssrevis-logger = g#vssrevis-logger
+       57   .
+       58   if  valid-handle(v-vssrevis-logger)
+       59   and v-vssrevis-logger :get-signature("logevent") <> ""
+       60   then do:
+       61     assign
+       62       v-vssrevis-logevent = true
+       63     .
+       64     run vss-logevent in this-procedure (input vss-description) .
+       65   end.
+       66   define new global shared variable g#language as character no-undo .
+       67   if g#language <> '' and g#language <> 'rus':U then do:
+       68     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       69   end.
+       70   define variable unrv-qnty   like gds-dtl.doc-qnty no-undo.
+       71   define variable v-doc-code  like trn-doc.doc-code no-undo.
+       72   define buffer buf_trn-doc       for trn-doc.
+       73   define buffer buf_del_trn-doc   for trn-doc.
+       74   define buffer buf_fbr-doc       for fbr-doc.
+       75   define stream out-stream.
+       76   message
+       77               "Утилита уничтожит все складские документы"
+       78        skip   "со статусом 'прво', "
+       79        skip   "для которых не удастся найти"
+       80        skip   "соответствующий документ производства."
+       81        skip (1) "Продолжать?"
+       82   view-as alert-box buttons ok-cancel
+       83   title "Утилита удаления несвязанных складских документов производства"
+       84   update v-1 as logical.
+       85   if v-1 = no then do: undo, return. end.
+       86   if session :set-wait-state( "compiler" ) then.
+       87   output stream out-stream to "delfbr.log".
+       88   each-trn-doc:
+       89   for each buf_trn-doc no-lock
+       90      where buf_trn-doc.status_ = 'прво':U
+       91   :
+       92       find first buf_fbr-doc no-lock
+       93            where buf_fbr-doc.doc-code = substring( buf_trn-doc.doc-code,1,length( trim( buf_trn-doc.doc-code )  ) - 1 ) + "-"
+       94       no-error.
+       95       if available buf_fbr-doc
+       96       then do:
+       97           put stream out-stream
+       98                   skip buf_fbr-doc.doc-code " найден для " buf_trn-doc.doc-code
+       99           .
+      100           next each-trn-doc.
+      101       end.
+      102       open-doc:
+      103       do on error undo open-doc, return error:
+      104           find first buf_del_trn-doc exclusive-lock
+      105                where buf_del_trn-doc.doc-code = buf_trn-doc.doc-code
+      106           .
+      107           assign
+      108               v-doc-code              = buf_del_trn-doc.doc-code
+      109               buf_del_trn-doc.status_ = 'накл':U
+      110               buf_del_trn-doc.flag_   = no
+      111           .
+      112           for each gds-dtl
+      113              where gds-dtl.doc-code = buf_del_trn-doc.doc-code
+      114           on error undo open-doc, return error:
+      115               unrv-qnty = - gds-dtl.doc-qnty.
+      116               run trg/rsrv-dtl.p ( parparentproc,
+      117                                'reserv':U, buffer gds-dtl, input-output unrv-qnty, input-output gds-dtl.price-base, input-output gds-dtl.price-rubl, -1, "").
+      118               if unrv-qnty <> - gds-dtl.doc-qnty
+      119               then do:
+      120                   message "Не удается снять резервы по артикулу:" gds-dtl.artic "признаку:" gds-dtl.prt-code skip
+      121                           "Открытие документа невозможно.".
+      122                   undo open-doc, return no-apply.
+      123               end.
+      124           end.
+      125           delete buf_del_trn-doc.
+      126           put stream out-stream
+      127               skip v-doc-code " удален"
+      128           .
+      129       end.
+      130   end.
+      131   output stream out-stream close.
+      132   if session :set-wait-state( "" ) then.
+      133   end.

@@ -1,0 +1,1162 @@
+        1   block-level on error undo, throw.
+        2   define input parameter p-obj-type         as character no-undo .
+        3   define input parameter p-obj-code         as integer no-undo .
+        4   define input parameter p-last-fact-order  as decimal no-undo .
+        5   define input parameter p-cut-fact-order   as decimal   no-undo .
+        6   define input parameter v-export-file-name as character no-undo .
+        7   define variable vss-revision    as character no-undo init "$Revision$":U .
+        8   define variable vss-author      as character no-undo init "$Author$":U .
+        9   define variable vss-date        as character no-undo init "$Date$":U .
+       10   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+       11   define variable vss-archive     as character no-undo init "$Archive$":U .
+       12   define variable vss-description as character no-undo init "Очистка и экспорт складского архива по поставщикам".
+       13   procedure vss-get-info :
+       14     define output parameter p-vss-revision    like vss-revision    no-undo .
+       15     define output parameter p-vss-author      like vss-author      no-undo .
+       16     define output parameter p-vss-date        like vss-date        no-undo .
+       17     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       18     define output parameter p-vss-archive     like vss-archive     no-undo .
+       19     define output parameter p-vss-description like vss-description no-undo .
+       20     assign
+       21       p-vss-revision    = vss-revision
+       22       p-vss-author      = vss-author
+       23       p-vss-date        = vss-date
+       24       p-vss-workfile    = vss-workfile
+       25       p-vss-archive     = vss-archive
+       26       p-vss-description = vss-description
+       27     .
+       28   end procedure.
+       29   procedure vss-get-parameters :
+       30     define output parameter p-vss-parameters as character no-undo .
+       31   end procedure.
+       32   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       33   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       34   define variable v-vssrevis-logger                   as handle    no-undo .
+       35   procedure vss-logevent :
+       36     define input  parameter p-extra-paramters as character no-undo .
+       37     define variable v-vssrevis-parameters as character no-undo .
+       38     do
+       39     on error undo, return error return-value
+       40     :
+       41       if  valid-handle(v-vssrevis-logger)
+       42       and v-vssrevis-logger :get-signature("logevent") <> ""
+       43       then do:
+       44         run vss-get-parameters in this-procedure
+       45           (output v-vssrevis-parameters
+       46           ).
+       47         run logevent in v-vssrevis-logger
+       48           (input vss-workfile
+       49           ,input vss-revision
+       50           ,input v-vssrevis-parameters
+       51           ,input p-extra-paramters
+       52           ).
+       53       end.
+       54     end.
+       55   end procedure.
+       56   assign
+       57     v-vssrevis-logger = g#vssrevis-logger
+       58   .
+       59   if  valid-handle(v-vssrevis-logger)
+       60   and v-vssrevis-logger :get-signature("logevent") <> ""
+       61   then do:
+       62     assign
+       63       v-vssrevis-logevent = true
+       64     .
+       65     run vss-logevent in this-procedure (input vss-description) .
+       66   end.
+       67   define new global shared variable g#language as character no-undo .
+       68   if g#language <> '' and g#language <> 'rus':U then do:
+       69     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       70   end.
+       71   define new global shared variable g#library  as handle no-undo .
+       72   define new global shared variable g#library2 as handle no-undo .
+       73   define   shared variable g#auto as logical no-undo.
+       74   define   shared variable g#news as logical no-undo.
+       75   define   shared variable g#oxml as logical no-undo.
+       76   define   shared variable g#esys as logical no-undo.
+       77   define   shared variable g#news-source-db as integer no-undo.
+       78   define   shared variable g#esys-source-esys as integer no-undo.
+       79   define   shared variable g#db-num as integer   no-undo .
+       80   define   shared variable g#userid as character no-undo .
+       81   define   shared variable g#passwd as character no-undo .
+       82   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       83   procedure factord :
+       84     define input  parameter p-fact-date            as date    no-undo .
+       85     define input  parameter p-fact-time            as integer no-undo .
+       86     define input  parameter p-fact-num             as integer no-undo .
+       87     define input  parameter p-shift-date           as date    no-undo .
+       88     define input  parameter p-shift-num            as integer no-undo .
+       89     define input  parameter p-shift-on             as logical no-undo .
+       90     define output parameter p-fact-order           as decimal no-undo .
+       91     define output parameter p-shift-end-fact-order as decimal no-undo .
+       92     define output parameter p-day-end-fact-order   as decimal no-undo .
+       93     define variable vss-description as character no-undo init "factord: Определение порядкового номера документа".
+       94     if p-fact-date = ?
+       95     then do:
+       96       return error "Не указана фактическая дата" .
+       97     end.
+       98     define variable v-fact-date-num as integer no-undo .
+       99     assign
+      100       v-fact-date-num = integer(p-fact-date)
+      101     .
+      102     if p-fact-num = ?
+      103     or p-fact-num = 0
+      104     then do:
+      105       return error "Не задан p-fact-num " + string(p-fact-num) .
+      106     end.
+      107     if p-fact-num < 0
+      108     then do:
+      109       return error "Отрицательный fact-num " + string(p-fact-num) .
+      110     end.
+      111     if p-fact-num >= 100000000
+      112     then do:
+      113       return error "Недопустимо большой fact-num " + string(p-fact-num) .
+      114     end.
+      115     if p-shift-on = true
+      116     then do:
+      117       if p-shift-date = ?
+      118       then do:
+      119         return error "Не задана дата смены" .
+      120       end.
+      121       if p-shift-num = ?
+      122       or p-shift-num = 0
+      123       then do:
+      124         return error "Не задан номер смены" .
+      125       end.
+      126     end.
+      127     else do:
+      128       assign
+      129         p-shift-date = p-fact-date
+      130         p-shift-num  = 24
+      131       .
+      132     end.
+      133     define variable v-shift-offset as integer no-undo .
+      134     if p-shift-date = p-fact-date
+      135     then do:
+      136       assign
+      137         v-shift-offset = 1
+      138       .
+      139     end.
+      140     if p-shift-date < p-fact-date
+      141     then do:
+      142       assign
+      143         v-shift-offset = 0
+      144       .
+      145     end.
+      146     if p-shift-date > p-fact-date
+      147     then do:
+      148       message
+      149         vss-workfile vss-revision vss-description skip
+      150         "Неправильная дата закрытия смены" skip
+      151         "Дата закрытия не смены не может быть раньше чем дата открытия смены" skip
+      152         view-as alert-box error .
+      153       undo, return error
+      154         substitute("Дата закрытия не смены &1 не может быть раньше чем дата открытия смены &2"
+      155           ,string(p-fact-date, '99/99/9999':U)
+      156           ,string(p-shift-date, '99/99/9999':U)
+      157           )
+      158       .
+      159     end.
+      160     if p-shift-num < 1
+      161     or p-shift-num > 24
+      162     then do:
+      163       message
+      164         vss-workfile vss-revision vss-description skip
+      165         "Неправильный номер смены" skip
+      166         "p-shift-num" p-shift-num skip
+      167         view-as alert-box error .
+      168       undo, return error return-value .
+      169     end.
+      170     assign
+      171       p-fact-order           = v-fact-date-num
+      172                              + v-shift-offset * 0.5
+      173                              + p-shift-num    * 0.02 - 0.01
+      174                              + p-fact-num     * 0.0000000001
+      175       p-shift-end-fact-order = v-fact-date-num
+      176                              + v-shift-offset * 0.5
+      177                              + p-shift-num    * 0.02
+      178       p-day-end-fact-order   = v-fact-date-num
+      179                              + 0.99
+      180     .
+      181     if p-fact-order           <= v-fact-date-num
+      182     or p-shift-end-fact-order <= v-fact-date-num
+      183     or p-fact-order           >= p-shift-end-fact-order - 0.0000000001
+      184     or p-shift-end-fact-order >= p-day-end-fact-order
+      185     then do:
+      186       message
+      187         vss-workfile vss-revision vss-description skip
+      188         "Внутренняя ошибка при генерации фактического номера" skip
+      189         "p-fact-date"            p-fact-date            skip
+      190         "p-fact-time"            p-fact-time            skip
+      191         "p-fact-num"             p-fact-num             skip
+      192         "p-shift-date"           p-shift-date           skip
+      193         "p-shift-num"            p-shift-num            skip
+      194         "p-shift-on"             p-shift-on             skip
+      195         "p-shift-end-fact-order" p-shift-end-fact-order skip
+      196         "p-day-end-fact-order"   p-day-end-fact-order   skip
+      197         "v-fact-date-num"        v-fact-date-num        skip
+      198         view-as alert-box error .
+      199       undo, return error return-value .
+      200     end.
+      201   end procedure.
+      202   procedure day-begin-fact-order :
+      203     define input  parameter p-fact-date            as date    no-undo .
+      204     define output parameter p-day-begin-fact-order as decimal no-undo .
+      205     do
+      206     on error undo, return error return-value
+      207     :
+      208       if p-fact-date = ?
+      209       then do:
+      210         assign
+      211           p-day-begin-fact-order = 0
+      212         .
+      213       end.
+      214       else do:
+      215         assign
+      216           p-day-begin-fact-order = integer(p-fact-date)
+      217         .
+      218       end.
+      219     end.
+      220   end procedure.
+      221   procedure factord-max-fact-order :
+      222     define output parameter p-max-fact-order as decimal   no-undo .
+      223     do
+      224     on error undo, return error return-value
+      225     :
+      226       run day-begin-fact-order in this-procedure
+      227         (input  date(1, 1, 5000)
+      228         ,output p-max-fact-order
+      229         ) .
+      230     end.
+      231   end procedure.
+      232   procedure factord-cut-archive :
+      233     define input  parameter p-obj-type             as character no-undo .
+      234     define input  parameter p-obj-code             as integer   no-undo .
+      235     define input  parameter p-fact-date            as date      no-undo .
+      236     define output parameter p-shift-on             as logical   no-undo .
+      237     define output parameter p-shift-date           as date      no-undo .
+      238     define output parameter p-shift-num            as integer   no-undo .
+      239     define output parameter p-day-end-fact-order   as decimal   no-undo .
+      240     define output parameter p-shift-end-fact-order as decimal   no-undo .
+      241     define variable v-fact-order as decimal   no-undo .
+      242     define buffer buf_shift-obj for ub.shift-obj .
+      243     do
+      244     on error undo, return error return-value
+      245     :
+      246   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      247   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      248     (input  p-obj-type
+      249     ,input  p-obj-code
+      250     ,input  'shift-on=request'
+      251     ,output p-shift-on
+      252     ) no-error .
+      253       if error-status :error
+      254       then do:
+      255         message
+      256           vss-workfile vss-revision vss-description skip
+      257           "Ошибка при определении атрибута объекта" skip
+      258           "Объект" p-obj-type p-obj-code skip
+      259           error-status :get-message(1) skip
+      260           return-value skip
+      261           view-as alert-box error .
+      262         undo, return error return-value .
+      263       end.
+      264       if p-shift-on = false
+      265       then do:
+      266         assign
+      267           p-shift-date               = ?
+      268           p-shift-num                = 0
+      269         .
+      270       end.
+      271       else do:
+      272         find first buf_shift-obj share-lock
+      273           where buf_shift-obj.obj-type   = p-obj-type
+      274             and buf_shift-obj.obj-code   = p-obj-code
+      275             and buf_shift-obj.shift-date > p-fact-date
+      276           use-index pi
+      277           no-error .
+      278         if not available buf_shift-obj
+      279         or buf_shift-obj.status_ <> 'зкр':U
+      280         then do:
+      281           message
+      282             vss-workfile vss-revision vss-description skip
+      283             "Невозможно вычислить последнюю смену" skip
+      284             "Отсутствует закрытая смена с датой большей чем дата инициализации архива" skip
+      285             "Объект" p-obj-type p-obj-code skip
+      286             "Дата" p-fact-date skip
+      287             view-as alert-box error .
+      288           undo, return error return-value .
+      289         end.
+      290         find last buf_shift-obj share-lock
+      291           where buf_shift-obj.obj-type = p-obj-type
+      292             and buf_shift-obj.obj-code = p-obj-code
+      293             and buf_shift-obj.shift-date <= p-fact-date
+      294           use-index pi
+      295           no-error .
+      296         if available buf_shift-obj
+      297         then do:
+      298           if  buf_shift-obj.status_ = 'зкр':U
+      299           then do:
+      300             assign
+      301               p-shift-date = buf_shift-obj.shift-date
+      302               p-shift-num  = buf_shift-obj.shift-num
+      303             .
+      304           end.
+      305           else do:
+      306             message
+      307               vss-workfile vss-revision vss-description skip
+      308               "Невозможно вычислить последнюю смену" skip
+      309               "Статус смены отличен от статуса" 'зкр':U skip
+      310               "Объект" p-obj-type p-obj-code skip
+      311               "Дата" p-fact-date skip
+      312               "Смена" buf_shift-obj.shift-date buf_shift-obj.shift-num skip
+      313               view-as alert-box error .
+      314             undo, return error return-value .
+      315           end.
+      316         end.
+      317         else do:
+      318           assign
+      319             p-shift-date = p-fact-date - 1
+      320             p-shift-num  = 1
+      321           .
+      322         end.
+      323       end.
+      324       run factord in this-procedure
+      325         (input  p-fact-date
+      326         ,input  1
+      327         ,input  1
+      328         ,input  p-shift-date
+      329         ,input  p-shift-num
+      330         ,input  p-shift-on
+      331         ,output v-fact-order
+      332         ,output p-shift-end-fact-order
+      333         ,output p-day-end-fact-order
+      334         ) no-error .
+      335       if error-status :error
+      336       then do:
+      337         message
+      338           vss-workfile vss-revision vss-description skip
+      339           "Ошибка при вызове процедуры factord"
+      340           error-status :get-message(1) skip
+      341           return-value skip
+      342           view-as alert-box error .
+      343         undo, return error return-value .
+      344       end.
+      345     end.
+      346   end procedure.
+      347   procedure factord-lock-shift :
+      348     define input  parameter p-obj-type  as character no-undo .
+      349     define input  parameter p-obj-code  as integer   no-undo .
+      350     define input  parameter p-fact-date as date      no-undo .
+      351     define parameter buffer buf_shift-obj for ub.shift-obj .
+      352     define variable v-shift-on      as logical   no-undo .
+      353     define variable v-extra-message as character no-undo .
+      354     define variable v-error as character no-undo .
+      355     do
+      356     on error undo, return error return-value
+      357     :
+      358   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      359   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      360     (input  p-obj-type
+      361     ,input  p-obj-code
+      362     ,input  'shift-on=request'
+      363     ,output v-shift-on
+      364     ) no-error .
+      365       if error-status :error
+      366       then do:
+      367         v-error = substitute("Ошибка при определении атрибута объекта  &1 &2 &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value) .
+      368         undo, return error v-error .
+      369       end.
+      370       if v-shift-on = true
+      371       then do:
+      372         find first buf_shift-obj share-lock
+      373           where buf_shift-obj.obj-type   = p-obj-type
+      374             and buf_shift-obj.obj-code   = p-obj-code
+      375             and buf_shift-obj.shift-date > p-fact-date
+      376           use-index pi
+      377           no-error .
+      378         if not available buf_shift-obj
+      379         or buf_shift-obj.status_ <> 'зкр':U
+      380         then do:
+      381           find last buf_shift-obj
+      382             where buf_shift-obj.obj-type = p-obj-type
+      383               and buf_shift-obj.obj-code = p-obj-code
+      384               and buf_shift-obj.status_  = 'зкр':U
+      385             use-index stts
+      386             no-error .
+      387           if available buf_shift-obj
+      388           then do:
+      389             assign
+      390               v-extra-message =
+      391                     substitute("Дата начала последеней закрытой смены на объекте &1"
+      392                               ,string(buf_shift-obj.shift-date, '99/99/9999':u)
+      393                               )
+      394             .
+      395           end.
+      396           v-error = substitute("Ошибка при блокировке смены объекта  &1 &2 Отсутствует закрытая смена с датой большей чем указанная дата  &5  &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value , p-fact-date) .
+      397           undo, return error v-error .
+      398         end.
+      399       end.
+      400     end.
+      401   end procedure.
+      402   procedure factord-end-day :
+      403     define input  parameter p-fact-date            as date    no-undo .
+      404     define output parameter p-day-end-fact-order   as decimal no-undo .
+      405     do
+      406     on error undo, return error return-value
+      407     :
+      408       if p-fact-date = ?
+      409       then do:
+      410         return error "Не указана фактическая дата" .
+      411       end.
+      412       assign
+      413         p-day-end-fact-order = integer(p-fact-date) + 0.99
+      414       .
+      415     end.
+      416   end procedure.
+      417   procedure factord-to-date :
+      418     define input  parameter p-fact-order as decimal no-undo .
+      419     define output parameter p-fact-date  as date    no-undo .
+      420     define variable v-ref-date  as date      no-undo .
+      421     define variable v-ref-delta as integer   no-undo .
+      422     do
+      423     on error undo, return error return-value
+      424     :
+      425       if p-fact-order = ?
+      426       or p-fact-order = 0
+      427       then do:
+      428         return error "Не указан fact-order" .
+      429       end.
+      430       assign
+      431         v-ref-date  = date(1, 1, 2000)
+      432       .
+      433       assign
+      434         v-ref-delta = integer(truncate(p-fact-order, 0)) - integer(v-ref-date)
+      435       .
+      436       assign
+      437         p-fact-date = v-ref-date + v-ref-delta
+      438       .
+      439     end.
+      440   end procedure.
+      441   procedure factord-to-fact-num :
+      442     define input  parameter p-fact-order as decimal no-undo .
+      443     define output parameter p-fact-num   as integer no-undo .
+      444     define variable v-fact-order-trunc as decimal no-undo .
+      445     do
+      446     on error undo, return error return-value
+      447     :
+      448       if p-fact-order = ?
+      449       or p-fact-order = 0
+      450       then do:
+      451         return error "Не указан fact-order" .
+      452       end.
+      453       assign
+      454        v-fact-order-trunc = truncate(p-fact-order, 2)
+      455       .
+      456       assign
+      457         p-fact-num = (p-fact-order - v-fact-order-trunc ) * 10000000000
+      458       .
+      459     end.
+      460   end procedure.
+      461   procedure factord-to-shift-num :
+      462     define input  parameter p-fact-order as decimal no-undo .
+      463     define output parameter p-shift-num   as integer no-undo .
+      464     define variable  p-shift-numd  as decimal   no-undo .
+      465     define variable v-fact-order-trunc as decimal no-undo .
+      466     do
+      467     on error undo, return error return-value
+      468     :
+      469       if p-fact-order = ?
+      470       or p-fact-order = 0
+      471       then do:
+      472         return error "Не указан fact-order" .
+      473       end.
+      474       assign
+      475        v-fact-order-trunc = truncate(p-fact-order, 2)  - truncate(p-fact-order,0)
+      476       .
+      477       if v-fact-order-trunc < 0.5 then do:
+      478         v-fact-order-trunc = v-fact-order-trunc + 0.5.
+      479       end.
+      480       assign
+      481         p-shift-numd = (( v-fact-order-trunc  * 100 - 50 ) + 1 ) / 2
+      482         .
+      483        assign
+      484         p-shift-num = truncate (p-shift-numd , 0)
+      485       .
+      486     end.
+      487   end procedure.
+      488   def var vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      489   define new global shared variable g#attr-lib  as handle no-undo .
+      490   define variable v-attr-lib-variable as handle no-undo .
+      491   procedure clntattr-code :
+      492     define input  parameter p-code           as character no-undo .
+      493     define output parameter p-type           as character no-undo .
+      494     define output parameter p-format         as character no-undo .
+      495     define output parameter p-label          as character no-undo .
+      496     define output parameter p-user-can-edit  as logical   no-undo .
+      497     define output parameter p-output-display as logical   no-undo .
+      498     define output parameter p-other          as character no-undo .
+      499     do
+      500     on error undo, return error return-value
+      501     :
+      502           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-code in g#attr-lib
+      503         (input  p-code
+      504         ,output p-type
+      505         ,output p-format
+      506         ,output p-label
+      507         ,output p-user-can-edit
+      508         ,output p-output-display
+      509         ,output p-other
+      510         ) no-error .
+      511       if error-status :error
+      512       then do:
+      513         undo, return error return-value .
+      514       end.
+      515     end.
+      516   end procedure.
+      517   procedure clntattr-tooltip :
+      518     define input  parameter p-code    as character no-undo .
+      519     define output parameter p-tooltip as character no-undo .
+      520     define output parameter p-label   as character no-undo .
+      521     do
+      522     on error undo, return error return-value
+      523     :
+      524           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-tooltip in g#attr-lib
+      525         (input  p-code
+      526         ,output p-tooltip
+      527         ,output p-label
+      528         ) no-error .
+      529       if error-status :error
+      530       then do:
+      531         undo, return error return-value .
+      532       end.
+      533     end.
+      534   end procedure.
+      535   procedure clntattr-value :
+      536     define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+      537     define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+      538     define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+      539     define output parameter p-value    like ub.clients-attr.attr-value no-undo .
+      540     define output parameter p-type     as character no-undo .
+      541     do
+      542     on error undo, return error return-value
+      543     :
+      544           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-value in g#attr-lib
+      545         (input  p-obj-type
+      546         ,input  p-obj-code
+      547         ,input  p-code
+      548         ,output p-value
+      549         ,output p-type
+      550         ) no-error .
+      551       if error-status :error
+      552       then do:
+      553         undo, return error return-value .
+      554       end.
+      555     end.
+      556   end procedure.
+      557   procedure clntattr-write :
+      558     define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+      559     define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+      560     define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+      561     define input  parameter p-value    like ub.clients-attr.attr-value no-undo .
+      562     do
+      563     on error undo, return error return-value
+      564     :
+      565           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-write in g#attr-lib
+      566         (input  p-obj-type
+      567         ,input  p-obj-code
+      568         ,input  p-code
+      569         ,input  p-value
+      570         ) no-error .
+      571       if error-status :error
+      572       then do:
+      573         undo, return error return-value .
+      574       end.
+      575     end.
+      576   end procedure.
+      577   procedure clntattr-exist :
+      578     define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+      579     define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+      580     define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+      581     define output parameter p-exist    as logical  no-undo .
+      582     do
+      583     on error undo, return error return-value
+      584     :
+      585           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-exist in g#attr-lib
+      586         (input  p-obj-type
+      587         ,input  p-obj-code
+      588         ,input  p-code
+      589         ,output p-exist
+      590         ) no-error .
+      591       if error-status :error
+      592       then do:
+      593         undo, return error return-value .
+      594       end.
+      595     end.
+      596   end procedure.
+      597   procedure clntattr-delete :
+      598     define input  parameter p-obj-type like ub.clients-attr.obj-type   no-undo .
+      599     define input  parameter p-obj-code like ub.clients-attr.obj-code   no-undo .
+      600     define input  parameter p-code     like ub.clients-attr.attr-code  no-undo .
+      601     define output parameter p-deleted  as logical no-undo.
+      602     do
+      603     on error undo, return error return-value
+      604     :
+      605           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-delete in g#attr-lib
+      606         (input  p-obj-type
+      607         ,input  p-obj-code
+      608         ,input  p-code
+      609         ,output p-deleted
+      610         ) no-error .
+      611       if error-status :error
+      612       then do:
+      613         undo, return error return-value .
+      614       end.
+      615     end.
+      616   end procedure.
+      617   procedure clntattr-copy-to :
+      618     define input  parameter p-obj-type as character no-undo .
+      619     define input  parameter p-obj-code as integer   no-undo .
+      620     define input  parameter p-code     as character no-undo .
+      621     define input  parameter p-bh       as handle no-undo .
+      622     do
+      623     on error undo, return error return-value
+      624     :
+      625           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-copy-to in g#attr-lib
+      626         (input  p-obj-type
+      627         ,input  p-obj-code
+      628         ,input  p-code
+      629         ,input  p-bh
+      630         ) no-error .
+      631       if error-status :error
+      632       then do:
+      633         undo, return error return-value .
+      634       end.
+      635     end.
+      636   end procedure.
+      637   procedure clntattr-news :
+      638     define input  parameter p-code           as character no-undo .
+      639     define output parameter p-news           as logical   no-undo .
+      640     do
+      641     on error undo, return error
+      642     :
+      643           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-news in g#attr-lib
+      644         (input  p-code
+      645         ,output p-news
+      646         ) no-error .
+      647       if error-status :error
+      648       then do:
+      649         undo, return error return-value .
+      650       end.
+      651     end.
+      652   end procedure.
+      653   procedure clntattr-get-archive-attr :
+      654     define output parameter p-archive-attr-list as character no-undo .
+      655     do
+      656     on error undo, return error return-value
+      657     :
+      658           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-get-archive-attr in g#attr-lib
+      659         (output  p-archive-attr-list
+      660         ) no-error .
+      661       if error-status :error
+      662       then do:
+      663         undo, return error return-value .
+      664       end.
+      665     end.
+      666   end procedure.
+      667   procedure clntattr-get-auto-author-attr :
+      668     define output parameter p-archive-attr-list as character no-undo .
+      669     do
+      670     on error undo, return error return-value
+      671     :
+      672           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-get-auto-author-attr in g#attr-lib
+      673         (output  p-archive-attr-list
+      674         ) no-error .
+      675       if error-status :error
+      676       then do:
+      677         undo, return error return-value .
+      678       end.
+      679     end.
+      680   end procedure.
+      681   procedure clntattr-get-archive-by-type :
+      682     define input  parameter p-archive-type      as character no-undo .
+      683     define output parameter p-archive-attr-list as character no-undo .
+      684     define variable vss-description as character no-undo initial "clntattr-get-archive-by-type-01: возвращает список атрибутов для складского архива".
+      685     do
+      686     on error undo, return error return-value
+      687     :
+      688           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-get-archive-by-type in g#attr-lib
+      689         (input  p-archive-type
+      690         ,output p-archive-attr-list
+      691         ) no-error .
+      692       if error-status :error
+      693       then do:
+      694         undo, return error return-value .
+      695       end.
+      696     end.
+      697   end procedure.
+      698   procedure clntattr-vat-register :
+      699     define input parameter p-obj-type like ub.clients.obj-type no-undo .
+      700     define input parameter p-obj-code like ub.clients.obj-code no-undo .
+      701     define input-output parameter p-value as character no-undo .
+      702     define output parameter p-setted as logical no-undo .
+      703     do
+      704     on error undo, return error
+      705     :
+      706           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-vat-register in g#attr-lib
+      707         (input  p-obj-type
+      708         ,input  p-obj-code
+      709         ,input-output p-value
+      710         ,output p-setted
+      711         ) no-error .
+      712       if error-status :error
+      713       then do:
+      714         undo, return error return-value .
+      715       end.
+      716     end.
+      717   end procedure.
+      718   procedure clntattr-requisite-alc-decl :
+      719     define input parameter p-obj-type like ub.clients.obj-type no-undo .
+      720     define input parameter p-obj-code like ub.clients.obj-code no-undo .
+      721     define input-output parameter p-value as character no-undo .
+      722     define output parameter p-setted as logical no-undo .
+      723     do
+      724     on error undo, return error
+      725     :
+      726           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-requisite-alc-decl in g#attr-lib
+      727         (input  p-obj-type
+      728         ,input  p-obj-code
+      729         ,input-output p-value
+      730         ,output p-setted
+      731         ) no-error .
+      732       if error-status :error
+      733       then do:
+      734         undo, return error return-value .
+      735       end.
+      736     end.
+      737   end procedure.
+      738   procedure clntattr-manual-edit :
+      739     define input  parameter p-code           as character no-undo .
+      740     define output parameter p-section-num    as integer no-undo .
+      741     do
+      742     on error undo, return error
+      743     :
+      744           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-manual-edit in g#attr-lib
+      745         (input  p-code
+      746         ,output p-section-num
+      747         ) no-error .
+      748       if error-status :error
+      749       then do:
+      750         undo, return error return-value .
+      751       end.
+      752     end.
+      753   end procedure.
+      754   procedure clntattr-batch-edit :
+      755     define input  parameter p-code           as character no-undo .
+      756     define output parameter p-section-num    as integer no-undo .
+      757     do
+      758     on error undo, return error
+      759     :
+      760           if (valid-handle(g#attr-lib) <> true) then do:   run gbl/attr-lib.p persistent no-error .   if error-status :error or (valid-handle(g#attr-lib) <> true) then do:     message       "Error starting attr-lib.p" skip       g#attr-lib skip       g#attr-lib :type skip       g#attr-lib :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run clntattr-batch-edit in g#attr-lib
+      761         (input  p-code
+      762         ,output p-section-num
+      763         ) no-error .
+      764       if error-status :error
+      765       then do:
+      766         undo, return error return-value .
+      767       end.
+      768     end.
+      769   end procedure.
+      770   define variable v-export-archive as logical   no-undo .
+      771   define variable v-action         as character no-undo .
+      772   define stream slog .
+      773   define temp-table temp-goods no-undo
+      774     field gds-code  as integer
+      775     field artic     as character
+      776     field prod-type as character
+      777     field prod-code as integer
+      778     index xpk is primary unique gds-code
+      779     index xie artic prod-type prod-code
+      780     .
+      781   define temp-table temp-ot-supp-tot no-undo like ub.ot-supp-tot
+      782     .
+      783   define temp-table temp-ot-supp-line no-undo like ub.ot-supp-line
+      784     field gds-code as integer
+      785     .
+      786   define temp-table temp-stk-supp-tot no-undo like ub.stk-supp-tot
+      787     .
+      788   define temp-table temp-stk-supp-line no-undo like ub.stk-supp-line
+      789     field gds-code as integer
+      790     .
+      791   define buffer buf_ot-supp-tot        for ub.ot-supp-tot     .
+      792   define buffer buf_ot-supp-line       for ub.ot-supp-line    .
+      793   define buffer buf_stk-supp-tot       for ub.stk-supp-tot    .
+      794   define buffer buf_stk-supp-line      for ub.stk-supp-line   .
+      795   define buffer buf_temp-ot-supp-tot   for temp-ot-supp-tot   .
+      796   define buffer buf_temp-ot-supp-line  for temp-ot-supp-line  .
+      797   define buffer buf_temp-stk-supp-tot  for temp-stk-supp-tot  .
+      798   define buffer buf_temp-stk-supp-line for temp-stk-supp-line .
+      799   main-block:
+      800   do
+      801   on error undo main-block, return error
+      802   :
+      803     if  v-export-file-name <> ""
+      804     and v-export-file-name <> ?
+      805     then do:
+      806       assign
+      807         v-export-archive = true
+      808         v-action         = "Экспорт складского архива по поставщикам"
+      809       .
+      810     end.
+      811     else do:
+      812       assign
+      813         v-export-archive = false
+      814         v-action         = "Очистка складского архива по поставщикам"
+      815       .
+      816     end.
+      817     define variable v-obj-type       like ub.gds-obj.obj-type no-undo .
+      818     define variable v-obj-code       like ub.gds-obj.obj-code no-undo .
+      819     define variable v-start-time     as integer   no-undo .
+      820     define variable v-current-time   as character no-undo .
+      821     define variable v-current-action as character no-undo .
+      822     define variable v-count          as integer   no-undo .
+      823     define variable v-sub-action     as character no-undo .
+      824     def frame a
+      825       v-obj-type       label "Объект"
+      826       v-obj-code       no-label skip
+      827       v-current-action format "x(40)" no-label skip
+      828       v-current-time   format "x(8)"  label "Время очистки складского архива" skip
+      829       v-count          format ">>>,>>>,>>9" no-label skip
+      830       v-sub-action     format "x(40)" no-label skip
+      831       with view-as dialog-box side-labels three-d
+      832       title v-action
+      833       .
+      834     assign
+      835       v-obj-type   = p-obj-type
+      836       v-obj-code   = p-obj-code
+      837       v-start-time = time
+      838     .
+      839     view frame a .
+      840     display
+      841       v-obj-type
+      842       v-obj-code
+      843       with frame a .
+      844     if v-export-archive = true
+      845     then do:
+      846       output stream slog to value(v-export-file-name) append .
+      847     end.
+      848     define variable v-obj-exist as logical no-undo .
+      849   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      850   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      851     (input  p-obj-type
+      852     ,input  p-obj-code
+      853     ,input  'check-exist':u
+      854     ,output v-obj-exist
+      855     )  .
+      856     if p-cut-fact-order = ?
+      857     then do:
+      858       message
+      859         vss-workfile vss-revision vss-description skip
+      860         "Ошибка задания входных параметров" skip
+      861         "Объект" p-obj-type p-obj-code skip
+      862         "p-cut-fact-order" p-cut-fact-order skip
+      863         view-as alert-box error .
+      864       undo, return error .
+      865     end.
+      866     define variable v-max-fact-order as decimal   no-undo .
+      867     run factord-max-fact-order in this-procedure
+      868       (output v-max-fact-order
+      869       ) .
+      870     if p-cut-fact-order = 0
+      871     then do:
+      872       assign
+      873         p-cut-fact-order = v-max-fact-order
+      874       .
+      875     end.
+      876     define variable v-attr-value as character no-undo .
+      877     define variable v-attr-type  as character no-undo .
+      878     run clntattr-value in this-procedure
+      879       (input  p-obj-type
+      880       ,input  p-obj-code
+      881       ,input  'ahsp-detail':U
+      882       ,output v-attr-value
+      883       ,output v-attr-type
+      884       ) .
+      885     define variable v-cut-date       as date    no-undo .
+      886     define variable v-cut-fact-order as decimal no-undo .
+      887     if v-attr-type = 'T':U
+      888     then do:
+      889       assign
+      890         v-cut-date = date(v-attr-value)
+      891       .
+      892     end.
+      893     else do:
+      894       message
+      895         vss-workfile vss-revision vss-description skip
+      896         "Неправильный тип атрибута" 'ahsp-detail':U skip
+      897         "Тип атрибута" v-attr-type skip
+      898         view-as alert-box error .
+      899       undo, return error .
+      900     end.
+      901     run day-begin-fact-order in this-procedure
+      902       (input  v-cut-date
+      903       ,output v-cut-fact-order
+      904       ).
+      905     if p-last-fact-order = ?
+      906     then do:
+      907       message
+      908         vss-workfile vss-revision vss-description skip
+      909         "Ошибка при задании входных параметров" skip
+      910         "Не задана дата начиная с которой необходимо удалить складской архив по поставщикам" skip
+      911         "Объект" p-obj-type p-obj-code skip
+      912         "v-cut-fact-order"  v-cut-fact-order skip
+      913         "p-last-fact-order" p-last-fact-order skip
+      914         view-as alert-box error .
+      915       undo, return error .
+      916     end.
+      917     if v-export-archive = false
+      918     then do:
+      919       if  (v-cut-fact-order  <= p-last-fact-order
+      920            and p-last-fact-order <= p-cut-fact-order )
+      921       or  (p-last-fact-order <= p-cut-fact-order
+      922            and p-cut-fact-order <= v-cut-fact-order
+      923           )
+      924       then do:
+      925       end.
+      926       else do:
+      927         message
+      928           vss-workfile vss-revision vss-description skip
+      929           "Ошибка при удалении складского архива по поставщикам" skip
+      930           "Неправильный диапазон удаления складского архива по поставщикам" skip
+      931           "Объект" p-obj-type p-obj-code skip
+      932           "v-cut-fact-order"  v-cut-fact-order skip
+      933           "p-last-fact-order" p-last-fact-order skip
+      934           "p-cut-fact-order" p-last-fact-order skip
+      935           view-as alert-box error .
+      936         undo, return error .
+      937       end.
+      938     end.
+      939     define variable v-ind as integer no-undo .
+      940     run show-action in this-procedure
+      941       (input "Итоги по документам"
+      942       ).
+      943     for each buf_ot-supp-tot
+      944       where buf_ot-supp-tot.obj-type   = p-obj-type
+      945         and buf_ot-supp-tot.obj-code   = p-obj-code
+      946         and buf_ot-supp-tot.fact-order > p-last-fact-order
+      947         and buf_ot-supp-tot.fact-order <= p-cut-fact-order
+      948     on error undo main-block, return error
+      949     :
+      950       assign
+      951         v-ind = v-ind + 1
+      952       .
+      953       if v-ind modulo 10 = 0
+      954       then do:
+      955         run show-count in this-procedure
+      956           (input v-ind
+      957           ,input "Документ " + string(buf_ot-supp-tot.doc-code)
+      958           ).
+      959       end.
+      960       if v-export-archive = true
+      961       then do:
+      962         create buf_temp-ot-supp-tot .
+      963         buffer-copy buf_ot-supp-tot to buf_temp-ot-supp-tot .
+      964         export stream slog 'ot-supp-tot':U .
+      965         export stream slog buf_temp-ot-supp-tot .
+      966         delete buf_temp-ot-supp-tot .
+      967       end.
+      968       else do:
+      969         delete buf_ot-supp-tot .
+      970       end.
+      971     end.
+      972     run show-action in this-procedure
+      973       (input "Итоги по строкам документов"
+      974       ).
+      975     for each buf_ot-supp-line
+      976       where buf_ot-supp-line.obj-type   = p-obj-type
+      977         and buf_ot-supp-line.obj-code   = p-obj-code
+      978         and buf_ot-supp-line.fact-order > p-last-fact-order
+      979         and buf_ot-supp-line.fact-order <= p-cut-fact-order
+      980     on error undo main-block, return error
+      981     :
+      982       assign
+      983         v-ind = v-ind + 1
+      984       .
+      985       if v-ind modulo 10 = 0
+      986       then do:
+      987         run show-count in this-procedure
+      988           (input v-ind
+      989           ,input "Документ " + string(buf_ot-supp-line.doc-code)
+      990                 + " Артикул " + string(buf_ot-supp-line.artic)
+      991           ).
+      992       end.
+      993       if v-export-archive = true
+      994       then do:
+      995         create buf_temp-ot-supp-line .
+      996         buffer-copy buf_ot-supp-line to buf_temp-ot-supp-line .
+      997         run fill-gds-code in this-procedure
+      998           (input  buf_temp-ot-supp-line.artic
+      999           ,input  buf_temp-ot-supp-line.prod-type
+     1000           ,input  buf_temp-ot-supp-line.prod-code
+     1001           ,output buf_temp-ot-supp-line.gds-code
+     1002           ) .
+     1003         export stream slog 'ot-supp-line':U .
+     1004         export stream slog buf_temp-ot-supp-line except artic prod-type prod-code .
+     1005         delete buf_temp-ot-supp-line .
+     1006       end.
+     1007       else do:
+     1008         delete buf_ot-supp-line .
+     1009       end.
+     1010     end.
+     1011     run show-action in this-procedure
+     1012       (input "Итоги по объекту"
+     1013       ).
+     1014     for each buf_stk-supp-tot
+     1015       where buf_stk-supp-tot.obj-type   = p-obj-type
+     1016         and buf_stk-supp-tot.obj-code   = p-obj-code
+     1017         and buf_stk-supp-tot.fact-order > p-last-fact-order
+     1018         and buf_stk-supp-tot.fact-order <= p-cut-fact-order
+     1019     on error undo main-block, return error
+     1020     :
+     1021       assign
+     1022         v-ind = v-ind + 1
+     1023       .
+     1024       if v-ind modulo 10 = 0
+     1025       then do:
+     1026         run show-count in this-procedure
+     1027           (input v-ind
+     1028           ,input "Дата " + string(buf_stk-supp-tot.fact-date, '99/99/9999':U )
+     1029           ).
+     1030       end.
+     1031       if v-export-archive = true
+     1032       then do:
+     1033         create buf_temp-stk-supp-tot .
+     1034         buffer-copy buf_stk-supp-tot to buf_temp-stk-supp-tot .
+     1035         export stream slog 'stk-supp-tot':U .
+     1036         export stream slog buf_temp-stk-supp-tot .
+     1037         delete buf_temp-stk-supp-tot .
+     1038       end.
+     1039       else do:
+     1040         delete buf_stk-supp-tot .
+     1041       end.
+     1042     end.
+     1043     run show-action in this-procedure
+     1044       (input "Итоги по товарам на объекте"
+     1045       ).
+     1046     for each buf_stk-supp-line
+     1047       where buf_stk-supp-line.obj-type   = p-obj-type
+     1048         and buf_stk-supp-line.obj-code   = p-obj-code
+     1049         and buf_stk-supp-line.fact-order > p-last-fact-order
+     1050         and buf_stk-supp-line.fact-order <= p-cut-fact-order
+     1051     on error undo main-block, return error
+     1052     :
+     1053       assign
+     1054         v-ind = v-ind + 1
+     1055       .
+     1056       if v-ind modulo 10 = 0
+     1057       then do:
+     1058         run show-count in this-procedure
+     1059           (input v-ind
+     1060           ,input "Артикул " + string(buf_stk-supp-line.artic)
+     1061           ).
+     1062       end.
+     1063       if v-export-archive = true
+     1064       then do:
+     1065         create buf_temp-stk-supp-line .
+     1066         buffer-copy buf_stk-supp-line to buf_temp-stk-supp-line .
+     1067         run fill-gds-code in this-procedure
+     1068           (input  buf_temp-stk-supp-line.artic
+     1069           ,input  buf_temp-stk-supp-line.prod-type
+     1070           ,input  buf_temp-stk-supp-line.prod-code
+     1071           ,output buf_temp-stk-supp-line.gds-code
+     1072           ) .
+     1073         export stream slog 'stk-supp-line':U .
+     1074         export stream slog buf_temp-stk-supp-line except artic prod-type prod-code .
+     1075         delete buf_temp-stk-supp-line .
+     1076       end.
+     1077       else do:
+     1078         delete buf_stk-supp-line .
+     1079       end.
+     1080     end.
+     1081     if v-export-archive = true
+     1082     then do:
+     1083       output stream slog close .
+     1084     end.
+     1085   end.
+     1086   procedure show-action :
+     1087     define input  parameter p-action as character no-undo .
+     1088     do
+     1089     on error undo, return error
+     1090     :
+     1091       assign
+     1092         v-current-time = string(time - v-start-time, "HH:MM:SS")
+     1093         v-current-action = p-action
+     1094       .
+     1095       display
+     1096         v-current-time
+     1097         v-current-action
+     1098         with frame a.
+     1099     end.
+     1100   end procedure.
+     1101   procedure show-count :
+     1102     define input  parameter p-count      as integer   no-undo .
+     1103     define input  parameter p-sub-action as character no-undo .
+     1104     do
+     1105     on error undo, return error
+     1106     :
+     1107       assign
+     1108         v-current-time = string(time - v-start-time, "HH:MM:SS")
+     1109         v-count        = p-count
+     1110         v-sub-action   = p-sub-action
+     1111       .
+     1112       display
+     1113         v-current-time
+     1114         v-count
+     1115         v-sub-action
+     1116         with frame a.
+     1117     end.
+     1118   end procedure.
+     1119   procedure fill-gds-code :
+     1120     define input  parameter p-artic     as character no-undo .
+     1121     define input  parameter p-prod-type as character no-undo .
+     1122     define input  parameter p-prod-code as integer   no-undo .
+     1123     define output parameter p-gds-code  as integer   no-undo .
+     1124     define buffer buf_temp-goods for temp-goods .
+     1125     define buffer buf_goods for ub.goods .
+     1126     do
+     1127     on error undo, return error return-value
+     1128     :
+     1129       find first buf_temp-goods
+     1130         where buf_temp-goods.artic     = p-artic
+     1131           and buf_temp-goods.prod-type = p-prod-type
+     1132           and buf_temp-goods.prod-code = p-prod-code
+     1133         no-error .
+     1134       if not available buf_temp-goods
+     1135       then do:
+     1136         find first buf_goods no-lock
+     1137           where buf_goods.artic     = p-artic
+     1138             and buf_goods.prod-type = p-prod-type
+     1139             and buf_goods.prod-code = p-prod-code
+     1140           no-error .
+     1141         if not available buf_goods
+     1142         then do:
+     1143           message
+     1144             vss-workfile vss-revision vss-description skip
+     1145             "Не найден товар" skip
+     1146             "Товар" p-artic p-prod-type p-prod-code skip
+     1147             view-as alert-box error .
+     1148           undo, return error return-value .
+     1149         end.
+     1150         create buf_temp-goods .
+     1151         assign
+     1152           buf_temp-goods.artic     = p-artic
+     1153           buf_temp-goods.prod-type = p-prod-type
+     1154           buf_temp-goods.prod-code = p-prod-code
+     1155           buf_temp-goods.gds-code  = buf_goods.gds-code
+     1156         .
+     1157       end.
+     1158       assign
+     1159         p-gds-code = buf_temp-goods.gds-code
+     1160       .
+     1161     end.
+     1162   end procedure.

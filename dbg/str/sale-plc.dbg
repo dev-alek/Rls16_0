@@ -1,0 +1,1766 @@
+        1   define input parameter parparentproc as widget-handle no-undo .
+        2   define input parameter p-gds-code like ub.goods.gds-code .
+        3   define input parameter p-b-code   like ub.bar-code.b-code .
+        4   define parameter buffer p-ink-doc for ub.inkas.
+        5   define output parameter p-to-reserv as logical no-undo .
+        6   define variable v-sum-chk-gds-doc-qnty as decimal no-undo.
+        7   define variable v-TOTAL-pl-gds-fact-qnty as decimal no-undo.
+        8   define variable v-TOTAL-rvs-stt-msr-qnty as decimal no-undo.
+        9   define variable v-TOTAL-chk-gds-doc-qnty as decimal no-undo.
+       10   define variable v-TOTAL-distrib-selling   as decimal no-undo.
+       11   define variable v-TOTAL-realize as decimal no-undo.
+       12   define variable v-tmp-dec as decimal no-undo .
+       13   define variable v-order   as integer no-undo.
+       14   define variable v-cur-row as rowid no-undo.
+       15   define variable v-rvs-rec as recid no-undo.
+       16   define temp-table tt-places
+       17       field pump-code         like ub.pl-pump.pump-code
+       18       field pl-code           like ub.place.pl-code
+       19       field pl-name           like ub.place.pl-name
+       20       field loc1              like ub.place.loc1
+       21       field pl-gds-fact-qnty  like ub.pl-gds.fact-qnty
+       22       field chk-gds-doc-qnty  like ub.chk-gds.doc-qnty
+       23       field rvs-stt-msr-qnty  like ub.rvs-line.state-measure-qnty
+       24       field distrib-selling   as   decimal
+       25       field order             as   integer
+       26       index pi as primary unique
+       27           pl-code
+       28       index order
+       29           order
+       30   .
+       31   define temp-table tt-pl-pump
+       32       field pump-code          like ub.pl-pump.pump-code
+       33       field pl-gds-fact-qnty   as decimal
+       34       field rvs-stt-msr-qnty   as decimal
+       35       field chk-gds-doc-qnty   as decimal
+       36       index pi as primary unique
+       37           pump-code
+       38   .
+       39   define temp-table tt-chk-to-reload
+       40       field doc-code like ub.chk-doc.doc-code
+       41       index pi as primary unique
+       42           doc-code
+       43   .
+       44   define temp-table tt-chk-gds-change-pl
+       45       field doc-code      like ub.chk-gds.doc-code
+       46       field line-num      like ub.chk-gds.line-num
+       47       field new-pl-code   like ub.chk-gds.pl-code
+       48       field new-loc1      like ub.chk-gds.loc1
+       49       field new-loc2      like ub.chk-gds.loc2
+       50       field new-loc3      like ub.chk-gds.loc3
+       51       field new-loc4      like ub.chk-gds.loc4
+       52       field order         as integer
+       53       index pi as primary unique
+       54           doc-code line-num
+       55       index order
+       56           order
+       57   .
+       58   define buffer buf_rvs-doc for ub.rvs-doc .
+       59   define buffer buf_rvs-line for ub.rvs-line .
+       60   define buffer buf_place for ub.place .
+       61   define buffer buf_pl-gds for ub.pl-gds .
+       62   define buffer buf_pl-gds-pump for ub.pl-gds-pump .
+       63   define buffer buf_chk-gds for ub.chk-gds .
+       64   define buffer buf_chk-doc for ub.chk-doc .
+       65   DEFINE NEW SHARED BUFFER X_chk-doc FOR chk-doc.
+       66   DEFINE NEW SHARED QUERY QUERY-chk-doc FOR X_chk-doc SCROLLING.
+       67   define stream OutStr-html.
+       68   define new global shared variable g#language as character no-undo .
+       69   if g#language <> '' and g#language <> 'rus':U then do:
+       70     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       71   end.
+       72   define new global shared variable g#library  as handle no-undo .
+       73   define new global shared variable g#library2 as handle no-undo .
+       74   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       75   procedure cur-time :
+       76      define output parameter p-today as date      no-undo .
+       77      define output parameter p-time  as integer   no-undo .
+       78     do
+       79     on error undo, return error
+       80     :
+       81       define variable v-date1 as date      no-undo .
+       82       define variable v-date2 as date      no-undo .
+       83       define variable v-time  as integer   no-undo .
+       84       assign
+       85         v-date1 = today
+       86         v-time  = time
+       87         v-date2 = today
+       88       .
+       89       if v-date1 <> v-date2
+       90       then do:
+       91         assign
+       92           v-date1 = today
+       93           v-time  = v-time
+       94         .
+       95       end.
+       96       assign
+       97         p-today = v-date1
+       98         p-time  = v-time
+       99       .
+      100     end.
+      101   end.
+      102   function cur-time-date returns character
+      103   :
+      104     return string(today, '99/99/9999':U) .
+      105   end.
+      106   function cur-time-mjd returns decimal
+      107   :
+      108     define variable v-date as date      no-undo .
+      109     define variable v-time as integer   no-undo .
+      110     run cur-time in this-procedure
+      111       (output v-date
+      112       ,output v-time
+      113       ) .
+      114     return integer(v-date) - 2400002 + (v-time / 86400) .
+      115   end.
+      116   function cur-time-get-ending-index returns integer
+      117   (input p-number as integer
+      118   )
+      119   :
+      120     if p-number < 0
+      121     or p-number = ?
+      122     then do:
+      123       return 1 .
+      124     end.
+      125     define variable v-rest as integer   no-undo .
+      126     assign
+      127       p-number = p-number modulo 100
+      128     .
+      129     if p-number < 20
+      130     then do:
+      131       assign
+      132         v-rest = p-number
+      133       .
+      134     end.
+      135     else do:
+      136       assign
+      137         v-rest = p-number modulo 10
+      138       .
+      139     end.
+      140     case v-rest :
+      141       when 1
+      142       then do:
+      143         return 2 .
+      144       end.
+      145       when 2 or
+      146       when 3 or
+      147       when 4
+      148       then do:
+      149         return 3 .
+      150       end.
+      151       otherwise do:
+      152         return 1 .
+      153       end.
+      154     end case .
+      155   end.
+      156   procedure cur-time-mjd-to-date :
+      157      define input  parameter i-mjd-diff as decimal no-undo.
+      158      define output parameter o-Date     as date    no-undo.
+      159      define output parameter o-Time     as integer no-undo.
+      160      define variable v-day-number as integer   no-undo .
+      161      if    i-mjd-diff < 0
+      162         or i-mjd-diff = ?
+      163      then do:
+      164         return "?" .
+      165      end.
+      166      assign
+      167         v-day-number = truncate(i-mjd-diff,0).
+      168         o-Date = date(v-day-number + 2400002).
+      169         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      170     .
+      171   end.
+      172   function cur-time-mjd-to-string returns character
+      173   (input p-mjd-diff as decimal
+      174   )
+      175   :
+      176     define variable v-day-number as integer   no-undo .
+      177     define variable v-seconds    as integer   no-undo .
+      178     define variable v-hour       as integer   no-undo .
+      179     define variable v-min        as integer   no-undo .
+      180     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      181     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      182     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      183     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      184     if p-mjd-diff < 0
+      185     or p-mjd-diff = ?
+      186     then do:
+      187       return "?" .
+      188     end.
+      189     assign
+      190       v-day-number = integer(truncate(p-mjd-diff,0))
+      191       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      192     .
+      193     if v-seconds > 86400
+      194     then do:
+      195       assign
+      196         v-seconds = 86400 - 1
+      197       .
+      198     end.
+      199     if v-seconds < 0
+      200     then do:
+      201       assign
+      202         v-seconds = 0
+      203       .
+      204     end.
+      205     assign
+      206       v-hour = truncate(v-seconds / 3600, 0)
+      207     .
+      208     assign
+      209       v-seconds = v-seconds modulo 3600
+      210     .
+      211     assign
+      212       v-min = truncate(v-seconds / 60, 0)
+      213     .
+      214     assign
+      215       v-seconds = v-seconds modulo 60
+      216     .
+      217     return
+      218         (if v-day-number <> 0
+      219           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      220           else ""
+      221         )
+      222       + (if v-day-number <> 0 or v-hour <> 0
+      223           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      224           else ""
+      225         )
+      226       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      227           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      228           else ""
+      229         )
+      230       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      231       .
+      232   end.
+      233   function cur-time-string returns character
+      234   :
+      235     define variable v-date as date      no-undo .
+      236     define variable v-time as integer   no-undo .
+      237     run cur-time in this-procedure
+      238       (output v-date
+      239       ,output v-time
+      240       ) .
+      241     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      242   end.
+      243   function cur-time-string-sec returns character
+      244   :
+      245     define variable v-date as date      no-undo .
+      246     define variable v-time as integer   no-undo .
+      247     run cur-time in this-procedure
+      248       (output v-date
+      249       ,output v-time
+      250       ) .
+      251     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      252   end.
+      253   function cur-time-custom  returns character
+      254   (input p-prefix as character
+      255   ,input p-date-format as character
+      256   ,input p-delimiter as character
+      257   ,input p-time-format as character
+      258   ,input p-suffix as character
+      259   )
+      260   :
+      261     define variable v-date as date      no-undo .
+      262     define variable v-time as integer   no-undo .
+      263     run cur-time in this-procedure
+      264       (output v-date
+      265       ,output v-time
+      266       ) .
+      267     return
+      268       p-prefix
+      269       + string(v-date, p-date-format)
+      270       + p-delimiter
+      271       + string(v-time, p-time-format)
+      272       + p-suffix
+      273       .
+      274   end.
+      275   function cur-time-print  returns character
+      276   :
+      277     define variable v-date as date      no-undo .
+      278     define variable v-time as integer   no-undo .
+      279     run cur-time in this-procedure
+      280       (output v-date
+      281       ,output v-time
+      282       ) .
+      283     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      284   end.
+      285   function cur-time-datetime returns datetime
+      286   :
+      287     define variable v-char as character no-undo .
+      288     define variable v-datetime as datetime no-undo .
+      289     v-char = cur-time-string().
+      290     v-datetime = datetime(v-char).
+      291     return  v-datetime.
+      292   end.
+      293   function cur-time-string-msec returns character
+      294   :
+      295     define variable v-date as datetime  no-undo .
+      296     v-date = now.
+      297     return string(v-date) .
+      298   end.
+      299   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      300   define  stream PrnLibStream.
+      301   procedure prn-lib-prn-file :
+      302     define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+      303     define input parameter p-DIsabledoptions as integer no-undo .
+      304     define variable v-report-name as character no-undo .
+      305     define variable v-user-action as character no-undo .
+      306     define variable v-printed     as logical   no-undo .
+      307     define variable v-exist       as logical   no-undo .
+      308     do
+      309       on error undo, return error
+      310       :
+      311       run prn-lib-get-report-name  in this-procedure (
+      312         input parParentProc
+      313         ,output v-report-name
+      314         ).
+      315   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      316   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run filenmln in g#library
+      317     (input  v-report-name
+      318     ,input  2
+      319     ,output v-exist
+      320     )  .
+      321       if NOT v-exist then
+      322       DO:
+      323         Message
+      324           "Нет заданий на печать ! "
+      325           view-as alert-box .
+      326         Return  .
+      327       End.
+      328       run gbl/prnfilen.w
+      329         (input  ""
+      330         ,input  p-DisabledOptions
+      331         ,input  string(v-report-name )
+      332         ,input  7
+      333         ,output v-user-action
+      334         ,output v-printed
+      335         ) .
+      336       if v-printed then
+      337       do:
+      338         return "YES" .
+      339       end.
+      340       else
+      341       do:
+      342         return "NO" .
+      343       end.
+      344     end.
+      345   end procedure.
+      346   procedure prn-lib-open-stream :
+      347     define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+      348     define input parameter p-page-size    as integer no-undo .
+      349     define input parameter p-is-stream    as logical no-undo .
+      350     define input parameter p-append       as logical no-undo .
+      351     define variable v-report-name as character no-undo .
+      352     do
+      353       on error undo, return error
+      354       :
+      355       run prn-lib-get-report-name  in this-procedure (
+      356         input parParentProc
+      357         ,output v-report-name
+      358         ).
+      359       if p-is-stream then
+      360       do:
+      361         if p-append then
+      362         do:
+      363           output stream PrnLibStream to value( v-report-name )
+      364             page-size value(p-page-size) append .
+      365         end.
+      366         if not p-append then
+      367         do:
+      368           output stream PrnLibStream to value( v-report-name )
+      369             page-size value(p-page-size) .
+      370         end.
+      371       end.
+      372       if not p-is-stream then
+      373       do:
+      374         if p-append then
+      375         do:
+      376           output to value( v-report-name )
+      377             page-size value(p-page-size) append .
+      378         end.
+      379         if not p-append then
+      380         do:
+      381           output to value( v-report-name )
+      382             page-size value(p-page-size) .
+      383         end.
+      384       end.
+      385     end.
+      386   end procedure.
+      387   procedure prn-lib-open-exp :
+      388     define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+      389     define input parameter p-is-stream    as logical no-undo .
+      390     define input parameter p-is-append    as logical no-undo .
+      391     define output parameter p-ReportFileName as char init "report" no-undo.
+      392     define output parameter p-process as logical no-undo .
+      393     define variable glog as logical no-undo .
+      394     do
+      395       on error undo, return error
+      396       :
+      397       SYSTEM-DIALOG GET-FILE p-ReportFileName
+      398         TITLE      "Укажите путь"
+      399         FILTERS "Текстовый файл (*.txt)"   "*.txt"
+      400         ASK-OVERWRITE
+      401         CREATE-TEST-FILE
+      402         SAVE-AS
+      403         USE-FILENAME
+      404         DEFAULT-EXTENSION "txt"
+      405         UPDATE glog
+      406         .
+      407       if not glog then  return.
+      408       p-ReportFileName = trim( string( p-ReportFileName ) ) .
+      409       if p-is-stream then
+      410       do:
+      411         if p-is-append then
+      412         do:
+      413           OUTPUT stream PrnLibStream TO value ( p-ReportFileName ) PAGE-SIZE 0 append.
+      414         end.
+      415         else
+      416         do:
+      417           OUTPUT stream PrnLibStream TO value ( p-ReportFileName ) PAGE-SIZE 0.
+      418         end.
+      419       end.
+      420       else
+      421       do:
+      422         if p-is-append then
+      423         do:
+      424           OUTPUT TO value ( p-ReportFileName ) PAGE-SIZE 0 append.
+      425         end.
+      426         else
+      427         do:
+      428           OUTPUT TO value ( p-ReportFileName ) PAGE-SIZE 0.
+      429         end.
+      430       end.
+      431       p-process = yes.
+      432     end.
+      433   end procedure.
+      434   procedure prn-lib-get-report-name :
+      435     define input parameter parParentProc  as widget-handle no-undo.
+      436     define output parameter p-report-name as character no-undo .
+      437     p-report-name = ibs.th.gbl.gbl-inipar:prn-lib-get-report-name("rpt").
+      438   end procedure.
+      439   procedure prn-lib-reportviewer-report-name :
+      440     define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+      441     define input parameter p-report-name-html as character no-undo .
+      442     ibs.th.gbl.gbl-inipar:prn-lib-reportviewer-report-name(p-report-name-html) no-error.
+      443   end procedure.
+      444   procedure prn-lib-reportviewer :
+      445     define input parameter parParentProc  AS WIDGET-HANDLE NO-UNDO.
+      446     define input parameter p-report-name-html as character no-undo .
+      447     define input parameter p-param        as character no-undo .
+      448     define variable v-excel           as character no-undo init 'TRUE' .
+      449     define variable v-value-character as character no-undo .
+      450     define variable v-value-integer   as character no-undo .
+      451     define variable v-value-date      as date      no-undo .
+      452     define variable v-value-decimal   as decimal   no-undo .
+      453     define variable rep-excel         as logical   no-undo .
+      454     define variable excel-string      as character no-undo .
+      455     define variable v-param-type      as character no-undo .
+      456     define variable v-tth             as handle    no-undo .
+      457     run adm/shattri.p (
+      458       input "get":U
+      459       ,input  ""
+      460       ,input  0
+      461       ,input  'report-glob':U
+      462       ,input  'rep-excel':U
+      463       ,output v-value-character
+      464       ,output v-value-date
+      465       ,output v-value-decimal
+      466       ,output v-value-integer
+      467       ,output rep-excel
+      468       ,output v-param-type
+      469       ,INPUT-OUTPUT table-handle v-tth
+      470       )  .
+      471     if rep-excel then v-excel = "TRUE" .
+      472     else v-excel = "FALSE" .
+      473     if p-param eq ""
+      474     then
+      475        p-param = "EXCEL:" + v-excel.
+      476     else
+      477        p-param = p-param + chr(4) + "EXCEL:" + v-excel .
+      478     ibs.th.gbl.gbl-inipar:prn-lib-reportviewer(p-report-name-html, p-param).
+      479   end procedure.
+      480   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      481   FUNCTION set-inkas-PS returns character(    input p-ps as character,
+      482                                               input p-chk-amount as integer,
+      483                                               input p-gds-amount as integer,
+      484                                               input p-line-out as integer,
+      485                                               input p-dtl-out as integer,
+      486                                               input p-line-ret as integer,
+      487                                               input p-dtl-ret as integer,
+      488                                               input p-nf-chk-amount as integer,
+      489                                               input p-nf-gds-amount as integer,
+      490                                               input p-ps-where-rus as character
+      491                                               ):
+      492   define variable v-ps as character no-undo .
+      493   define variable v-other as character no-undo .
+      494   v-other = p-ps.
+      495   entry(1, v-other, "@") = ''.
+      496   v-other = trim(v-other, "@").
+      497   v-PS = substitute('Кол-во_чеков &2&1строк_чеков &3&1товаров_расход &4&1признаков_расход &5&1товаров_возврат &6&1признаков_возврат &7&1'
+      498                       , chr(4)
+      499                       , p-chk-amount
+      500                       , p-gds-amount
+      501                       , p-line-out
+      502                       , p-dtl-out
+      503                       , p-line-ret
+      504                       , p-dtl-ret).
+      505   v-ps = v-ps +  substitute("без_докум_чеков &1&2без_докум_строк_чеков &3&2&4@&5"
+      506                               , p-nf-chk-amount
+      507                               , chr(4)
+      508                               , p-nf-gds-amount
+      509                               , p-ps-where-rus
+      510                               , v-other)
+      511                       .
+      512   return v-ps.
+      513   END FUNCTION.
+      514   FUNCTION set-inkas-PS-simple returns character(
+      515                                               input p-chk-amount as integer,
+      516                                               input p-gds-amount as integer,
+      517                                               input p-line-out as integer,
+      518                                               input p-dtl-out as integer,
+      519                                               input p-line-ret as integer,
+      520                                               input p-dtl-ret as integer,
+      521                                               input p-nf-chk-amount as integer,
+      522                                               input p-nf-gds-amount as integer
+      523                                               ):
+      524   define variable v-ps as character no-undo .
+      525   define variable v-str1 as character no-undo .
+      526   assign
+      527     v-ps = fill( chr(32) +  chr(4), 9).
+      528     v-str1 = ENTRY(1, v-PS, chr(4)).
+      529     entry(2, v-str1, chr(32))  = string(p-chk-amount).
+      530     ENTRY(1, v-PS, chr(4)) = v-str1.
+      531     v-str1 = ENTRY(2, v-PS, chr(4)).
+      532     entry(2, v-str1, chr(32))  = string(p-gds-amount).
+      533     ENTRY(2, v-PS, chr(4)) = v-str1.
+      534     v-str1 = ENTRY(3, v-PS, chr(4)).
+      535     entry(2, v-str1, chr(32))  = string(p-line-out).
+      536     ENTRY(3, v-PS, chr(4)) = v-str1.
+      537     v-str1 = ENTRY(4, v-PS, chr(4)).
+      538     entry(2, v-str1, chr(32))  = string(p-dtl-out).
+      539     ENTRY(4, v-PS, chr(4)) = v-str1.
+      540     v-str1 = ENTRY(5, v-PS, chr(4)).
+      541     entry(2, v-str1, chr(32))  = string(p-line-ret).
+      542     ENTRY(5, v-PS, chr(4)) = v-str1.
+      543     v-str1 = ENTRY(6, v-PS, chr(4)).
+      544     entry(2, v-str1, chr(32))  = string(p-dtl-ret).
+      545     ENTRY(5, v-PS, chr(4)) = v-str1.
+      546     v-str1 = ENTRY(7, v-PS, chr(4)).
+      547     entry(2, v-str1, chr(32))  = string(p-nf-chk-amount).
+      548     ENTRY(5, v-PS, chr(4)) = v-str1.
+      549     v-str1 = ENTRY(8, v-PS, chr(4)).
+      550     entry(2, v-str1, chr(32))  = string(p-nf-gds-amount).
+      551     ENTRY(5, v-PS, chr(4)) = v-str1.
+      552   return v-ps.
+      553   END FUNCTION.
+      554   FUNCTION get-inkas-nf-PS-simple returns logical (
+      555                                                input p-ps as character
+      556                                               ,output p-gds-amount as integer
+      557                                               ,output p-nf-gds-amount as integer
+      558                                               ):
+      559   if num-entries(p-ps, chr(4)) >= 8 then do:
+      560     assign
+      561     p-gds-amount = integer(entry(2, ENTRY(2, p-PS, chr(4)), chr(32)))
+      562     p-nf-gds-amount = integer(entry(2, ENTRY(8, p-PS, chr(4)), chr(32)))
+      563     no-error .
+      564   end.
+      565   return not error-status:error .
+      566   END FUNCTION.
+      567   PROCEDURE get-inkas-PS:
+      568   define parameter buffer buf_inkas for ub.inkas.
+      569   define output parameter p-chk-amount as integer no-undo .
+      570   define output parameter p-gds-amount as integer no-undo .
+      571   define output parameter p-line-out as integer no-undo .
+      572   define output parameter p-dtl-out as integer no-undo .
+      573   define output parameter p-line-ret as integer no-undo .
+      574   define output parameter p-dtl-ret as integer no-undo .
+      575   define output parameter p-nf-chk-amount as integer no-undo .
+      576   define output parameter p-nf-gds-amount as integer no-undo .
+      577   define output parameter p-ps-where-rus as character no-undo .
+      578   define variable v-gds-amount as integer no-undo .
+      579   define variable v-nf-gds-amount as integer no-undo .
+      580   define buffer buf_sale-doc for ub.sale-doc.
+      581   for each buf_sale-doc no-lock where
+      582           buf_sale-doc.inkas-code = buf_inkas.inkas-code
+      583       and buf_sale-doc.order > 0:
+      584     assign
+      585     p-gds-amount = p-gds-amount + (if buf_sale-doc.in-inkas = yes
+      586                                    or buf_sale-doc.doc-kind = 'trf':U
+      587                                    then buf_sale-doc.gds-amount
+      588                                    else 0)
+      589     p-line-out = p-line-out  + (if buf_sale-doc.in-inkas = yes
+      590                                 and buf_sale-doc.dir = 1
+      591                                 then buf_sale-doc.tot-lines
+      592                                 else 0)
+      593     p-dtl-out = p-dtl-out + (if buf_sale-doc.in-inkas = yes
+      594                             and buf_sale-doc.dir = 1
+      595                             then buf_sale-doc.tot-dtl
+      596                             else 0)
+      597     p-line-ret = p-line-ret  + (if buf_sale-doc.in-inkas = yes
+      598                                 and buf_sale-doc.dir = -1
+      599                                 then buf_sale-doc.tot-lines
+      600                                 else 0)
+      601     p-dtl-ret = p-dtl-ret + (if buf_sale-doc.in-inkas = yes
+      602                              and buf_sale-doc.dir = -1
+      603                             then buf_sale-doc.tot-dtl
+      604                             else 0)
+      605     .
+      606   end.
+      607   if get-inkas-nf-PS-simple( input buf_inkas.ps
+      608                             ,output v-gds-amount
+      609                             ,output v-nf-gds-amount) then do:
+      610     assign
+      611     p-gds-amount = v-gds-amount
+      612     p-nf-gds-amount = v-nf-gds-amount
+      613     .
+      614   end.
+      615   assign
+      616   p-ps-where-rus = buf_inkas.sale-filter-rus
+      617   p-nf-chk-amount = buf_inkas.num-chk-nf
+      618   p-chk-amount = buf_inkas.num-chk
+      619   .
+      620   END PROCEDURE.
+      621   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      622   define temp-table thbjattr_thbj-attr no-undo like ub.thbj-attr.
+      623   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      624   define variable v-waitfram-action01         as character   no-undo .
+      625   define variable v-waitfram-action02         as character   no-undo .
+      626   define variable v-waitfram-action03         as character   no-undo .
+      627   define variable mWaitFramTextBeg            as character   no-undo.
+      628   define variable mWaitFramTextEnd            as character   no-undo.
+      629   define variable mWaitFramView               as logical     no-undo.
+      630   define variable mWaitProcEvent              as logical     no-undo init yes.
+      631   define variable mWaitFramInterval           as integer     no-undo init 1 .
+      632   define variable mWaitFramStop               as logical     no-undo.
+      633   define variable mWaitFramStopUser           as logical     no-undo.
+      634   define variable mWaitFramStopTimeOut        as logical     no-undo.
+      635   define variable mWaitFramStartProc          as datetime-tz no-undo.
+      636   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+      637   define button B-WaitFramStop auto-end-key
+      638        label "Стоп"
+      639        size 10 by 1 tooltip "Остоновить процесс".
+      640   define button B-viewProcInfo
+      641        label "Информация"
+      642        size 15 by 1 tooltip "Информация о процесс".
+      643   define frame waitfram
+      644     v-waitfram-action01 format "x(72)" no-label skip
+      645     v-waitfram-action02 format "x(72)" no-label skip
+      646     v-waitfram-action03 format "x(72)" no-label skip
+      647     B-viewProcInfo
+      648     B-WaitFramStop at row 4 col 30
+      649     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+      650     .
+      651   define new global shared variable mBatchMode as logical no-undo init ?.
+      652   define variable mFramBachModHandle as handle no-undo.
+      653   mFramBachModHandle = frame waitfram:handle.
+      654   define variable mFameOldVis as logical no-undo.
+      655   define variable mVisCUrentVin as logical no-undo.
+      656   if session:batch-mode
+      657   then
+      658      mBatchMode = yes.
+      659   if mBatchMode = ? then do:
+      660     mVisCUrentVin = current-window:visible.
+      661     mFameOldVis = mFramBachModHandle:visible.
+      662     mFramBachModHandle:visible  = yes.
+      663     mBatchMode = mFramBachModHandle:visible ne yes.
+      664     mFramBachModHandle:visible = mFameOldVis.
+      665     current-window:visible = mVisCUrentVin.
+      666   end.
+      667    if  log-manager:logfile-name ne ?
+      668     then DO:
+      669         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      670         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      671         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+      672     end.
+      673   on choose of B-WaitFramStop in frame waitfram
+      674   do:
+      675     mWaitFramStop = yes.
+      676     mWaitFramStopUser = yes.
+      677   end.
+      678   function waitfram-check-timeout returns logical():
+      679      define variable vtime as int64 no-undo.
+      680      if mWaitFramStopTimeOut
+      681      then
+      682         return yes.
+      683      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      684      if     mWaitFramTimeOut ne ?
+      685         and mWaitFramTimeOut ne 0
+      686         and mWaitFramTimeOut lt vtime
+      687      then do:
+      688         mWaitFramStopTimeOut = yes.
+      689      end.
+      690      return mWaitFramStopTimeOut.
+      691   end.
+      692   procedure waitfram-hide :
+      693     if not session:batch-mode
+      694     then do
+      695     on error undo, return error return-value
+      696     :
+      697       pause 0 before-hide .
+      698       if not mBatchMode then
+      699         hide frame waitfram .
+      700     if     not mWaitFramView
+      701        and mWaitProcEvent
+      702     then
+      703       process events .
+      704     end.
+      705   end procedure.
+      706   procedure waitfram-show :
+      707     define input  parameter p-message as character no-undo .
+      708     define variable v-left-margin as integer   no-undo .
+      709     if not session:batch-mode
+      710     then do
+      711     on error undo, return error return-value
+      712     :
+      713       if length(p-message) <= 70 then do:
+      714         assign
+      715           v-left-margin = integer((70 - length(p-message)) / 2)
+      716         .
+      717         assign
+      718           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      719         .
+      720         assign
+      721           v-waitfram-action01 = " "
+      722           v-waitfram-action02 = " "
+      723                                    + fill(" ", v-left-margin)
+      724                                    + p-message
+      725           v-waitfram-action03 = " "
+      726         .
+      727       end.
+      728       else do:
+      729         define variable vRindex1 as integer no-undo.
+      730         define variable vRindex2 as integer no-undo.
+      731         vRindex1 = r-index(p-message," ",70).
+      732         if vRindex1 = 0
+      733         then
+      734            vRindex1 = 70.
+      735         if length(p-message)  <= vRindex1 + 70 then do:
+      736           assign
+      737             v-waitfram-action01 = " "
+      738             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+      739             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+      740           .
+      741         end.
+      742         else do:
+      743           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+      744           if vRindex2 <= vRindex1
+      745           then
+      746              vRindex2 = vRindex1 + 70.
+      747           assign
+      748             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+      749             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+      750             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+      751           .
+      752         end.
+      753       end.
+      754       B-viewProcInfo:visible   in frame waitfram = no.
+      755       B-viewProcInfo:sensitive in frame waitfram = no.
+      756       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      757       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+      758       if  (   mWaitFramView
+      759          or  mWaitProcEvent)
+      760          and not mBatchMode
+      761       then
+      762          display
+      763             v-waitfram-action01 skip
+      764             v-waitfram-action02 skip
+      765             v-waitfram-action03 skip
+      766          with frame waitfram .
+      767       if     mWaitFramView
+      768          then do:
+      769             if     mWaitFramInterval ne ?
+      770                and not mBatchMode
+      771             then
+      772                wait-for go of frame waitfram pause mWaitFramInterval.
+      773          end.
+      774          else
+      775             if     mWaitProcEvent
+      776                and not mBatchMode
+      777             then
+      778                process events .
+      779     end.
+      780   end procedure.
+      781      procedure waitfram-show-this:
+      782         define input  parameter iInterval as int64 no-undo.
+      783         define variable vtime as int64 no-undo.
+      784         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+      785         mWaitFramInterval = iInterval.
+      786         run waitfram-show (substitute("&1&2 &3&4" ,
+      787                                       mWaitFramTextBeg ,
+      788                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+      789                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+      790                                       mWaitFramTextEnd
+      791                                      )
+      792                           ).
+      793      end.
+      794      procedure WaitFramRunPause:
+      795         define input  parameter iInterval as dec no-undo.
+      796         define variable vStart  as datetime-tz no-undo.
+      797         define variable vend    as datetime-tz no-undo.
+      798         define variable vint as int64 no-undo.
+      799         define variable vOk as logical no-undo.
+      800         vStart = now.
+      801         vend   = vStart.
+      802         publish "WaitFramPause" (iInterval,output vOk).
+      803         vend   =  now.
+      804         vint = vend - vStart.
+      805         vint = iInterval - vint / 1000.
+      806         if     not mWaitFramStop
+      807            and (   vint > 0
+      808                 or (    not vOk
+      809                     and iInterval eq ?
+      810                     )
+      811                 )
+      812         then
+      813            run waitfram-show-this (iInterval).
+      814         vend   =  now.
+      815         vint = vend - vStart.
+      816         vint = iInterval - vint / 1000.
+      817         if     not mWaitFramStop
+      818            and vint > 0
+      819         then do:
+      820            run gbl/pause.p (vint * 1000).
+      821         end.
+      822         if iInterval ne ?
+      823         then
+      824            publish "WaitFramStop".
+      825         waitfram-check-timeout().
+      826      end.
+      827      procedure WaitFramWaitFor:
+      828         define input  parameter iInterval as dec no-undo.
+      829         assign
+      830            mWaitFramStartProc   = now
+      831            mWaitFramStopUser    = no
+      832            mWaitFramStopTimeOut = no
+      833         .
+      834         block-wait:
+      835         do while not mWaitFramStop:
+      836            run WaitFramRunPause (iInterval).
+      837            if  waitfram-check-timeout()
+      838            then do:
+      839               leave block-wait.
+      840            end.
+      841         end.
+      842         run waitfram-hide.
+      843      end.
+      844   procedure waitfram-join :
+      845     define input  parameter p-line-1  as character no-undo .
+      846     define input  parameter p-line-2  as character no-undo .
+      847     define input  parameter p-line-3  as character no-undo .
+      848     define output parameter p-message as character no-undo .
+      849     do
+      850     on error undo, return error return-value
+      851     :
+      852       assign
+      853         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+      854                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+      855                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+      856       .
+      857     end.
+      858   end procedure.
+      859   function waitfram-join-function returns character
+      860     (input p-line-1 as character
+      861     ,input p-line-2 as character
+      862     ,input p-line-3 as character
+      863     ).
+      864     define variable v-message as character no-undo .
+      865     run waitfram-join in this-procedure
+      866       (input  p-line-1
+      867       ,input  p-line-2
+      868       ,input  p-line-3
+      869       ,output v-message
+      870       ) .
+      871     return v-message .
+      872   end function .
+      873   DEFINE BUTTON b-cancel AUTO-END-KEY
+      874        LABEL "&Отмена"
+      875        SIZE 10 BY 1
+      876        BGCOLOR 8 .
+      877   DEFINE BUTTON b-print
+      878        IMAGE-UP FILE "cmp/b-print.bmp":U
+      879        IMAGE-DOWN FILE "cmp/b-print.bmp":U
+      880        IMAGE-INSENSITIVE FILE "cmp/b-print.bmp":U
+      881        LABEL ""
+      882        SIZE 3 BY 1.
+      883   DEFINE BUTTON b-save AUTO-GO
+      884        LABEL "&Ввод"
+      885        SIZE 10 BY 1.
+      886   DEFINE BUTTON b-rvs
+      887        LABEL "&Сверка :"
+      888        SIZE 10 BY 1.
+      889   define variable txt-rvs as character format "X(18)"
+      890        view-as text
+      891        size 18 by 1
+      892        fgcolor 4 no-undo.
+      893   DEFINE BUTTON b-sel-rvs
+      894        IMAGE-UP FILE "btn-down-arrow":U
+      895        IMAGE-DOWN FILE "btn-down-arrow":U
+      896        IMAGE-INSENSITIVE FILE "btn-down-arrow":U
+      897        LABEL ""
+      898        SIZE 2.88 BY 1.
+      899   DEFINE QUERY br-places FOR
+      900         tt-places   SCROLLING.
+      901   define browse br-places
+      902   query br-places no-lock display
+      903       tt-places.pl-code          COLUMN-LABEL "Скл.место" FORMAT "999999999":U
+      904       tt-places.pl-name          COLUMN-LABEL "Наименование резервуара" FORMAT "X(25)"
+      905       tt-places.loc1             COLUMN-LABEL "Номер!резервуара"  FORMAT "X(8)"
+      906       tt-places.pl-gds-fact-qnty COLUMN-LABEL "Расчетно-книжный!остаток" FORMAT "->>,>>>,>>9.<<<":U
+      907       tt-places.chk-gds-doc-qnty COLUMN-LABEL "Текущее распреде-!ление продажи" FORMAT "->>,>>>,>>9.<<<":U
+      908       tt-places.rvs-stt-msr-qnty COLUMN-LABEL "Фактический остаток" FORMAT "->>,>>>,>>9.<<<":U
+      909       tt-places.distrib-selling  COLUMN-LABEL " Распределение !реализации" FORMAT "->>,>>>,>>9.<<<":U
+      910   enable
+      911       tt-places.distrib-selling
+      912       WITH NO-ROW-MARKERS SEPARATORS SIZE 117 BY 8.
+      913   DEFINE FRAME Dialog-Frame
+      914        b-save AT ROW 1 COL 1 WIDGET-ID 2
+      915        b-cancel AT ROW 1 COL 11 WIDGET-ID 4
+      916        b-print AT ROW 1 COL 114 WIDGET-ID 6
+      917        b-rvs at row 2 col 1 widget-id 10
+      918        txt-rvs at row 2 col 11 no-label  widget-id 12
+      919        b-sel-rvs at row 2 col 29 widget-id 14
+      920        br-places at row 3 col 1 widget-id 8
+      921        SPACE(0.00) SKIP(0.1)
+      922       WITH VIEW-AS DIALOG-BOX KEEP-TAB-ORDER
+      923            SIDE-LABELS NO-UNDERLINE THREE-D  SCROLLABLE
+      924            TITLE "Распределение продажи по местам хранения"
+      925            CANCEL-BUTTON b-cancel WIDGET-ID 100.
+      926   ASSIGN
+      927          FRAME Dialog-Frame:SCROLLABLE       = FALSE
+      928          FRAME Dialog-Frame:HIDDEN           = TRUE.
+      929   ON WINDOW-CLOSE OF FRAME Dialog-Frame
+      930   DO:
+      931     APPLY "END-ERROR":U TO SELF.
+      932   END.
+      933   ON CHOOSE OF b-cancel IN FRAME Dialog-Frame
+      934   DO:
+      935     return "cancell":U .
+      936   END.
+      937   ON CHOOSE OF b-print IN FRAME Dialog-Frame
+      938   DO:
+      939       run PrintProc.
+      940   END.
+      941   ON CHOOSE OF b-save IN FRAME Dialog-Frame
+      942   DO:
+      943       browse br-places:refresh ().
+      944       for each tt-pl-pump no-lock :
+      945           assign v-TOTAL-distrib-selling = 0.0 .
+      946           for each tt-places  no-lock
+      947              where tt-places.pump-code = tt-pl-pump.pump-code
+      948           :
+      949               if tt-places.distrib-selling = ? then assign tt-places.distrib-selling = 0.0 .
+      950               assign
+      951                   v-TOTAL-distrib-selling = v-TOTAL-distrib-selling + tt-places.distrib-selling
+      952               .
+      953           end.
+      954           if tt-pl-pump.chk-gds-doc-qnty <> v-TOTAL-distrib-selling then do :
+      955               message "Распределение реализации не соответствует сумме по чекам (в разрезе ТРК)"
+      956                       view-as alert-box
+      957               .
+      958               return no-apply.
+      959           end.
+      960       end.
+      961       define variable v-CUR-chk-gds-qnty as decimal no-undo.
+      962       define variable v-CUR-distrib as decimal no-undo.
+      963       define variable v-CUR-tt-chk as integer no-undo init 0.
+      964       for each tt-pl-pump no-lock :
+      965           assign
+      966               v-CUR-distrib = 0.0
+      967               v-CUR-chk-gds-qnty = 0.0
+      968           .
+      969           places :
+      970           for each tt-places  no-lock
+      971              where tt-places.pump-code = tt-pl-pump.pump-code
+      972              use-index order
+      973              by order
+      974               :
+      975                   if tt-places.distrib-selling = 0 then next places .
+      976                   assign v-CUR-distrib = v-CUR-distrib + tt-places.distrib-selling .
+      977                   for each tt-chk-gds-change-pl where tt-chk-gds-change-pl.order > v-CUR-tt-chk
+      978                       use-index order
+      979                       by order
+      980                   :
+      981                       find first buf_chk-gds no-lock
+      982                            where buf_chk-gds.doc-code = tt-chk-gds-change-pl.doc-code
+      983                              and buf_chk-gds.line-num = tt-chk-gds-change-pl.line-num .
+      984                       if (v-CUR-chk-gds-qnty + buf_chk-gds.doc-qnty) >= v-CUR-distrib then do :
+      985                           if ABS(v-CUR-distrib - v-CUR-chk-gds-qnty) <=
+      986                              ABS(v-CUR-distrib - v-CUR-chk-gds-qnty - buf_chk-gds.doc-qnty) then do :
+      987                                  assign v-CUR-tt-chk = tt-chk-gds-change-pl.order - 1 .
+      988                                  next places .
+      989                           end.
+      990                           assign
+      991                               v-CUR-tt-chk = tt-chk-gds-change-pl.order
+      992                               v-CUR-chk-gds-qnty = v-CUR-chk-gds-qnty + buf_chk-gds.doc-qnty
+      993                           .
+      994                           if buf_chk-gds.pl-code = tt-places.pl-code then do :
+      995                               delete tt-chk-gds-change-pl .
+      996                           end.
+      997                           else do :
+      998                               find first buf_place no-lock
+      999                                    where buf_place.obj-type = p-ink-doc.obj-type
+     1000                                      and buf_place.obj-code = p-ink-doc.obj-code
+     1001                                      and buf_place.pl-code  = tt-places.pl-code .
+     1002                               assign
+     1003                                   tt-chk-gds-change-pl.new-pl-code = buf_place.pl-code
+     1004                                   tt-chk-gds-change-pl.new-loc1    = buf_place.loc1
+     1005                                   tt-chk-gds-change-pl.new-loc2    = buf_place.loc2
+     1006                                   tt-chk-gds-change-pl.new-loc3    = buf_place.loc3
+     1007                                   tt-chk-gds-change-pl.new-loc4    = buf_place.loc4
+     1008                               .
+     1009                               find first tt-chk-to-reload where tt-chk-to-reload.doc-code = buf_chk-gds.doc-code no-error.
+     1010                               if not available tt-chk-to-reload then do:
+     1011                                   create tt-chk-to-reload .
+     1012                                   assign tt-chk-to-reload.doc-code = buf_chk-gds.doc-code .
+     1013                               end.
+     1014                           end.
+     1015                           next places .
+     1016                       end.
+     1017                       else do :
+     1018                           assign v-CUR-chk-gds-qnty = v-CUR-chk-gds-qnty + buf_chk-gds.doc-qnty .
+     1019                           if buf_chk-gds.pl-code = tt-places.pl-code then do :
+     1020                               delete tt-chk-gds-change-pl .
+     1021                           end.
+     1022                           else do :
+     1023                               find first buf_place no-lock
+     1024                                    where buf_place.obj-type = p-ink-doc.obj-type
+     1025                                      and buf_place.obj-code = p-ink-doc.obj-code
+     1026                                      and buf_place.pl-code  = tt-places.pl-code .
+     1027                               assign
+     1028                                   tt-chk-gds-change-pl.new-pl-code = buf_place.pl-code
+     1029                                   tt-chk-gds-change-pl.new-loc1    = buf_place.loc1
+     1030                                   tt-chk-gds-change-pl.new-loc2    = buf_place.loc2
+     1031                                   tt-chk-gds-change-pl.new-loc3    = buf_place.loc3
+     1032                                   tt-chk-gds-change-pl.new-loc4    = buf_place.loc4
+     1033                               .
+     1034                               find first tt-chk-to-reload where tt-chk-to-reload.doc-code = buf_chk-gds.doc-code no-error.
+     1035                               if not available tt-chk-to-reload then do:
+     1036                                   create tt-chk-to-reload .
+     1037                                   assign tt-chk-to-reload.doc-code = buf_chk-gds.doc-code .
+     1038                               end.
+     1039                           end.
+     1040                       end.
+     1041                   end.
+     1042           end.
+     1043       end.
+     1044       if can-find(first tt-chk-gds-change-pl) and can-find(first tt-chk-to-reload)
+     1045       then do :
+     1046           run waitfram-show in this-procedure ( input "Ждите... " ) .
+     1047           run MainProc .
+     1048           run waitfram-hide in this-procedure .
+     1049       end.
+     1050       else do :
+     1051           message "Нет строк чеков для смены в них резервуара!" view-as alert-box .
+     1052           return "cancell":U .
+     1053       end.
+     1054   END.
+     1055   ON CHOOSE OF b-rvs IN FRAME Dialog-Frame
+     1056   DO:
+     1057       assign v-rvs-rec = recid( buf_rvs-doc ).
+     1058       run str/rvs-doc.w
+     1059         ( input        parparentproc
+     1060          ,input        'ПРОСМОТР':U
+     1061          ,input        buf_rvs-doc.rvs-type
+     1062          ,input        no
+     1063          ,input-output v-rvs-rec
+     1064         ) no-error.
+     1065       if error-status :error then do:
+     1066         return no-apply.
+     1067       end.
+     1068   END.
+     1069   ON CHOOSE OF b-sel-rvs IN FRAME Dialog-Frame
+     1070   DO:
+     1071       run str/all-rvs.w (input parparentproc, input "choose-control", input ?, output v-rvs-rec).
+     1072       find first buf_rvs-doc no-lock where recid(buf_rvs-doc) = v-rvs-rec no-error.
+     1073       if available buf_rvs-doc then do :
+     1074           run upd-rvs-stt-msr-qnty.
+     1075           run calc-distrib-selling.
+     1076           run disp-rvs.
+     1077           open query br-places for each tt-places.
+     1078           APPLY "ENTRY" to br-places.
+     1079       end.
+     1080   END.
+     1081   on value-changed of br-places in frame Dialog-Frame
+     1082   do:
+     1083       assign
+     1084           v-cur-row = rowid(tt-places)
+     1085       .
+     1086       for first tt-pl-pump no-lock where tt-pl-pump.pump-code = tt-places.pump-code :
+     1087           assign
+     1088               v-TOTAL-realize = tt-pl-pump.chk-gds-doc-qnty
+     1089               v-tmp-dec = 0.0
+     1090           .
+     1091           for each tt-places no-lock where tt-places.pump-code = tt-pl-pump.pump-code :
+     1092               if rowid(tt-places) <> v-cur-row then
+     1093                   assign v-TOTAL-realize = v-Total-realize - (if tt-places.distrib-selling <> ? then tt-places.distrib-selling else 0) .
+     1094           end.
+     1095           find first tt-places exclusive-lock where rowid(tt-places) = v-cur-row.
+     1096           assign tt-places.distrib-selling = v-TOTAL-realize.
+     1097       end.
+     1098       browse br-places:refresh ().
+     1099       open query br-places for each tt-places.
+     1100       reposition br-places to rowid v-cur-row.
+     1101       APPLY "ENTRY" to br-places.
+     1102   end.
+     1103   on leave of tt-places.distrib-selling in browse br-places
+     1104   do:
+     1105       for first tt-pl-pump no-lock where tt-pl-pump.pump-code = tt-places.pump-code :
+     1106           assign tt-places.distrib-selling = if decimal(tt-places.distrib-selling:screen-value in browse br-places) = ?
+     1107                                              then tt-places.chk-gds-doc-qnty
+     1108                                              else if decimal(tt-places.distrib-selling:screen-value in browse br-places) <= tt-pl-pump.chk-gds-doc-qnty
+     1109                                              then decimal(tt-places.distrib-selling:screen-value in browse br-places)
+     1110                                              else tt-pl-pump.chk-gds-doc-qnty .
+     1111       end.
+     1112       browse br-places:refresh ().
+     1113   end.
+     1114   IF VALID-HANDLE(ACTIVE-WINDOW) AND FRAME Dialog-Frame:PARENT eq ?
+     1115   THEN FRAME Dialog-Frame:PARENT = ACTIVE-WINDOW.
+     1116   MAIN-BLOCK:
+     1117   DO ON ERROR   UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK
+     1118      ON END-KEY UNDO MAIN-BLOCK, LEAVE MAIN-BLOCK:
+     1119   define variable vss-include-info6 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1120   on CTRL-P, CTRL-З of frame Dialog-Frame anywhere do:
+     1121     if b-print :sensitive then DO: apply "CHOOSE":U to b-print in frame Dialog-Frame. END.
+     1122     return no-apply.
+     1123   end.
+     1124     run find-rvs.
+     1125     run fill-tt.
+     1126     run upd-rvs-stt-msr-qnty.
+     1127     run calc-distrib-selling.
+     1128     run disp-rvs.
+     1129     RUN enable_UI.
+     1130     open query br-places for each tt-places.
+     1131     APPLY "ENTRY" to br-places.
+     1132     WAIT-FOR GO OF FRAME Dialog-Frame .
+     1133   END.
+     1134   RUN disable_UI.
+     1135   Procedure find-rvs:
+     1136       for each buf_rvs-doc no-lock
+     1137          where buf_rvs-doc.obj-type   = p-ink-doc.obj-type
+     1138            and buf_rvs-doc.obj-code   = p-ink-doc.obj-code
+     1139            and buf_rvs-doc.shift-date = p-ink-doc.shift-date
+     1140            and buf_rvs-doc.shift-num  = p-ink-doc.shift-num
+     1141            and buf_rvs-doc.status_    = 'факт':U
+     1142            and buf_rvs-doc.rvs-type   = 'контроль':U
+     1143            use-index shift-type
+     1144            by buf_rvs-doc.fact-order descending
+     1145            :
+     1146                find first buf_rvs-line no-lock
+     1147                     where buf_rvs-line.gds-code = p-gds-code
+     1148                       and buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code
+     1149                       and buf_rvs-line.obj-type = buf_rvs-doc.obj-type
+     1150                       and buf_rvs-line.obj-code = buf_rvs-doc.obj-code no-error.
+     1151                if not available buf_rvs-line then next.
+     1152                else leave.
+     1153       end.
+     1154       if not available buf_rvs-line then do :
+     1155           message "      Для данного топлива не было контрольной сверки в этой смене.
+     1156                    Выберите другую сверку или заполните данные по распределению вручную."
+     1157                    view-as alert-box.
+     1158       end.
+     1159   end procedure.
+     1160   Procedure disp-rvs :
+     1161       if available buf_rvs-doc then do :
+     1162           display (" № " + buf_rvs-doc.rvs-code) @ txt-rvs with frame Dialog-Frame.
+     1163           enable b-rvs with frame Dialog-Frame.
+     1164       end.
+     1165   end procedure.
+     1166   Procedure fill-tt:
+     1167       assign
+     1168           v-TOTAL-pl-gds-fact-qnty = 0.0
+     1169           v-TOTAL-chk-gds-doc-qnty = 0.0
+     1170           v-order = 0
+     1171       .
+     1172       for each buf_pl-gds no-lock
+     1173          where buf_pl-gds.gds-code = p-gds-code
+     1174            and buf_pl-gds.obj-type = p-ink-doc.obj-type
+     1175            and buf_pl-gds.obj-code = p-ink-doc.obj-code
+     1176           ,
+     1177          first buf_place no-lock
+     1178          where buf_place.obj-type = buf_pl-gds.obj-type
+     1179            and buf_place.obj-code = buf_pl-gds.obj-code
+     1180            and buf_place.pl-code  = buf_pl-gds.pl-code
+     1181           ,
+     1182          first buf_pl-gds-pump no-lock
+     1183          where buf_pl-gds-pump.obj-type = buf_pl-gds.obj-type
+     1184            and buf_pl-gds-pump.obj-code = buf_pl-gds.obj-code
+     1185            and buf_pl-gds-pump.pl-code  = buf_pl-gds.pl-code
+     1186            and buf_pl-gds-pump.gds-code = buf_pl-gds.gds-code
+     1187            :
+     1188                find first tt-pl-pump where tt-pl-pump.pump-code = buf_pl-gds-pump.pump-code no-error.
+     1189                if not available tt-pl-pump then do :
+     1190                    create tt-pl-pump no-error.
+     1191                    assign tt-pl-pump.pump-code = buf_pl-gds-pump.pump-code.
+     1192                end.
+     1193                assign v-sum-chk-gds-doc-qnty = 0.0 .
+     1194                for each buf_chk-gds no-lock
+     1195                   where buf_chk-gds.b-code   = p-b-code
+     1196                     and buf_chk-gds.pl-code  = buf_pl-gds.pl-code
+     1197                     and buf_chk-gds.out-code = p-ink-doc.inkas-code
+     1198                     :
+     1199                         assign
+     1200                           v-sum-chk-gds-doc-qnty = v-sum-chk-gds-doc-qnty + buf_chk-gds.doc-qnty
+     1201                           v-TOTAL-chk-gds-doc-qnty = v-TOTAL-chk-gds-doc-qnty + buf_chk-gds.doc-qnty
+     1202                           tt-pl-pump.chk-gds-doc-qnty = tt-pl-pump.chk-gds-doc-qnty + buf_chk-gds.doc-qnty
+     1203                         .
+     1204                         assign v-order = v-order + 1 .
+     1205                         create tt-chk-gds-change-pl .
+     1206                         assign tt-chk-gds-change-pl.doc-code    = buf_chk-gds.doc-code
+     1207                                tt-chk-gds-change-pl.line-num    = buf_chk-gds.line-num
+     1208                                tt-chk-gds-change-pl.order       = v-order
+     1209                         .
+     1210                end.
+     1211                create tt-places no-error.
+     1212                assign tt-places.pump-code = buf_pl-gds-pump.pump-code
+     1213                       tt-places.pl-code   = buf_place.pl-code
+     1214                       tt-places.pl-name   = buf_place.pl-name
+     1215                       tt-places.loc1      = buf_place.loc1
+     1216                       tt-places.pl-gds-fact-qnty = buf_pl-gds.fact-qnty
+     1217                       tt-places.chk-gds-doc-qnty = v-sum-chk-gds-doc-qnty
+     1218                       tt-places.order     = if buf_pl-gds-pump.status_ = 'тек':U then 1 else 2
+     1219                .
+     1220                assign
+     1221                   v-TOTAL-pl-gds-fact-qnty = v-TOTAL-pl-gds-fact-qnty + tt-places.pl-gds-fact-qnty
+     1222                   tt-pl-pump.pl-gds-fact-qnty = tt-pl-pump.pl-gds-fact-qnty + tt-places.pl-gds-fact-qnty
+     1223                .
+     1224                release tt-places no-error.
+     1225       end.
+     1226   End procedure.
+     1227   Procedure upd-rvs-stt-msr-qnty :
+     1228       if available buf_rvs-doc then do :
+     1229           assign
+     1230               v-TOTAL-rvs-stt-msr-qnty = 0.0
+     1231           .
+     1232           for each tt-pl-pump exclusive-lock :
+     1233               assign tt-pl-pump.rvs-stt-msr-qnty = 0.0 .
+     1234               for each tt-places exclusive-lock where tt-places.pump-code = tt-pl-pump.pump-code  :
+     1235                  assign tt-places.rvs-stt-msr-qnty = 0.0 .
+     1236                  find first buf_rvs-line no-lock
+     1237                       where buf_rvs-line.gds-code = p-gds-code
+     1238                         and buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code
+     1239                         and buf_rvs-line.obj-type = buf_rvs-doc.obj-type
+     1240                         and buf_rvs-line.obj-code = buf_rvs-doc.obj-code
+     1241                         and buf_rvs-line.pl-code  = tt-places.pl-code no-error.
+     1242                  if available buf_rvs-line then
+     1243                      assign
+     1244                          tt-places.rvs-stt-msr-qnty = buf_rvs-line.state-measure-qnty
+     1245                          v-TOTAL-rvs-stt-msr-qnty = v-TOTAL-rvs-stt-msr-qnty + buf_rvs-line.state-measure-qnty
+     1246                          tt-pl-pump.rvs-stt-msr-qnty = tt-pl-pump.rvs-stt-msr-qnty + buf_rvs-line.state-measure-qnty
+     1247                      .
+     1248               end.
+     1249           end.
+     1250       end.
+     1251   end procedure.
+     1252   Procedure calc-distrib-selling :
+     1253       for each tt-pl-pump no-lock :
+     1254           v-tmp-dec = 0.0 .
+     1255           for each tt-places exclusive-lock where tt-places.pump-code = tt-pl-pump.pump-code :
+     1256               assign
+     1257                   tt-places.distrib-selling = tt-places.pl-gds-fact-qnty - ((tt-places.rvs-stt-msr-qnty / tt-pl-pump.rvs-stt-msr-qnty) *
+     1258                                                                             (tt-pl-pump.pl-gds-fact-qnty - tt-pl-pump.chk-gds-doc-qnty))
+     1259                   tt-places.distrib-selling = if tt-places.distrib-selling <> ?
+     1260                                                then tt-places.distrib-selling else tt-places.chk-gds-doc-qnty
+     1261               .
+     1262               if tt-places.distrib-selling < 0 then v-tmp-dec = tt-places.distrib-selling .
+     1263           end.
+     1264           if v-tmp-dec <> 0.0 then
+     1265           for each tt-places exclusive-lock where tt-places.pump-code = tt-pl-pump.pump-code :
+     1266               assign
+     1267                   tt-places.distrib-selling = abs(tt-places.distrib-selling) - v-tmp-dec
+     1268               .
+     1269           end.
+     1270       end.
+     1271   end procedure.
+     1272   PROCEDURE PrintProc :
+     1273       define var v-act-file as char no-undo.
+     1274       v-act-file  = session:temp-directory + "rpt" +  "sale-plc1.html".
+     1275       run waitfram-show in this-procedure ( input "Ждите...").
+     1276       output stream OutStr-html to value(v-act-file) convert target 'UTF-8'.
+     1277       put stream OutStr-html unformatted
+     1278           substitute(
+     1279           '<!doctype html>
+     1280                    <html>
+     1281                 <head>
+     1282                 <meta charset="UTF-8">
+     1283                    <!-- Стили документа -->
+     1284                 <style>
+     1285                   table ~{border-collapse: collapse; ~}
+     1286                   tbody td, th ~{border: 1px solid black;~}
+     1287                   #myid ~{font-weight: bold;~}
+     1288                   .class1 ~{font-style: italic;~}
+     1289                   .class2 ~{font-family: Arial;~}
+     1290                 </style>
+     1291                 </head>
+     1292                     <body>
+     1293                     <table orientation="landscape" name="лист1" repeat_rows="1:1" hide_zero="True">
+     1294                     <thead>
+     1295                     <!-- Обязательно создаётся строка таблицы, в которой находятся размеры колонок в px-->
+     1296                     <tr class="set_columns">
+     1297                           <td style="width:70px"></td>
+     1298                           <td style="width:210px"></td>
+     1299                           <td style="width:70px"></td>
+     1300                           <td style="width:110px"></td>
+     1301                           <td style="width:110px"></td>
+     1302                           <td style="width:110px"></td>
+     1303                           <td style="width:110px"></td>
+     1304                     </tr>
+     1305                     <tr>
+     1306                           <td colspan="7" style="front-weight: bold; text-align: center;">Распределение топлива по местам хранения</td>
+     1307                     </tr>
+     1308           </thead>
+     1309               <tbody>
+     1310                   <tr>
+     1311                   <th>Складское место</th>
+     1312                   <th>Наименование резервуара</th>
+     1313                   <th>Номер резервуара</th>
+     1314                   <th>Расчетно-книжный остаток</th>
+     1315                   <th>Текущее распределение продажи</th>
+     1316                   <th>Фактический остаток</th>
+     1317                   <th>Распределение реализации</th>
+     1318                   </tr>').
+     1319       get first br-places.
+     1320       do while available  tt-places:
+     1321           put stream OutStr-html unformatted
+     1322               substitute(
+     1323               '<tr style="height: 50px;">
+     1324                <td text_wrap="true"> &1 </td>
+     1325                <td text_wrap="true"> &2 </td>
+     1326                <td text_wrap="true"> &3 </td>
+     1327                <td text_wrap="true"> &4 </td>
+     1328                <td text_wrap="true"> &5 </td>
+     1329                <td text_wrap="true"> &6 </td>
+     1330                <td text_wrap="true"> &7 </td>
+     1331                </tr>
+     1332                </tbody>',
+     1333               tt-places.pl-code,
+     1334               tt-places.pl-name,
+     1335               tt-places.loc1,
+     1336               tt-places.pl-gds-fact-qnty,
+     1337               tt-places.chk-gds-doc-qnty,
+     1338               tt-places.rvs-stt-msr-qnty,
+     1339               tt-places.distrib-selling
+     1340               ).
+     1341           get next br-places.
+     1342       end.
+     1343       run waitfram-hide in this-procedure.
+     1344       output stream OutStr-html close.
+     1345       run prn-lib-reportviewer-report-name in this-procedure (
+     1346           input parParentProc
+     1347           ,input v-act-file
+     1348           ).
+     1349   END PROCEDURE.
+     1350   Procedure MainProc :
+     1351       define  variable old-netto as decimal no-undo.
+     1352       define  variable old-tot-doc as decimal no-undo.
+     1353       define  variable old-discnt as decimal no-undo.
+     1354       define variable v-curr-r-b as character no-undo .
+     1355       define buffer buf_sysconf for ub.sysconf.
+     1356       DEFINE                BUFFER ret-doc    FOR trn-doc.
+     1357       DEFINE                BUFFER r-doc      FOR chk-doc.
+     1358       DEFINE                BUFFER r-gds      FOR chk-gds.
+     1359       define variable v-ref-rec  as recid no-undo .
+     1360       define variable v-base-code  like ub.sysconf.base-code no-undo .
+     1361       define variable v-cash-pay   like ub.sysconf.cash-pay  no-undo .
+     1362       define variable temp-qnty like gds-dtl.fact-qnty no-undo .
+     1363       define variable temp-qnty-prts like gds-dtl.fact-qnty no-undo .
+     1364       define variable prev-code like chk-gds.doc-code no-undo .
+     1365       define variable for-shift-name AS character.
+     1366       define variable for-shift-num like chk-doc.shift-num.
+     1367       define variable for-shift-date like chk-doc.shift-date.
+     1368       define variable serv-elm as logical no-undo init no.
+     1369       define variable cas-shft as logical no-undo init no.
+     1370       define variable one-sale-per-day as logical no-undo .
+     1371       define variable l-shift-on as logical no-undo init no.
+     1372       define variable one-curs as logical no-undo init no.
+     1373       define variable cas-curs as logical no-undo init no.
+     1374       define variable prcl-spl as logical no-undo init no.
+     1375       define variable pay-gds-algo as character no-undo .
+     1376       define variable rdtaxcd  as INTEGER                  no-undo.
+     1377       define variable exctaxcd  as INTEGER                  no-undo.
+     1378       define variable factorrt as decimal no-undo.
+     1379       define variable btltaxcd  as INTEGER                  no-undo.
+     1380       define variable conf-attr as char no-undo.
+     1381       define variable conf-par as char no-undo.
+     1382       define variable par-type as char no-undo.
+     1383       define variable cursh like curr-shop.exch-rate init 0.
+     1384       define variable cursh-scale like curr-shop.exch-rate.
+     1385       define variable v-rid-list as character no-undo init "".
+     1386       define buffer buf_inkas for ub.inkas .
+     1387       define variable ps-where-rus as character no-undo .
+     1388       define variable v-param-type as character no-undo .
+     1389       define variable v-value-character as character no-undo .
+     1390       define variable v-value-date as date no-undo .
+     1391       define variable v-value-decimal as decimal no-undo .
+     1392       define variable v-value-integer as INTEGER no-undo .
+     1393       define variable v-value-logical AS LOGICAL no-undo .
+     1394       define variable v-tth as handle no-undo .
+     1395       assign v-tth = buffer thbjattr_thbj-attr:table-handle .
+     1396       DEFINE VARIABLE gds-amount AS INTEGER INITIAL 0 NO-UNDO.
+     1397       DEFINE VARIABLE chk-amount AS INTEGER INITIAL 0 NO-UNDO.
+     1398       DEFINE VARIABLE dtl-out AS INTEGER INITIAL 0 NO-UNDO.
+     1399       DEFINE VARIABLE dtl-ret AS INTEGER INITIAL 0 NO-UNDO.
+     1400       DEFINE VARIABLE line-out AS INTEGER INITIAL 0 NO-UNDO.
+     1401       DEFINE VARIABLE line-ret AS INTEGER INITIAL 0 NO-UNDO.
+     1402       DEFINE VARIABLE nf-chk-amount AS INTEGER INITIAL 0 NO-UNDO.
+     1403       DEFINE VARIABLE nf-gds-amount AS INTEGER INITIAL 0 NO-UNDO.
+     1404       define variable v-ii     as integer no-undo .
+     1405       define variable v-ii-ok  as integer no-undo .
+     1406       define variable v-rc-ii as integer no-undo .
+     1407       define variable v-rc-max as integer no-undo .
+     1408       define variable v-error-status as logical no-undo .
+     1409       define variable v-error-status-message as character no-undo .
+     1410       assign
+     1411           rdtaxcd  = integer('3':U)
+     1412           exctaxcd = integer('4':U)
+     1413           btltaxcd = integer('3':U)
+     1414       .
+     1415   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$".
+     1416   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curr-r-b in g#library
+     1417     (output v-curr-r-b
+     1418     )  .
+     1419   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run conf-rd in g#library
+     1420     (input  'factorrt'
+     1421     ,input  ''
+     1422     ,input  ''
+     1423     ,input  0
+     1424     ,input  ''
+     1425     ,input  ''
+     1426     ,input  ''
+     1427     ,input  no
+     1428     ,output conf-par
+     1429     ,output par-type
+     1430     ) no-error .
+     1431       if NOT error-status:error then
+     1432       factorrt = decimal(conf-par).
+     1433       if rdtaxcd > 0 then do:
+     1434         FIND FIRST tax No-LOCK WHERE tax.tax-code = rdtaxcd No-ERROR.
+     1435         if not avail tax then do:
+     1436             message "Не найден дорожный налог!" view-as alert-box ERROR.
+     1437             return error.
+     1438         end.
+     1439       end.
+     1440       if exctaxcd > 0 then do:
+     1441         FIND FIRST tax No-LOCK WHERE tax.tax-code = exctaxcd No-ERROR.
+     1442         if not avail tax then do:
+     1443             message "Не найден акциз!" view-as alert-box ERROR.
+     1444             return error.
+     1445         end.
+     1446       end.
+     1447       if btltaxcd > 0 then do:
+     1448         FIND FIRST tax No-LOCK WHERE tax.tax-code = btltaxcd No-ERROR.
+     1449         if not avail tax then do:
+     1450             message "Не найден налог (доп.компонента для цены) стеклопосуды!" view-as alert-box ERROR.
+     1451             return error.
+     1452         end.
+     1453       end.
+     1454   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run conf-rd in g#library
+     1455     (input  'serv-elm'
+     1456     ,input  p-ink-doc.host-code
+     1457     ,input  p-ink-doc.obj-type
+     1458     ,input  p-ink-doc.obj-code
+     1459     ,input  ''
+     1460     ,input  ''
+     1461     ,input  ''
+     1462     ,input  no
+     1463     ,output conf-par
+     1464     ,output par-type
+     1465     ) no-error .
+     1466       IF not error-status:error then
+     1467       assign
+     1468       serv-elm = (conf-par = "yes").
+     1469       for each thbjattr_thbj-attr:
+     1470         delete thbjattr_thbj-attr.
+     1471       end.
+     1472       run adm/shattri.p (
+     1473         input "get":U
+     1474        ,input  p-ink-doc.obj-type
+     1475        ,input  p-ink-doc.obj-code
+     1476        ,input  'get-chk':U
+     1477        ,input  "":U
+     1478        , output v-value-character
+     1479        , output v-value-date
+     1480        , output v-value-decimal
+     1481        , output v-value-integer
+     1482        , output v-value-logical
+     1483        , output v-param-type
+     1484        , INPUT-OUTPUT table-handle v-tth
+     1485       ) no-error .
+     1486       IF error-status:error then do:
+     1487          message
+     1488          substitute("Ошибка при получении опций закачки чеков НА ОБЪЕКТЕ &1&2:&3&4 &5"
+     1489          , p-ink-doc.obj-type
+     1490          , p-ink-doc.obj-code
+     1491          , chr(10)
+     1492          , error-status:get-message(1)
+     1493          , return-value )
+     1494          view-as alert-box error .
+     1495          undo, return error .
+     1496       end.
+     1497       find first thbjattr_thbj-attr where
+     1498                  thbjattr_thbj-attr.obj-type = p-ink-doc.obj-type
+     1499              and thbjattr_thbj-attr.obj-code = p-ink-doc.obj-code
+     1500              and thbjattr_thbj-attr.upper-prop-code = 'get-chk':U
+     1501              and thbjattr_thbj-attr.prop-code = 'cas-shft':U no-error.
+     1502       if available thbjattr_thbj-attr then do:
+     1503           cas-shft = thbjattr_thbj-attr.property-value-logical.
+     1504       end.
+     1505       find first thbjattr_thbj-attr where
+     1506                  thbjattr_thbj-attr.obj-type = p-ink-doc.obj-type
+     1507              and thbjattr_thbj-attr.obj-code = p-ink-doc.obj-code
+     1508              and thbjattr_thbj-attr.upper-prop-code = 'get-chk':U
+     1509              and thbjattr_thbj-attr.prop-code = 'cas-curs':U no-error.
+     1510       if available thbjattr_thbj-attr then do:
+     1511           cas-curs = thbjattr_thbj-attr.property-value-logical.
+     1512       end.
+     1513   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1514   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+     1515     (input  p-ink-doc.obj-type
+     1516     ,input  p-ink-doc.obj-code
+     1517     ,input  'shift-on=request'
+     1518     ,output l-shift-on
+     1519     )  .
+     1520       if l-shift-on and not cas-shft then do:
+     1521               message "Внимание! На текущем объекте требуется использование смен" skip
+     1522            "а настройка СМЕНЫ НА КАССЕ ( cas-shft ) выключена - это недопустимо." skip (2)
+     1523                 view-as alert-box ERROR.
+     1524         return ERROR.
+     1525       end.
+     1526       run adm/shattri.p (
+     1527         input "get":U
+     1528         ,input  p-ink-doc.obj-type
+     1529         ,input  p-ink-doc.obj-code
+     1530         ,input  'autosale':U
+     1531         ,input  "":U
+     1532         ,output v-value-character
+     1533         ,output v-value-date
+     1534         ,output v-value-decimal
+     1535         ,output v-value-integer
+     1536         ,output v-value-logical
+     1537         ,output v-param-type
+     1538         ,INPUT-OUTPUT table-handle v-tth
+     1539       ) no-error .
+     1540       IF error-status:error then do:
+     1541          message
+     1542          substitute("Ошибка при получении опций работы с продажей НА ОБЪЕКТЕ &1&2:&3&4 &5"
+     1543          , p-ink-doc.obj-type
+     1544          , p-ink-doc.obj-code
+     1545          , chr(10)
+     1546          , error-status:get-message(1)
+     1547          , return-value )
+     1548          view-as alert-box error .
+     1549          undo, return error .
+     1550       end.
+     1551       find first thbjattr_thbj-attr where
+     1552                  thbjattr_thbj-attr.obj-type = p-ink-doc.obj-type
+     1553              and thbjattr_thbj-attr.obj-code = p-ink-doc.obj-code
+     1554              and thbjattr_thbj-attr.upper-prop-code = 'autosale':U
+     1555              and thbjattr_thbj-attr.prop-code = 'prcl-spl':U no-error.
+     1556       if available thbjattr_thbj-attr then do:
+     1557           prcl-spl = thbjattr_thbj-attr.property-value-logical.
+     1558       end.
+     1559       find first thbjattr_thbj-attr where
+     1560                  thbjattr_thbj-attr.obj-type = p-ink-doc.obj-type
+     1561              and thbjattr_thbj-attr.obj-code = p-ink-doc.obj-code
+     1562              and thbjattr_thbj-attr.upper-prop-code = 'autosale':U
+     1563              and thbjattr_thbj-attr.prop-code = 'one-curs':U no-error.
+     1564       if available thbjattr_thbj-attr then do:
+     1565         one-curs = thbjattr_thbj-attr.property-value-logical.
+     1566       end.
+     1567       find first thbjattr_thbj-attr where
+     1568               thbjattr_thbj-attr.obj-type = p-ink-doc.obj-type
+     1569           and thbjattr_thbj-attr.obj-code = p-ink-doc.obj-code
+     1570           and thbjattr_thbj-attr.upper-prop-code = 'autosale':U
+     1571           and thbjattr_thbj-attr.prop-code = 'one-sale-per-day':U no-error.
+     1572       if available thbjattr_thbj-attr then do:
+     1573           assign
+     1574             one-sale-per-day = thbjattr_thbj-attr.property-value-logical
+     1575           .
+     1576       end.
+     1577       find first thbjattr_thbj-attr where
+     1578                  thbjattr_thbj-attr.obj-type = p-ink-doc.obj-type
+     1579              and thbjattr_thbj-attr.obj-code = p-ink-doc.obj-code
+     1580              and thbjattr_thbj-attr.upper-prop-code = 'autosale':U
+     1581              and thbjattr_thbj-attr.prop-code = 'pay-gds-algo':U no-error.
+     1582       if available thbjattr_thbj-attr then do:
+     1583           assign
+     1584             pay-gds-algo = thbjattr_thbj-attr.property-value-character
+     1585           .
+     1586       end.
+     1587       find first buf_sysconf no-lock where buf_sysconf.host-code = p-ink-doc.host-code.
+     1588   define variable vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1589   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run basecode in g#library
+     1590     (input  p-ink-doc.host-code
+     1591     ,output v-base-code
+     1592     )  .
+     1593       FIND FIRST shop WHERE shop.obj-code = p-ink-doc.obj-code NO-LOCK .
+     1594       FIND FIRST trn-doc no-lock WHERE trn-doc.doc-code = p-ink-doc.inkas-code.
+     1595       FIND FIRST ret-doc no-lock WHERE ret-doc.doc-code = trn-doc.out-code no-error .
+     1596       assign
+     1597           cursh = trn-doc.exch-rate
+     1598           cursh-scale = trn-doc.exch-scale
+     1599       .
+     1600       run get-inkas-ps in this-procedure (
+     1601                                           buffer p-ink-doc
+     1602                                         , output chk-amount
+     1603                                         , output gds-amount
+     1604                                         , output line-out
+     1605                                         , output dtl-out
+     1606                                         , output line-ret
+     1607                                         , output dtl-ret
+     1608                                         , output nf-chk-amount
+     1609                                         , output nf-gds-amount
+     1610                                         , output ps-where-rus
+     1611                                         ).
+     1612       for each tt-chk-to-reload no-lock :
+     1613           find first buf_chk-doc where buf_chk-doc.doc-code = tt-chk-to-reload.doc-code .
+     1614           assign
+     1615              v-rid-list = v-rid-list + ( if v-rid-list = "":U then "":U else chr(44) ) + string(recid(buf_chk-doc))
+     1616           .
+     1617           FIND FIRST buf_inkas No-LOCK WHERE
+     1618                             buf_inkas.inkas-code = buf_chk-doc.out-code No-ERROR.
+     1619           assign
+     1620               old-netto = buf_inkas.netto
+     1621               old-tot-doc = buf_inkas.tot-doc
+     1622               old-discnt = buf_inkas.discnt
+     1623           .
+     1624           run str/excl-chk.p (
+     1625                                input parparentproc
+     1626                              , input v-curr-r-b
+     1627                              , buffer buf_chk-doc) no-error.
+     1628           if error-status:error OR
+     1629             buf_inkas.netto <> old-netto  - buf_chk-doc.netto OR
+     1630             buf_inkas.tot-doc <> old-tot-doc  - buf_chk-doc.tot-doc OR
+     1631             buf_inkas.discnt <> old-discnt - buf_chk-doc.discnt then do:
+     1632               message
+     1633               substitute("Исключение чека &1 из продажи &2 не удалось:&3&4 &5"
+     1634                        ,buf_chk-doc.doc-code
+     1635                        ,p-ink-doc.inkas-code
+     1636                        , chr(10)
+     1637                        ,error-status:get-message(1)
+     1638                        ,return-value
+     1639                        )
+     1640               view-as alert-box ERROR.
+     1641               undo, NEXT.
+     1642           end.
+     1643       end.
+     1644       for each tt-chk-gds-change-pl no-lock :
+     1645           find first buf_chk-gds exclusive-lock
+     1646                where buf_chk-gds.doc-code = tt-chk-gds-change-pl.doc-code
+     1647                  and buf_chk-gds.line-num = tt-chk-gds-change-pl.line-num .
+     1648           assign
+     1649               buf_chk-gds.pl-code = tt-chk-gds-change-pl.new-pl-code
+     1650               buf_chk-gds.loc1    = tt-chk-gds-change-pl.new-loc1
+     1651               buf_chk-gds.loc2    = tt-chk-gds-change-pl.new-loc2
+     1652               buf_chk-gds.loc3    = tt-chk-gds-change-pl.new-loc3
+     1653               buf_chk-gds.loc4    = tt-chk-gds-change-pl.new-loc4
+     1654           .
+     1655           release buf_chk-gds .
+     1656       end.
+     1657       assign
+     1658           v-rc-max = num-entries(v-rid-list)
+     1659       .
+     1660       _v-rc:
+     1661       do while v-rc-ii < v-rc-max:
+     1662           assign
+     1663           v-rc-ii = v-rc-ii + 1
+     1664           .
+     1665           find first X_chk-doc exclusive-lock where
+     1666                     recid(X_chk-doc) = integer(entry(v-rc-ii, v-rid-list))  no-wait no-error.
+     1667           if locked X_chk-doc or not available X_chk-doc then do:
+     1668              next _v-rc.
+     1669           end.
+     1670           else leave _v-rc.
+     1671       end.
+     1672       if not available X_chk-doc
+     1673       or locked(X_chk-doc) then do:
+     1674           message
+     1675           "Ни один из чеков не может быть сейчас перезакачан в продажу" skip
+     1676           "Возможно они заняты другим пользователем"
+     1677           view-as alert-box Warning.
+     1678           return.
+     1679       end.
+     1680       run str/inc-salr.p (
+     1681                    input  parparentproc
+     1682                   ,input  this-procedure
+     1683                   ,input-output v-ii
+     1684                   ,input-output v-ii-ok
+     1685                   ,input  no
+     1686                   ,input  ""
+     1687                   ,INPUT  v-rid-list
+     1688                   ,input  p-ink-doc.obj-type
+     1689                   ,input  p-ink-doc.obj-code
+     1690                   ,input  v-curr-r-b
+     1691                   ,input  no
+     1692                   ,input  cas-shft
+     1693                   ,input  one-curs
+     1694                   ,input  cas-curs
+     1695                   ,input  cursh
+     1696                   ,input  cursh-scale
+     1697                   ,input  prcl-spl
+     1698                   ,input  pay-gds-algo
+     1699                   ,input  rdtaxcd
+     1700                   ,input  exctaxcd
+     1701                   ,input  factorrt
+     1702                   ,input  btltaxcd
+     1703                   ,input  gds-amount
+     1704                   ,input  chk-amount
+     1705                   ,input  line-out
+     1706                   ,input  line-ret
+     1707                   ,input  dtl-out
+     1708                   ,input  dtl-ret
+     1709                   ,input  nf-chk-amount
+     1710                   ,input  nf-gds-amount
+     1711                   ,input  shop.day-only
+     1712                   ,input  p-ink-doc.doc-date
+     1713                   ,input  p-ink-doc.shift-date
+     1714                   ,input  p-ink-doc.shift-num
+     1715                   ,input  p-ink-doc.doc-date
+     1716                   ,input  p-ink-doc.shift-date
+     1717                   ,input  p-ink-doc.shift-num
+     1718                   ,buffer p-ink-doc
+     1719                   ,buffer trn-doc
+     1720                   ,buffer ret-doc
+     1721                   ,buffer buf_sysconf
+     1722       ) NO-ERROR.
+     1723       assign
+     1724           v-error-status = error-status:error
+     1725           v-error-status-message = error-status:get-message(1)
+     1726       .
+     1727       if v-ii = 0 then do:
+     1728           if v-error-status then
+     1729           message
+     1730           "Произошла ошибка при перезакачке чеков в продажу" skip
+     1731           v-error-status-message skip
+     1732           return-value
+     1733           view-as alert-box .
+     1734           else
+     1735           message
+     1736           "Нет чеков, удовлетворяющих условиям перезакачки в продажу" skip
+     1737           view-as alert-box WARNING .
+     1738           assign p-to-reserv = no .
+     1739       end.
+     1740       else do:
+     1741           message
+     1742           substitute("Просмотрено &1 чеков, успешно перезакачано в продажу &2", v-ii, v-ii-ok)
+     1743           view-as alert-box WARNING .
+     1744           assign p-to-reserv = yes .
+     1745       end.
+     1746   end procedure.
+     1747   procedure display-chk :
+     1748   DEFINE INPUT PARAMETER p-chk-amount AS INTEGER NO-UNDO.
+     1749   define input parameter p-nf-chk-amount as integer no-undo .
+     1750   end procedure.
+     1751   PROCEDURE display-ink-doc :
+     1752   define input parameter p-gds-amount  as integer no-undo .
+     1753   define input parameter p-nf-gds-amount  as integer no-undo .
+     1754   define input parameter p-line-out    as integer no-undo .
+     1755   define input parameter p-line-ret    as integer no-undo .
+     1756   define input parameter p-dtl-out     as integer no-undo .
+     1757   define input parameter p-dtl-ret     as integer no-undo .
+     1758   END PROCEDURE.
+     1759   PROCEDURE disable_UI :
+     1760     HIDE FRAME Dialog-Frame.
+     1761   END PROCEDURE.
+     1762   PROCEDURE enable_UI :
+     1763     ENABLE b-save b-cancel b-print br-places b-sel-rvs
+     1764         WITH FRAME Dialog-Frame.
+     1765     VIEW FRAME Dialog-Frame.
+     1766   END PROCEDURE.

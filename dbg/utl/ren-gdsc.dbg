@@ -1,0 +1,2606 @@
+        1   block-level on error undo, throw.
+        2   define input  parameter old-gds-code  like ub.goods.gds-code  no-undo .
+        3   define input  parameter new-gds-code  like ub.goods.gds-code  no-undo .
+        4   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        5   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        6   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        7   define variable vss-workfile    as character no-undo init "$Workfile: ren-gdsc.p $":U .
+        8   define variable vss-archive     as character no-undo init "$Archive: utl/ren-gdsc.p $":U .
+        9   define variable vss-description as character no-undo init "Изменение gds-code для одного товара".
+       10   procedure vss-get-info :
+       11     define output parameter p-vss-revision    like vss-revision    no-undo .
+       12     define output parameter p-vss-author      like vss-author      no-undo .
+       13     define output parameter p-vss-date        like vss-date        no-undo .
+       14     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       15     define output parameter p-vss-archive     like vss-archive     no-undo .
+       16     define output parameter p-vss-description like vss-description no-undo .
+       17     assign
+       18       p-vss-revision    = vss-revision
+       19       p-vss-author      = vss-author
+       20       p-vss-date        = vss-date
+       21       p-vss-workfile    = vss-workfile
+       22       p-vss-archive     = vss-archive
+       23       p-vss-description = vss-description
+       24     .
+       25   end procedure.
+       26   procedure vss-get-parameters :
+       27     define output parameter p-vss-parameters as character no-undo .
+       28       assign
+       29         p-vss-parameters = substitute('&1|&2':u,old-gds-code,new-gds-code)
+       30       .
+       31   end procedure.
+       32   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       33   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       34   define variable v-vssrevis-logger                   as handle    no-undo .
+       35   procedure vss-logevent :
+       36     define input  parameter p-extra-paramters as character no-undo .
+       37     define variable v-vssrevis-parameters as character no-undo .
+       38     do
+       39     on error undo, return error return-value
+       40     :
+       41       if  valid-handle(v-vssrevis-logger)
+       42       and v-vssrevis-logger :get-signature("logevent") <> ""
+       43       then do:
+       44         run vss-get-parameters in this-procedure
+       45           (output v-vssrevis-parameters
+       46           ).
+       47         run logevent in v-vssrevis-logger
+       48           (input vss-workfile
+       49           ,input vss-revision
+       50           ,input v-vssrevis-parameters
+       51           ,input p-extra-paramters
+       52           ).
+       53       end.
+       54     end.
+       55   end procedure.
+       56   assign
+       57     v-vssrevis-logger = g#vssrevis-logger
+       58   .
+       59   if  valid-handle(v-vssrevis-logger)
+       60   and v-vssrevis-logger :get-signature("logevent") <> ""
+       61   then do:
+       62     assign
+       63       v-vssrevis-logevent = true
+       64     .
+       65     run vss-logevent in this-procedure (input vss-description) .
+       66   end.
+       67   define new global shared variable g#language as character no-undo .
+       68   if g#language <> '' and g#language <> 'rus':U then do:
+       69     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       70   end.
+       71   define new global shared variable g#library  as handle no-undo .
+       72   define new global shared variable g#library2 as handle no-undo .
+       73   define   shared variable g#auto as logical no-undo.
+       74   define   shared variable g#news as logical no-undo.
+       75   define   shared variable g#oxml as logical no-undo.
+       76   define   shared variable g#esys as logical no-undo.
+       77   define   shared variable g#news-source-db as integer no-undo.
+       78   define   shared variable g#esys-source-esys as integer no-undo.
+       79   define   shared variable g#db-num as integer   no-undo .
+       80   define   shared variable g#userid as character no-undo .
+       81   define   shared variable g#passwd as character no-undo .
+       82   def var vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       83   procedure gen-key-rec :
+       84     define input  parameter p-tbl-name    as character no-undo.
+       85     define input  parameter p-bh_tbl-name as handle    no-undo.
+       86     define output parameter p-key-rec     as character no-undo.
+       87     do
+       88     on error  undo, return error substitute( "&1 (gen-key-rec). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       89     on stop   undo, return error substitute( "&1 (gen-key-rec). stop", vss-workfile )
+       90     on endkey undo, return error substitute( "&1 (gen-key-rec). endkey", vss-workfile )
+       91     :
+       92       define variable fh               as handle    no-undo .
+       93       define variable v-ok             as logical   no-undo .
+       94       define variable v-inform         as character no-undo .
+       95       define variable v-ind            as integer   no-undo .
+       96       define variable v-idx-field-qnty as integer   no-undo .
+       97       if p-tbl-name = ?
+       98         or p-tbl-name = "":U
+       99       then do:
+      100         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Не задано имя таблицы.", vss-include-info0 ).
+      101       end.
+      102       if not p-bh_tbl-name:available then do:
+      103         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Переданый буфер таблицы &2 не доступен", vss-include-info0, p-tbl-name ).
+      104       end.
+      105       assign
+      106         p-key-rec = p-tbl-name
+      107         v-inform  = p-bh_tbl-name:index-information(1)
+      108         v-ind     = 2
+      109       .
+      110       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      111       on error undo, return error
+      112       :
+      113         assign
+      114           v-inform = p-bh_tbl-name:index-information( v-ind )
+      115           v-ind    = v-ind + 1
+      116         .
+      117       end.
+      118       if v-inform = ?
+      119         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      120         or entry( 3, v-inform, ",":U ) <> "1":U
+      121       then do:
+      122         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, p-tbl-name ).
+      123       end.
+      124       else do:
+      125         assign
+      126           v-idx-field-qnty = num-entries( v-inform ) - 4
+      127         .
+      128         if v-idx-field-qnty < 2 then do:
+      129           return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, p-tbl-name ).
+      130         end.
+      131         do v-ind = 1 to v-idx-field-qnty by 2
+      132         on error undo, return error
+      133         :
+      134           assign
+      135             fh = p-bh_tbl-name:buffer-field( entry( 4 + v-ind, v-inform, ",":U ) ).
+      136             p-key-rec = p-key-rec + chr(3) + substitute("&1", replace(fh:buffer-value(),chr(3),chr(2) + chr(9) + chr (2)))
+      137           .
+      138         end.
+      139       end.
+      140       if p-key-rec = ? then do:
+      141         assign
+      142           p-key-rec = "":U
+      143         .
+      144         return error substitute( "&1. Поле(поля) первичного ключа таблицы &2 имеет(ют) неопределенное значение", vss-include-info0, p-tbl-name ).
+      145       end.
+      146     end.
+      147     return.
+      148   end procedure.
+      149   procedure gen-where-keyr-tab :
+      150     define input  parameter i-tableSerach as character no-undo.
+      151     define input  parameter i-tablekey   as character  no-undo.
+      152     define input  parameter p-key-rec    as character  no-undo.
+      153     define input  parameter p-key-handle as handle     no-undo .
+      154     define input  parameter p-db-name    as character  no-undo .
+      155     define input  parameter p-tt-handle  as handle     no-undo .
+      156     define output parameter o-Where      as character  no-undo.
+      157     do
+      158     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      159     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      160     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile )
+      161     :
+      162       define variable v-full-tbl-name  as character no-undo .
+      163       define variable bh_tbl-name      as handle    no-undo .
+      164       define variable fh_key           as handle    no-undo .
+      165       define variable fh_search        as handle    no-undo .
+      166       define variable v-field-num      as integer   no-undo .
+      167       define variable v-count-fld      as integer   no-undo .
+      168       define variable v-inform         as character no-undo .
+      169       define variable v-ind            as integer   no-undo .
+      170       define variable v-idx-field-qnty as integer   no-undo .
+      171       define variable v-field-name     as character no-undo .
+      172       define variable v-field-val      as character no-undo .
+      173       define variable v-word-link      as character no-undo .
+      174       define variable vTable           as character no-undo.
+      175       define variable bh_tbl-key       as handle    no-undo .
+      176       assign
+      177         p-key-rec = trim( p-key-rec )
+      178       .
+      179       if p-key-handle <> ? then do:
+      180         if not valid-handle(p-key-handle)
+      181            or p-key-handle:type <> "buffer"
+      182         then do:
+      183           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Задан невалидный буфер для поиска.", vss-include-info0 ).
+      184         end.
+      185         if num-entries( p-key-rec, chr(3) ) > 1
+      186           or p-key-rec = ?
+      187           or p-key-rec = "":U
+      188         then do:
+      189           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. При поиске по буферу вместо ключа (&2) должено быть 'имя таблицы'.", vss-include-info0, p-key-rec ).
+      190         end.
+      191       end.
+      192       else do:
+      193         if p-key-rec = ?
+      194           or p-key-rec = "":U
+      195         then do:
+      196           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      197         end.
+      198       end.
+      199       assign
+      200         vTable = entry( 1 , p-key-rec, chr(3) )
+      201       .
+      202       if p-tt-handle <> ?
+      203         and ( not valid-handle(p-tt-handle)
+      204               or p-tt-handle:type <> "buffer"
+      205             )
+      206       then do:
+      207         return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. &2&3Передан невалидный handle для поиска или handle не типа BUFFER", vss-include-info0, vTable, chr(10) ).
+      208       end.
+      209       if p-tt-handle = ? then do:
+      210         assign
+      211           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable )
+      212         .
+      213         create buffer bh_tbl-name for table v-full-tbl-name .
+      214       end.
+      215       else do:
+      216         create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      217       end.
+      218       assign
+      219         v-inform = bh_tbl-name:index-information(1)
+      220         v-ind    = 2
+      221       .
+      222       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      223       on error undo, return error
+      224       :
+      225         assign
+      226           v-inform = bh_tbl-name:index-information( v-ind )
+      227           v-ind    = v-ind + 1
+      228         .
+      229       end.
+      230       if v-inform = ?
+      231         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      232         or entry( 3, v-inform, ",":U ) <> "1":U
+      233       then do:
+      234         delete object bh_tbl-name no-error.
+      235         return error substitute( "&1. Таблица &2 не имеет первичного ключа", vss-include-info0, vTable ).
+      236       end.
+      237       assign
+      238         v-idx-field-qnty = num-entries( v-inform ) - 4
+      239       .
+      240       if v-idx-field-qnty < 2 then do:
+      241         delete object bh_tbl-name no-error.
+      242         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, vTable ).
+      243       end.
+      244       assign
+      245         o-where     = "where":U
+      246         v-word-link = "":U
+      247         v-field-num = num-entries( p-key-rec, chr(3) ) - 1
+      248         v-count-fld = 0
+      249       .
+      250       if i-tablekey ne "" and i-tablekey ne ?
+      251       then do:
+      252         assign
+      253           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tablekey )
+      254         .
+      255         create buffer bh_tbl-key for table v-full-tbl-name .
+      256       end.
+      257       if i-tableSerach ne "" and i-tableSerach ne ?
+      258       then do:
+      259         delete object bh_tbl-name no-error.
+      260         assign
+      261           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach )
+      262         .
+      263         create buffer bh_tbl-name for table v-full-tbl-name .
+      264       end.
+      265       block_where:
+      266       do v-ind = 1 to v-idx-field-qnty by 2
+      267       on error undo, return error
+      268       :
+      269         assign
+      270           v-count-fld = v-count-fld + 1
+      271         .
+      272         if p-key-handle = ?
+      273           and v-count-fld > v-field-num
+      274         then do:
+      275           leave block_where.
+      276         end.
+      277         define variable VfieldKeyTable as handle no-undo.
+      278         assign
+      279           v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      280           fh_search    = bh_tbl-name:buffer-field( v-field-name )
+      281         .
+      282         if     bh_tbl-key ne ?
+      283         then do:
+      284            VfieldKeyTable = bh_tbl-key:buffer-field( v-field-name ) no-error.
+      285            if VfieldKeyTable eq ?
+      286            then next block_where.
+      287         end.
+      288         if v-full-tbl-name ne "" and v-full-tbl-name ne ?
+      289         then
+      290            o-where = substitute( "&1 &2 &3.&4 =", o-where, v-word-link,v-full-tbl-name, v-field-name ).
+      291         else
+      292            o-where = substitute( "&1 &2 &3 =", o-where, v-word-link, v-field-name ).
+      293         if p-key-handle = ? then do:
+      294           assign
+      295             v-field-val = replace (entry( v-count-fld + 1 , p-key-rec, chr(3) ),chr(2) + chr(9) + chr (2),chr(3))
+      296           .
+      297         end.
+      298         else do:
+      299           assign
+      300             fh_key = p-key-handle:buffer-field( v-field-name )
+      301           .
+      302           if fh_key = ?
+      303             or not valid-handle( fh_key )
+      304           then do:
+      305             delete object bh_tbl-name.
+      306             if     bh_tbl-key ne ?
+      307             then
+      308                delete object bh_tbl-key.
+      309             return error substitute( "&1. Буфер &2 не содержит поля &3 необходимого для поиска.", vss-include-info0, p-key-handle:name, v-field-name ).
+      310           end.
+      311           assign
+      312             v-field-val = fh_key:buffer-value
+      313           .
+      314         end.
+      315         if fh_search:data-type ="character":U then do:
+      316           assign
+      317             v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+      318             v-field-val = replace( v-field-val, '"':U, '~~"':U )
+      319             v-field-val = replace( v-field-val, "'":U, "~~'":U )
+      320             v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+      321             v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+      322             v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+      323             v-field-val = replace( v-field-val, chr(10), '~~n':U )
+      324             v-field-val = replace( v-field-val, chr(9), '~~t':U )
+      325             v-field-val = replace( v-field-val, chr(13), '~~r':U )
+      326             v-field-val = replace( v-field-val, chr(27), '~~E':U )
+      327             v-field-val = replace( v-field-val, chr(8), '~~b':U )
+      328             v-field-val = replace( v-field-val, chr(12), '~~f':U )
+      329             v-field-val = substitute( '"&1"', v-field-val )
+      330           .
+      331         end.
+      332         assign
+      333           o-where = substitute( "&1 &2", o-where, v-field-val )
+      334         .
+      335         if v-word-link = "":U then do:
+      336           assign
+      337             v-word-link = "and":U
+      338           .
+      339         end.
+      340       end.
+      341       delete object bh_tbl-name.
+      342       if     bh_tbl-key ne ?
+      343       then
+      344          delete object bh_tbl-key.
+      345       if p-key-handle = ?
+      346         and v-count-fld <> v-field-num
+      347       then do:
+      348         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2", vss-include-info0, vTable ).
+      349       end.
+      350     end.
+      351   end procedure.
+      352   procedure gen-hn-keyr-tab :
+      353     define input  parameter i-tableSerach as character no-undo.
+      354     define input  parameter i-tablekey   as character no-undo.
+      355     define input  parameter p-key-rec    as character no-undo.
+      356     define input  parameter p-key-handle as handle    no-undo .
+      357     define input  parameter p-db-name    as character no-undo .
+      358     define input  parameter p-tt-handle  as handle    no-undo .
+      359     define input  parameter p-stts-lock  as integer   no-undo .
+      360     define output parameter o-hn         as handle    no-undo.
+      361     define variable v-full-tbl-name as character no-undo.
+      362     define variable v-where         as character no-undo.
+      363     define variable bh_tbl-name     as handle    no-undo.
+      364     define variable vTable          as character no-undo.
+      365     do
+      366     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      367     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      368     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile ):
+      369         run gen-where-keyr-tab(i-tableSerach,
+      370                                i-tablekey,
+      371                                p-key-rec,
+      372                                p-key-handle,
+      373                                p-db-name,
+      374                                p-tt-handle,
+      375                                output v-where).
+      376         if i-tableSerach ne "" and i-tableSerach ne ?
+      377         then do:
+      378            v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach ).
+      379            create buffer bh_tbl-name for table v-full-tbl-name .
+      380         end.
+      381         else do:
+      382            if p-tt-handle = ? then do:
+      383               assign
+      384                  vTable = entry( 1 , p-key-rec, chr(3) )
+      385               .
+      386               v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable ).
+      387               create buffer bh_tbl-name for table v-full-tbl-name .
+      388            end.
+      389            else do:
+      390               create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      391            end.
+      392         end.
+      393         if p-tt-handle = ? then do:
+      394            bh_tbl-name:find-first( v-where, p-stts-lock ) no-error .
+      395         end.
+      396         else do:
+      397            bh_tbl-name:find-first( v-where ) no-error .
+      398         end.
+      399         o-hn = bh_tbl-name.
+      400      end.
+      401   end procedure.
+      402   procedure gen-hn-keyr :
+      403     define input  parameter p-key-rec    as character no-undo.
+      404     define input  parameter p-key-handle as handle    no-undo .
+      405     define input  parameter p-db-name    as character no-undo .
+      406     define input  parameter p-tt-handle  as handle    no-undo .
+      407     define input  parameter p-stts-lock  as integer   no-undo .
+      408     define output parameter o-hn         as handle    no-undo.
+      409     run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output o-hn).
+      410   end.
+      411   procedure gen-row-keyr :
+      412     define input  parameter p-key-rec    as character no-undo.
+      413     define input  parameter p-key-handle as handle    no-undo .
+      414     define input  parameter p-db-name    as character no-undo .
+      415     define input  parameter p-tt-handle  as handle    no-undo .
+      416     define input  parameter p-stts-lock  as integer   no-undo .
+      417     define output parameter p-tbl-row    as rowid     no-undo.
+      418     define output parameter p-tbl-name   as character no-undo.
+      419     define variable vHn as handle no-undo.
+      420       run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output vHn).
+      421       p-tbl-row = if vHn:available then vHn:rowid else ?.
+      422       p-tbl-name =  vHn:table.
+      423       delete object vHn no-error.
+      424     if p-tbl-row = ? then do:
+      425       return substitute( "Не найдена запись таблицы &2 по ключу &3", vss-include-info0, p-tbl-name, p-key-rec ).
+      426     end.
+      427     else do:
+      428       return.
+      429     end.
+      430   end procedure.
+      431   procedure gen-key-fv :
+      432     define input  parameter p-key-rec    as character no-undo .
+      433     define output parameter p-field-list as character no-undo .
+      434     define output parameter p-value-list as character no-undo.
+      435     do
+      436     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      437     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      438     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      439     :
+      440       define variable v-full-tbl-name  as character no-undo .
+      441       define variable bh_tbl-name      as handle    no-undo .
+      442       define variable v-tbl-name       as character no-undo .
+      443       define variable v-field-num      as integer   no-undo .
+      444       define variable v-count-fld      as integer   no-undo .
+      445       define variable v-inform         as character no-undo .
+      446       define variable v-ind            as integer   no-undo .
+      447       define variable v-idx-field-qnty as integer   no-undo .
+      448       define variable v-delim-key      as character no-undo .
+      449       if p-key-rec = ?
+      450         or p-key-rec = "":U
+      451       then do:
+      452         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info0 ).
+      453       end.
+      454       assign
+      455         v-tbl-name      = entry( 1 , p-key-rec, chr(3) )
+      456         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      457       .
+      458       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      459       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверный уникальный ключ.", vss-include-info0 ).
+      460       assign
+      461         v-inform = bh_tbl-name:index-information(1)
+      462         v-ind    = 2
+      463       .
+      464       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      465       on error undo, return error
+      466       :
+      467         assign
+      468           v-inform = bh_tbl-name:index-information( v-ind )
+      469           v-ind    = v-ind + 1
+      470         .
+      471       end.
+      472       if v-inform = ?
+      473         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      474         or entry( 3, v-inform, ",":U ) <> "1":U
+      475       then do:
+      476         delete object bh_tbl-name no-error.
+      477         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      478       end.
+      479       assign
+      480         v-idx-field-qnty = num-entries( v-inform ) - 4
+      481       .
+      482       if v-idx-field-qnty < 2 then do:
+      483         delete object bh_tbl-name no-error.
+      484         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      485       end.
+      486       assign
+      487         p-field-list = "":U
+      488         p-value-list = "":U
+      489         v-delim-key  = "":U
+      490         v-field-num  = num-entries( p-key-rec, chr(3) ) - 1
+      491         v-count-fld  = 0
+      492       .
+      493       block_where:
+      494       do v-ind = 1 to v-idx-field-qnty by 2
+      495       on error undo, return error
+      496       :
+      497         assign
+      498           v-count-fld = v-count-fld + 1
+      499         .
+      500         if v-count-fld > v-field-num then do:
+      501           leave block_where.
+      502         end.
+      503         assign
+      504           p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U )
+      505           p-value-list = p-value-list + v-delim-key + entry( v-count-fld + 1 , p-key-rec, chr(3) )
+      506         .
+      507         if v-ind = 1 then do:
+      508           assign
+      509             v-delim-key = chr(3)
+      510           .
+      511         end.
+      512       end.
+      513       delete object bh_tbl-name.
+      514       if v-count-fld <> v-field-num then do:
+      515         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2 в БД", vss-include-info0, v-tbl-name ).
+      516       end.
+      517     end.
+      518   end procedure.
+      519   procedure gen-key-field :
+      520     define input  parameter p-table      as character no-undo .
+      521     define output parameter p-field-list as character no-undo .
+      522     do
+      523     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      524     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      525     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      526     :
+      527       define variable v-full-tbl-name  as character no-undo .
+      528       define variable bh_tbl-name      as handle    no-undo .
+      529       define variable v-tbl-name       as character no-undo .
+      530       define variable v-field-num      as integer   no-undo .
+      531       define variable v-count-fld      as integer   no-undo .
+      532       define variable v-inform         as character no-undo .
+      533       define variable v-ind            as integer   no-undo .
+      534       define variable v-idx-field-qnty as integer   no-undo .
+      535       define variable v-delim-key      as character no-undo .
+      536       if p-table = ?
+      537         or p-table = "":U
+      538       then do:
+      539         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан таблица.", vss-include-info0 ).
+      540       end.
+      541       assign
+      542         v-tbl-name      = p-table
+      543         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      544       .
+      545       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      546       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверная таблица.", vss-include-info0 ).
+      547       assign
+      548         v-inform = bh_tbl-name:index-information(1)
+      549         v-ind    = 2
+      550       .
+      551       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      552       on error undo, return error
+      553       :
+      554         assign
+      555           v-inform = bh_tbl-name:index-information( v-ind )
+      556           v-ind    = v-ind + 1
+      557         .
+      558       end.
+      559       if v-inform = ?
+      560         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      561         or entry( 3, v-inform, ",":U ) <> "1":U
+      562       then do:
+      563         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info0, v-tbl-name ).
+      564       end.
+      565       assign
+      566         v-idx-field-qnty = num-entries( v-inform ) - 4
+      567       .
+      568       if v-idx-field-qnty < 2 then do:
+      569         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info0, v-inform, v-tbl-name ).
+      570       end.
+      571       assign
+      572         p-field-list = "":U
+      573         v-delim-key  = "":U
+      574         v-count-fld  = 0
+      575       .
+      576       block_where:
+      577       do v-ind = 1 to v-idx-field-qnty by 2
+      578       on error undo, return error
+      579       :
+      580         assign
+      581           v-count-fld = v-count-fld + 1
+      582         .
+      583         p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U ).
+      584         if v-ind = 1 then do:
+      585           assign
+      586             v-delim-key = chr(3)
+      587           .
+      588         end.
+      589       end.
+      590       delete object bh_tbl-name.
+      591     end.
+      592   end procedure.
+      593   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      594   procedure cur-time :
+      595      define output parameter p-today as date      no-undo .
+      596      define output parameter p-time  as integer   no-undo .
+      597     do
+      598     on error undo, return error
+      599     :
+      600       define variable v-date1 as date      no-undo .
+      601       define variable v-date2 as date      no-undo .
+      602       define variable v-time  as integer   no-undo .
+      603       assign
+      604         v-date1 = today
+      605         v-time  = time
+      606         v-date2 = today
+      607       .
+      608       if v-date1 <> v-date2
+      609       then do:
+      610         assign
+      611           v-date1 = today
+      612           v-time  = v-time
+      613         .
+      614       end.
+      615       assign
+      616         p-today = v-date1
+      617         p-time  = v-time
+      618       .
+      619     end.
+      620   end.
+      621   function cur-time-date returns character
+      622   :
+      623     return string(today, '99/99/9999':U) .
+      624   end.
+      625   function cur-time-mjd returns decimal
+      626   :
+      627     define variable v-date as date      no-undo .
+      628     define variable v-time as integer   no-undo .
+      629     run cur-time in this-procedure
+      630       (output v-date
+      631       ,output v-time
+      632       ) .
+      633     return integer(v-date) - 2400002 + (v-time / 86400) .
+      634   end.
+      635   function cur-time-get-ending-index returns integer
+      636   (input p-number as integer
+      637   )
+      638   :
+      639     if p-number < 0
+      640     or p-number = ?
+      641     then do:
+      642       return 1 .
+      643     end.
+      644     define variable v-rest as integer   no-undo .
+      645     assign
+      646       p-number = p-number modulo 100
+      647     .
+      648     if p-number < 20
+      649     then do:
+      650       assign
+      651         v-rest = p-number
+      652       .
+      653     end.
+      654     else do:
+      655       assign
+      656         v-rest = p-number modulo 10
+      657       .
+      658     end.
+      659     case v-rest :
+      660       when 1
+      661       then do:
+      662         return 2 .
+      663       end.
+      664       when 2 or
+      665       when 3 or
+      666       when 4
+      667       then do:
+      668         return 3 .
+      669       end.
+      670       otherwise do:
+      671         return 1 .
+      672       end.
+      673     end case .
+      674   end.
+      675   procedure cur-time-mjd-to-date :
+      676      define input  parameter i-mjd-diff as decimal no-undo.
+      677      define output parameter o-Date     as date    no-undo.
+      678      define output parameter o-Time     as integer no-undo.
+      679      define variable v-day-number as integer   no-undo .
+      680      if    i-mjd-diff < 0
+      681         or i-mjd-diff = ?
+      682      then do:
+      683         return "?" .
+      684      end.
+      685      assign
+      686         v-day-number = truncate(i-mjd-diff,0).
+      687         o-Date = date(v-day-number + 2400002).
+      688         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      689     .
+      690   end.
+      691   function cur-time-mjd-to-string returns character
+      692   (input p-mjd-diff as decimal
+      693   )
+      694   :
+      695     define variable v-day-number as integer   no-undo .
+      696     define variable v-seconds    as integer   no-undo .
+      697     define variable v-hour       as integer   no-undo .
+      698     define variable v-min        as integer   no-undo .
+      699     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      700     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      701     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      702     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      703     if p-mjd-diff < 0
+      704     or p-mjd-diff = ?
+      705     then do:
+      706       return "?" .
+      707     end.
+      708     assign
+      709       v-day-number = integer(truncate(p-mjd-diff,0))
+      710       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      711     .
+      712     if v-seconds > 86400
+      713     then do:
+      714       assign
+      715         v-seconds = 86400 - 1
+      716       .
+      717     end.
+      718     if v-seconds < 0
+      719     then do:
+      720       assign
+      721         v-seconds = 0
+      722       .
+      723     end.
+      724     assign
+      725       v-hour = truncate(v-seconds / 3600, 0)
+      726     .
+      727     assign
+      728       v-seconds = v-seconds modulo 3600
+      729     .
+      730     assign
+      731       v-min = truncate(v-seconds / 60, 0)
+      732     .
+      733     assign
+      734       v-seconds = v-seconds modulo 60
+      735     .
+      736     return
+      737         (if v-day-number <> 0
+      738           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      739           else ""
+      740         )
+      741       + (if v-day-number <> 0 or v-hour <> 0
+      742           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      743           else ""
+      744         )
+      745       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      746           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      747           else ""
+      748         )
+      749       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      750       .
+      751   end.
+      752   function cur-time-string returns character
+      753   :
+      754     define variable v-date as date      no-undo .
+      755     define variable v-time as integer   no-undo .
+      756     run cur-time in this-procedure
+      757       (output v-date
+      758       ,output v-time
+      759       ) .
+      760     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      761   end.
+      762   function cur-time-string-sec returns character
+      763   :
+      764     define variable v-date as date      no-undo .
+      765     define variable v-time as integer   no-undo .
+      766     run cur-time in this-procedure
+      767       (output v-date
+      768       ,output v-time
+      769       ) .
+      770     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      771   end.
+      772   function cur-time-custom  returns character
+      773   (input p-prefix as character
+      774   ,input p-date-format as character
+      775   ,input p-delimiter as character
+      776   ,input p-time-format as character
+      777   ,input p-suffix as character
+      778   )
+      779   :
+      780     define variable v-date as date      no-undo .
+      781     define variable v-time as integer   no-undo .
+      782     run cur-time in this-procedure
+      783       (output v-date
+      784       ,output v-time
+      785       ) .
+      786     return
+      787       p-prefix
+      788       + string(v-date, p-date-format)
+      789       + p-delimiter
+      790       + string(v-time, p-time-format)
+      791       + p-suffix
+      792       .
+      793   end.
+      794   function cur-time-print  returns character
+      795   :
+      796     define variable v-date as date      no-undo .
+      797     define variable v-time as integer   no-undo .
+      798     run cur-time in this-procedure
+      799       (output v-date
+      800       ,output v-time
+      801       ) .
+      802     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      803   end.
+      804   function cur-time-datetime returns datetime
+      805   :
+      806     define variable v-char as character no-undo .
+      807     define variable v-datetime as datetime no-undo .
+      808     v-char = cur-time-string().
+      809     v-datetime = datetime(v-char).
+      810     return  v-datetime.
+      811   end.
+      812   function cur-time-string-msec returns character
+      813   :
+      814     define variable v-date as datetime  no-undo .
+      815     v-date = now.
+      816     return string(v-date) .
+      817   end.
+      818   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      819   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      820   define new global shared variable g#lib-nws as handle no-undo .
+      821   procedure goodsh_write-goods-proc  :
+      822   define parameter buffer buf_goods for ub.goods .
+      823   define input parameter p-action as integer no-undo .
+      824   define input parameter p-source-type like ub.c-gds-hist.source-type no-undo .
+      825   define input parameter p-source-ref  like ub.c-gds-hist.source-ref no-undo .
+      826   define variable v-date as date      no-undo.
+      827   define variable v-time  as integer   no-undo.
+      828   define buffer buf_c-gds-hist for ub.c-gds-hist.
+      829   define buffer buf_c-goods for ub.c-goods.
+      830     do
+      831     on error undo, return error
+      832     :
+      833       if not available buf_goods then do:
+      834         undo, return error (vss-workfile + chr(32) + vss-revision + chr(32) + vss-description  + chr(10) +
+      835                       "Ошибка задания входных параметров:Не определен товар" ).
+      836       end.
+      837       if g#news then do:
+      838         define variable v-send as integer no-undo .
+      839         v-send = integer('0':U).
+      840   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      841   if (valid-handle(g#lib-nws) <> true) then do:   run nws/lib-nws.p persistent no-error .   if error-status :error or (valid-handle(g#lib-nws) <> true) then do:     message       "Error starting nws/lib-nws.p" skip       g#lib-nws skip       g#lib-nws :type skip       g#lib-nws :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run lib-nws_get-hn-option in g#lib-nws
+      842     (input  g#db-num
+      843     ,input  'goods':U
+      844     ,input  0
+      845     ,input  '':U
+      846     ,input  0
+      847     ,input  '':U
+      848     ,input  '':U
+      849     ,input  '':U
+      850     ,input  0
+      851     ,input  0
+      852     ,input  0
+      853     ,input  'nws-to-hist'
+      854     ,output v-send
+      855     ) no-error .
+      856         if v-send < 0 then return.
+      857       end.
+      858       run cur-time in this-procedure(output v-date, output v-time).
+      859       create buf_c-goods.
+      860       buffer-copy buf_goods to buf_c-goods
+      861       assign
+      862       buf_c-goods.gds-code             = buf_goods.gds-code
+      863       buf_c-goods.chip-num           = next-value (s-gds-chip, ub)
+      864       buf_c-goods.corr-time          = v-time
+      865       buf_c-goods.corr-user-db-num   = g#db-num
+      866       buf_c-goods.corr-user-name     = (if g#news then (chr(4) +  'СПН':U)
+      867                                         else (if g#esys
+      868                                               then (chr(4) +  'ВС':U)
+      869                                               else g#userid)
+      870                                               )
+      871       buf_c-goods.corr-date          = v-date
+      872       .
+      873       create buf_c-gds-hist.
+      874       buffer-copy buf_c-goods to buf_c-gds-hist
+      875       assign
+      876       buf_c-gds-hist.action =  p-action
+      877       buf_c-gds-hist.subject = 'goods':U
+      878       buf_c-gds-hist.is-news = g#news
+      879       buf_c-gds-hist.source-type = p-source-type
+      880       buf_c-gds-hist.source-ref = p-source-ref
+      881       .
+      882     end.
+      883   end procedure.
+      884   define variable vss-include-info5 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      885   define variable v-waitfram-action01         as character   no-undo .
+      886   define variable v-waitfram-action02         as character   no-undo .
+      887   define variable v-waitfram-action03         as character   no-undo .
+      888   define variable mWaitFramTextBeg            as character   no-undo.
+      889   define variable mWaitFramTextEnd            as character   no-undo.
+      890   define variable mWaitFramView               as logical     no-undo.
+      891   define variable mWaitProcEvent              as logical     no-undo init yes.
+      892   define variable mWaitFramInterval           as integer     no-undo init 1 .
+      893   define variable mWaitFramStop               as logical     no-undo.
+      894   define variable mWaitFramStopUser           as logical     no-undo.
+      895   define variable mWaitFramStopTimeOut        as logical     no-undo.
+      896   define variable mWaitFramStartProc          as datetime-tz no-undo.
+      897   define variable mWaitFramTimeOut            as decimal     no-undo init ?.
+      898   define button B-WaitFramStop auto-end-key
+      899        label "Стоп"
+      900        size 10 by 1 tooltip "Остоновить процесс".
+      901   define button B-viewProcInfo
+      902        label "Информация"
+      903        size 15 by 1 tooltip "Информация о процесс".
+      904   define frame waitfram
+      905     v-waitfram-action01 format "x(72)" no-label skip
+      906     v-waitfram-action02 format "x(72)" no-label skip
+      907     v-waitfram-action03 format "x(72)" no-label skip
+      908     B-viewProcInfo
+      909     B-WaitFramStop at row 4 col 30
+      910     with view-as dialog-box side-labels three-d cancel-button B-WaitFramStop
+      911     .
+      912   define new global shared variable mBatchMode as logical no-undo init ?.
+      913   define variable mFramBachModHandle as handle no-undo.
+      914   mFramBachModHandle = frame waitfram:handle.
+      915   define variable mFameOldVis as logical no-undo.
+      916   define variable mVisCUrentVin as logical no-undo.
+      917   if session:batch-mode
+      918   then
+      919      mBatchMode = yes.
+      920   if mBatchMode = ? then do:
+      921     mVisCUrentVin = current-window:visible.
+      922     mFameOldVis = mFramBachModHandle:visible.
+      923     mFramBachModHandle:visible  = yes.
+      924     mBatchMode = mFramBachModHandle:visible ne yes.
+      925     mFramBachModHandle:visible = mFameOldVis.
+      926     current-window:visible = mVisCUrentVin.
+      927   end.
+      928    if  log-manager:logfile-name ne ?
+      929     then DO:
+      930         log-manager:write-message("Logname=" + log-manager:logfile-name , "frameRepError").
+      931         log-manager:write-message("Batch-mod=" + string(session:batch-mode) , "frameRepError").
+      932         log-manager:write-message("visible-frame-mod=" + string(mFramBachModHandle:visible), "frameRepError").
+      933     end.
+      934   on choose of B-WaitFramStop in frame waitfram
+      935   do:
+      936     mWaitFramStop = yes.
+      937     mWaitFramStopUser = yes.
+      938   end.
+      939   function waitfram-check-timeout returns logical():
+      940      define variable vtime as int64 no-undo.
+      941      if mWaitFramStopTimeOut
+      942      then
+      943         return yes.
+      944      vtime = ( now - mWaitFramStartProc ) / 1000 .
+      945      if     mWaitFramTimeOut ne ?
+      946         and mWaitFramTimeOut ne 0
+      947         and mWaitFramTimeOut lt vtime
+      948      then do:
+      949         mWaitFramStopTimeOut = yes.
+      950      end.
+      951      return mWaitFramStopTimeOut.
+      952   end.
+      953   procedure waitfram-hide :
+      954     if not session:batch-mode
+      955     then do
+      956     on error undo, return error return-value
+      957     :
+      958       pause 0 before-hide .
+      959       if not mBatchMode then
+      960         hide frame waitfram .
+      961     if     not mWaitFramView
+      962        and mWaitProcEvent
+      963     then
+      964       process events .
+      965     end.
+      966   end procedure.
+      967   procedure waitfram-show :
+      968     define input  parameter p-message as character no-undo .
+      969     define variable v-left-margin as integer   no-undo .
+      970     if not session:batch-mode
+      971     then do
+      972     on error undo, return error return-value
+      973     :
+      974       if length(p-message) <= 70 then do:
+      975         assign
+      976           v-left-margin = integer((70 - length(p-message)) / 2)
+      977         .
+      978         assign
+      979           v-left-margin = max(0, v-left-margin - (v-left-margin mod 5))
+      980         .
+      981         assign
+      982           v-waitfram-action01 = " "
+      983           v-waitfram-action02 = " "
+      984                                    + fill(" ", v-left-margin)
+      985                                    + p-message
+      986           v-waitfram-action03 = " "
+      987         .
+      988       end.
+      989       else do:
+      990         define variable vRindex1 as integer no-undo.
+      991         define variable vRindex2 as integer no-undo.
+      992         vRindex1 = r-index(p-message," ",70).
+      993         if vRindex1 = 0
+      994         then
+      995            vRindex1 = 70.
+      996         if length(p-message)  <= vRindex1 + 70 then do:
+      997           assign
+      998             v-waitfram-action01 = " "
+      999             v-waitfram-action02 = " " + substring(p-message,   1          , vRindex1)
+     1000             v-waitfram-action03 = " " + substring(p-message,  vRindex1 + 1, 70      )
+     1001           .
+     1002         end.
+     1003         else do:
+     1004           vRindex2 = r-index(p-message," ",vRindex1 + 70).
+     1005           if vRindex2 <= vRindex1
+     1006           then
+     1007              vRindex2 = vRindex1 + 70.
+     1008           assign
+     1009             v-waitfram-action01 = " " + substring(p-message,   1          , vRindex1)
+     1010             v-waitfram-action02 = " " + substring(p-message,  vRindex1 + 1, vRindex2 - vRindex1 )
+     1011             v-waitfram-action03 = " " + substring(p-message,  vRindex2 + 1, 70)
+     1012           .
+     1013         end.
+     1014       end.
+     1015       B-viewProcInfo:visible   in frame waitfram = no.
+     1016       B-viewProcInfo:sensitive in frame waitfram = no.
+     1017       B-WaitFramStop:visible   in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+     1018       B-WaitFramStop:sensitive in frame waitfram = if not mBatchMode and mWaitFramView then yes else no .
+     1019       if  (   mWaitFramView
+     1020          or  mWaitProcEvent)
+     1021          and not mBatchMode
+     1022       then
+     1023          display
+     1024             v-waitfram-action01 skip
+     1025             v-waitfram-action02 skip
+     1026             v-waitfram-action03 skip
+     1027          with frame waitfram .
+     1028       if     mWaitFramView
+     1029          then do:
+     1030             if     mWaitFramInterval ne ?
+     1031                and not mBatchMode
+     1032             then
+     1033                wait-for go of frame waitfram pause mWaitFramInterval.
+     1034          end.
+     1035          else
+     1036             if     mWaitProcEvent
+     1037                and not mBatchMode
+     1038             then
+     1039                process events .
+     1040     end.
+     1041   end procedure.
+     1042      procedure waitfram-show-this:
+     1043         define input  parameter iInterval as int64 no-undo.
+     1044         define variable vtime as int64 no-undo.
+     1045         vtime = ( now - mWaitFramStartProc  ) / 1000 .
+     1046         mWaitFramInterval = iInterval.
+     1047         run waitfram-show (substitute("&1&2 &3&4" ,
+     1048                                       mWaitFramTextBeg ,
+     1049                                       if vtime eq ? then "" else substitute (" Прошло: &1 сек" , string( vtime)),
+     1050                                       if mWaitFramTimeOut ne 0 and mWaitFramTimeOut ne ? then " из " + string(mWaitFramTimeOut) + " сек. " else "",
+     1051                                       mWaitFramTextEnd
+     1052                                      )
+     1053                           ).
+     1054      end.
+     1055      procedure WaitFramRunPause:
+     1056         define input  parameter iInterval as dec no-undo.
+     1057         define variable vStart  as datetime-tz no-undo.
+     1058         define variable vend    as datetime-tz no-undo.
+     1059         define variable vint as int64 no-undo.
+     1060         define variable vOk as logical no-undo.
+     1061         vStart = now.
+     1062         vend   = vStart.
+     1063         publish "WaitFramPause" (iInterval,output vOk).
+     1064         vend   =  now.
+     1065         vint = vend - vStart.
+     1066         vint = iInterval - vint / 1000.
+     1067         if     not mWaitFramStop
+     1068            and (   vint > 0
+     1069                 or (    not vOk
+     1070                     and iInterval eq ?
+     1071                     )
+     1072                 )
+     1073         then
+     1074            run waitfram-show-this (iInterval).
+     1075         vend   =  now.
+     1076         vint = vend - vStart.
+     1077         vint = iInterval - vint / 1000.
+     1078         if     not mWaitFramStop
+     1079            and vint > 0
+     1080         then do:
+     1081            run gbl/pause.p (vint * 1000).
+     1082         end.
+     1083         if iInterval ne ?
+     1084         then
+     1085            publish "WaitFramStop".
+     1086         waitfram-check-timeout().
+     1087      end.
+     1088      procedure WaitFramWaitFor:
+     1089         define input  parameter iInterval as dec no-undo.
+     1090         assign
+     1091            mWaitFramStartProc   = now
+     1092            mWaitFramStopUser    = no
+     1093            mWaitFramStopTimeOut = no
+     1094         .
+     1095         block-wait:
+     1096         do while not mWaitFramStop:
+     1097            run WaitFramRunPause (iInterval).
+     1098            if  waitfram-check-timeout()
+     1099            then do:
+     1100               leave block-wait.
+     1101            end.
+     1102         end.
+     1103         run waitfram-hide.
+     1104      end.
+     1105   procedure waitfram-join :
+     1106     define input  parameter p-line-1  as character no-undo .
+     1107     define input  parameter p-line-2  as character no-undo .
+     1108     define input  parameter p-line-3  as character no-undo .
+     1109     define output parameter p-message as character no-undo .
+     1110     do
+     1111     on error undo, return error return-value
+     1112     :
+     1113       assign
+     1114         p-message = substring(p-line-1 + fill(' ', 70), 1, 70)
+     1115                   + substring(p-line-2 + fill(' ', 70), 1, 70)
+     1116                   + substring(p-line-3 + fill(' ', 70), 1, 70)
+     1117       .
+     1118     end.
+     1119   end procedure.
+     1120   function waitfram-join-function returns character
+     1121     (input p-line-1 as character
+     1122     ,input p-line-2 as character
+     1123     ,input p-line-3 as character
+     1124     ).
+     1125     define variable v-message as character no-undo .
+     1126     run waitfram-join in this-procedure
+     1127       (input  p-line-1
+     1128       ,input  p-line-2
+     1129       ,input  p-line-3
+     1130       ,output v-message
+     1131       ) .
+     1132     return v-message .
+     1133   end function .
+     1134   define variable attach-list as character no-undo initial '~
+     1135   abc-analysis-attr~
+     1136   ,abc-analysis-doc~
+     1137   ,abc-analysis-gds-obj~
+     1138   ,abc-analysis-gds-obj-attr~
+     1139   ,abc-analysis-goods~
+     1140   ,abc-analysis-goods-attr~
+     1141   ,abc-analysis-grp~
+     1142   ,abc-analysis-obj~
+     1143   ,abc-analysis-period~
+     1144   ,abc-analysis-prod~
+     1145   ,abcxyz-analysis-attr~
+     1146   ,abcxyz-analysis-goods~
+     1147   ,abcxyz-analysis-goods-attr~
+     1148   ,add-line~
+     1149   ,add-trn~
+     1150   ,add-trn-attr~
+     1151   ,arh-trn-doc-contract~
+     1152   ,c-buyer-in-buyer-group~
+     1153   ,c-buyer-group~
+     1154   ,c-pl-gds-obj~
+     1155   ,c-sht-hist~
+     1156   ,cd-doc-line~
+     1157   ,c-cd-doc-line~
+     1158   ,chk-discnt~
+     1159   ,chk-discnt-attr~
+     1160   ,c-chk-discnt~
+     1161   ,chk-doc~
+     1162   ,chk-doc-attr~
+     1163   ,c-chk-doc-attr~
+     1164   ,chk-gds~
+     1165   ,chk-gds-attr~
+     1166   ,marking-chk~
+     1167   ,c-marking-chk~
+     1168   ,c-marking-attr~
+     1169   ,c-chk-gds~
+     1170   ,chk-pay~
+     1171   ,chk-gds-attr~
+     1172   ,chk-pay-attr~
+     1173   ,c-chk-pay~
+     1174   ,contract-line~
+     1175   ,contract-specif-attr~
+     1176   ,c-contract-line~
+     1177   ,db-grp-obj-price~
+     1178   ,c-db-grp-obj-price~
+     1179   ,doc-abc-def-doc~
+     1180   ,doc-abc-def-obj~
+     1181   ,c-doc-attr~
+     1182   ,doc-fbr-gds~
+     1183   ,c-doc-fbr-gds~
+     1184   ,doc-line~
+     1185   ,c-doc-line~
+     1186   ,doc-line-attr~
+     1187   ,c-doc-line-attr~
+     1188   ,doc-line-sum~
+     1189   ,c-doc-line-sum~
+     1190   ,doc-pl~
+     1191   ,c-doc-pl~
+     1192   ,doc-pl-pump~
+     1193   ,c-doc-pl-pump~
+     1194   ,doc-prts~
+     1195   ,c-doc-prts~
+     1196   ,doc-xyz-def-doc~
+     1197   ,doc-xyz-def-obj~
+     1198   ,esys-route-dump~
+     1199   ,factur-connect-line~
+     1200   ,fbr-line~
+     1201   ,c-fbr-line~
+     1202   ,fbr-pln-line~
+     1203   ,c-fbr-pln-line~
+     1204   ,c-fin-code-an-uchet~
+     1205   ,c-fin-code-cel-nazn~
+     1206   ,c-fin-code-cor-acc~
+     1207   ,fin-doc-attr~
+     1208   ,c-fin-doc-attr~
+     1209   ,fin-doc-tax~
+     1210   ,c-fin-doc-tax~
+     1211   ,fin-gds-part~
+     1212   ,c-fin-gds-part~
+     1213   ,fin-ob-attr~
+     1214   ,c-fin-ob-attr~
+     1215   ,fin-ob-tax~
+     1216   ,c-fin-ob-tax~
+     1217   ,fin-ob-tax-before~
+     1218   ,fin-ob-trn~
+     1219   ,fin-statement-attr~
+     1220   ,c-fin-statement-attr~
+     1221   ,fin-statement-line~
+     1222   ,c-fin-statement-line~
+     1223   ,gds-dtl~
+     1224   ,c-gds-dtl~
+     1225   ,c-global-state~
+     1226   ,global-state-attr~
+     1227   ,c-global-state-attr~
+     1228   ,host-grp-obj-price~
+     1229   ,c-host-grp-obj-price~
+     1230   ,icnt-line~
+     1231   ,inkas-pay~
+     1232   ,c-inkas-pay~
+     1233   ,inkas-pay-desk~
+     1234   ,c-inkas-pay-desk~
+     1235   ,inkas-pay-wth~
+     1236   ,c-inkas-pay-wth~
+     1237   ,inv-doc~
+     1238   ,inv-line~
+     1239   ,c-inv-line~
+     1240   ,layout-elem-rule~
+     1241   ,obj-grp-obj-price~
+     1242   ,c-obj-grp-obj-price~
+     1243   ,ord-cons-attr~
+     1244   ,ord-cons-line-attr~
+     1245   ,ord-doc-attr~
+     1246   ,c-ord-doc-attr~
+     1247   ,ord-dtl~
+     1248   ,c-ord-dtl~
+     1249   ,ord-dtl-cons~
+     1250   ,ord-dtl-rcv~
+     1251   ,ord-gds-cons~
+     1252   ,ord-line~
+     1253   ,c-ord-line~
+     1254   ,ord-line-attr~
+     1255   ,c-ord-line-attr~
+     1256   ,ord-line-rcv~
+     1257   ,ord-rcv-attr~
+     1258   ,ord-rcv-line-attr~
+     1259   ,c-parts~
+     1260   ,c-parts-attr~
+     1261   ,parts-root~
+     1262   ,c-parts-root~
+     1263   ,esys-pck-keys~
+     1264   ,c-price-doc-forming~
+     1265   ,price-doc-forming-attr~
+     1266   ,c-price-doc-forming-attr~
+     1267   ,price-doc-forming-gds~
+     1268   ,c-price-doc-forming-gds~
+     1269   ,price-doc-forming-gdsattr~
+     1270   ,c-price-doc-forming-gdsattr~
+     1271   ,price-doc-forming-gds-qnty~
+     1272   ,c-price-doc-forming-gds-qnty~
+     1273   ,price-doc-forming-gds-sum~
+     1274   ,c-price-doc-forming-gds-sum~
+     1275   ,price-doc-forming-gds-tnv~
+     1276   ,c-price-doc-forming-gds-tnv~
+     1277   ,price-list~
+     1278   ,c-price-list~
+     1279   ,price-list-attr~
+     1280   ,c-price-list-attr~
+     1281   ,price-list-type-attr~
+     1282   ,c-price-list-type-attr~
+     1283   ,price-list-type-cash-pay~
+     1284   ,c-price-list-type-cash-pay~
+     1285   ,price-list-type-cassa~
+     1286   ,c-price-list-type-cassa~
+     1287   ,price-list-type-gds-grp~
+     1288   ,c-price-list-type-gds-grp~
+     1289   ,price-list-type-pay-type~
+     1290   ,c-price-list-type-pay-type~
+     1291   ,c-qnty-group~
+     1292   ,qnty-in-qnty-group~
+     1293   ,c-qnty-in-qnty-group~
+     1294   ,rang-abc-def-obj~
+     1295   ,rang-xyz-def-obj~
+     1296   ,rule-i-script~
+     1297   ,rule-script~
+     1298   ,rule-trans-memo~
+     1299   ,rvs-line~
+     1300   ,rvs-line-attr~
+     1301   ,c-rvs-line~
+     1302   ,rvs-line-pump~
+     1303   ,c-rvs-line-pump~
+     1304   ,rvs-pump~
+     1305   ,sale-doc~
+     1306   ,c-sale-doc~
+     1307   ,schet-fact-line~
+     1308   ,c-schet-fact-line~
+     1309   ,shift-cash~
+     1310   ,c-shift-obj~
+     1311   ,shift-staff~
+     1312   ,c-shift-staff~
+     1313   ,shift-attr~
+     1314   ,c-shift-attr~
+     1315   ,stop-list-line~
+     1316   ,c-sum-group~
+     1317   ,sum-in-sum-group~
+     1318   ,c-sum-in-sum-group~
+     1319   ,c-turnover-group~
+     1320   ,tnv-in-turnover-group~
+     1321   ,c-tnv-in-turnover-group~
+     1322   ,trn-doc-sum~
+     1323   ,c-trn-doc-sum~
+     1324   ,c-trn-reason~
+     1325   ,trn-reason-host~
+     1326   ,c-trn-reason-host~
+     1327   ,trn-reason-obj~
+     1328   ,c-trn-reason-obj~
+     1329   ,trn-rsn-attr~
+     1330   ,c-trn-rsn-attr~
+     1331   ,turnover-buyer~
+     1332   ,turnover-buyer-attr~
+     1333   ,turnover-buyer-gds~
+     1334   ,turnover-buyer-gds-attr~
+     1335   ,wi-mode~
+     1336   ,wth-dtl~
+     1337   ,c-wth-dtl~
+     1338   ,wth-line~
+     1339   ,c-wth-line~
+     1340   ,wth-parts~
+     1341   ,c-wth-parts~
+     1342   ,xyz-analysis-attr~
+     1343   ,xyz-analysis-doc~
+     1344   ,xyz-analysis-gds-obj~
+     1345   ,xyz-analysis-gds-obj-attr~
+     1346   ,xyz-analysis-goods~
+     1347   ,xyz-analysis-goods-attr~
+     1348   ,xyz-analysis-obj~
+     1349   ,xyz-analysis-period~
+     1350   ,utd-lines~
+     1351   ,utd-marking-lines~
+     1352   ,utd-err~
+     1353   ,utd-attr~
+     1354   ,utd-lines-attr~
+     1355   ,utd-marking-lines-attr~
+     1356   ,utd-err-attr~
+     1357   ,marking~
+     1358   ,marking-lines~
+     1359   ,order-doc~
+     1360   ,order-line~
+     1361   ,reportShift~
+     1362   ,shift-param~
+     1363   ,susp-chk~
+     1364   ':U .
+     1365   define variable news-list as character no-undo initial '~
+     1366   abc-analysis~
+     1367   ,abcxyz-analysis~
+     1368   ,add-doc~
+     1369   ,action-post~
+     1370   ,action-post-host~
+     1371   ,action-post-menu-group~
+     1372   ,action-post-obj~
+     1373   ,action-post-role~
+     1374   ,action-post-user-login~
+     1375   ,action-role~
+     1376   ,c-action-role~
+     1377   ,action-role-item~
+     1378   ,c-action-role-item~
+     1379   ,action-role-item-gds~
+     1380   ,action-role-item-gds-grp~
+     1381   ,alc-sale-lic~
+     1382   ,c-alc-sale-lic~
+     1383   ,alc-sale-lic-attr~
+     1384   ,c-alc-sale-lic-attr~
+     1385   ,alc-sale-lic-type~
+     1386   ,c-alc-sale-lic-type~
+     1387   ,alc-supp-lic~
+     1388   ,c-alc-supp-lic~
+     1389   ,alc-supp-lic-attr~
+     1390   ,c-alc-supp-lic-attr~
+     1391   ,alc-supp-lic-type~
+     1392   ,c-alc-supp-lic-type~
+     1393   ,alc-type~
+     1394   ,c-alc-type~
+     1395   ,alc-type-attr~
+     1396   ,c-alc-type-attr~
+     1397   ,alc-type-gds~
+     1398   ,c-alc-type-gds~
+     1399   ,arh-fin-doc-an~
+     1400   ,arh-fin-doc-an-nal~
+     1401   ,arh-fin-doc-c-schet-tax-nal~
+     1402   ,arh-fin-doc-contr-schet~
+     1403   ,arh-fin-doc-contr-schet-nal~
+     1404   ,arh-fin-doc-contr-schet-tax~
+     1405   ,arh-fin-doc-schet~
+     1406   ,arh-fin-doc-schet-nal~
+     1407   ,arh-fin-doc-schet-tax~
+     1408   ,arh-fin-doc-schet-tax-nal~
+     1409   ,arh-fin-doc-contr-schet-obj~
+     1410   ,arh-fin-doc-contr-s-nal-obj~
+     1411   ,arh-fin-doc-contr-s-tax-obj~
+     1412   ,arh-fin-doc-c-s-tax-nal-obj~
+     1413   ,arh-fin-doc-schet-obj~
+     1414   ,arh-fin-doc-schet-nal-obj~
+     1415   ,arh-fin-ob-contr~
+     1416   ,attr-prop~
+     1417   ,auto-tank~
+     1418   ,c-auto-tank~
+     1419   ,auto-tank-meas~
+     1420   ,auto-tank-attr~
+     1421   ,auto-section~
+     1422   ,c-auto-section~
+     1423   ,auto-section-attr~
+     1424   ,c-auto-section-attr~
+     1425   ,auto-section-table~
+     1426   ,c-auto-section-table~
+     1427   ,bar-code~
+     1428   ,c-bar-code~
+     1429   ,bar-code-attr~
+     1430   ,c-bar-code-attr~
+     1431   ,bar-code-obj-attr~
+     1432   ,c-bar-code-obj-attr~
+     1433   ,blob-bind~
+     1434   ,buyer-group~
+     1435   ,buyer-in-buyer-group~
+     1436   ,c-cli-hist~
+     1437   ,c-dc-hist~
+     1438   ,c-fbr-gds-grp-hist~
+     1439   ,c-gds-grp-hist~
+     1440   ,c-gds-hist~
+     1441   ,c-nzl-hist~
+     1442   ,c-plc-hist~
+     1443   ,c-pmp-hist~
+     1444   ,c-recipe-hist~
+     1445   ,c-table-bind~
+     1446   ,c-tax-hist~
+     1447   ,c-usr-hist~
+     1448   ,c-wth-hist~
+     1449   ,cash-desk~
+     1450   ,c-cash-desk~
+     1451   ,cash-desk-attr~
+     1452   ,c-cash-desk-attr~
+     1453   ,cash-pay~
+     1454   ,c-cash-pay~
+     1455   ,cash-pay-attr~
+     1456   ,c-cash-pay-attr~
+     1457   ,cd-clu~
+     1458   ,c-cd-clu~
+     1459   ,cd-dlu~
+     1460   ,c-cd-dlu~
+     1461   ,cd-doc~
+     1462   ,c-cd-doc~
+     1463   ,cd-events~
+     1464   ,cd-events-attr~
+     1465   ,cd-event-log~
+     1466   ,cd-event-log-attr~
+     1467   ,cd-grp~
+     1468   ,c-cd-grp~
+     1469   ,cd-plu~
+     1470   ,c-cd-plu~
+     1471   ,c-chk-doc~
+     1472   ,cd-trans~
+     1473   ,cd-video-link~
+     1474   ,cd-video-link-attr~
+     1475   ,cli-art~
+     1476   ,cli-gds~
+     1477   ,cli-grp~
+     1478   ,c-cli-grp~
+     1479   ,clients~
+     1480   ,c-clients~
+     1481   ,clients-attr~
+     1482   ,c-clients-attr~
+     1483   ,clob-bind~
+     1484   ,code-range~
+     1485   ,condition-keeping~
+     1486   ,c-condition-keeping~
+     1487   ,config~
+     1488   ,c-config~
+     1489   ,contract~
+     1490   ,c-contract~
+     1491   ,contract-attr~
+     1492   ,contract-specif~
+     1493   ,c-contract-specif~
+     1494   ,country~
+     1495   ,c-country~
+     1496   ,criterion-analysis~
+     1497   ,cshr-month~
+     1498   ,curr-accnt~
+     1499   ,c-curr-accnt~
+     1500   ,curr-bank~
+     1501   ,c-curr-bank~
+     1502   ,curr-shop~
+     1503   ,currency~
+     1504   ,custom-labels~
+     1505   ,datatype-exp~
+     1506   ,datatype-exp-attr~
+     1507   ,datatype-imp~
+     1508   ,datatype-imp-attr~
+     1509   ,datatype-table~
+     1510   ,datatype-table-exp~
+     1511   ,datatype-table-field~
+     1512   ,datatype-table-field-exp~
+     1513   ,datatype-table-field-imp~
+     1514   ,datatype-table-imp~
+     1515   ,db~
+     1516   ,c-db~
+     1517   ,db-attr~
+     1518   ,db-info~
+     1519   ,db-status~
+     1520   ,deliv-type-cond-keep~
+     1521   ,c-deliv-type-cond-keep~
+     1522   ,delivery-subject~
+     1523   ,c-delivery-subject~
+     1524   ,delivery-type~
+     1525   ,c-delivery-type~
+     1526   ,delivery-type-subject~
+     1527   ,c-delivery-type-subject~
+     1528   ,dis-card~
+     1529   ,c-dis-card~
+     1530   ,dis-card-long~
+     1531   ,c-dis-card-long~
+     1532   ,dis-card-mask~
+     1533   ,c-dis-card-mask~
+     1534   ,dis-card-mask-attr~
+     1535   ,c-dis-card-mask-attr~
+     1536   ,dis-card-property~
+     1537   ,c-dis-card-property~
+     1538   ,dis-card-type~
+     1539   ,c-dis-card-type~
+     1540   ,dis-card-type-attr~
+     1541   ,c-dis-card-type-attr~
+     1542   ,dis-cfg-rule~
+     1543   ,c-dis-cfg-rule~
+     1544   ,dis-cp-rule~
+     1545   ,c-dis-cp-rule~
+     1546   ,dis-dc-rule~
+     1547   ,c-dis-dc-rule~
+     1548   ,dis-dct-rule~
+     1549   ,c-dis-dct-rule~
+     1550   ,dis-gds-rule~
+     1551   ,c-dis-gds-rule~
+     1552   ,dis-gds-rule-attr~
+     1553   ,dis-grp-rule~
+     1554   ,c-dis-grp-rule~
+     1555   ,dis-host~
+     1556   ,c-dis-host~
+     1557   ,dis-obj~
+     1558   ,c-dis-obj~
+     1559   ,dis-rule~
+     1560   ,c-dis-rule~
+     1561   ,dis-some-rule~
+     1562   ,c-dis-some-rule~
+     1563   ,dis-thbj-rule~
+     1564   ,c-dis-thbj-rule~
+     1565   ,dis-time-rule~
+     1566   ,c-dis-time-rule~
+     1567   ,doc-abc-def~
+     1568   ,doc-attr~
+     1569   ,doc-xyz-def~
+     1570   ,drt-prop~
+     1571   ,c-drt-prop~
+     1572   ,edi-status~
+     1573   ,esys-all-attr~
+     1574   ,esys-datatype-exp~
+     1575   ,c-esys-datatype-exp~
+     1576   ,esys-datatype-imp~
+     1577   ,c-esys-datatype-imp~
+     1578   ,esys-pck-rcvd~
+     1579   ,esys-pck-rcvd-err~
+     1580   ,esys-pck-sent~
+     1581   ,esys-route~
+     1582   ,ex-mark~
+     1583   ,c-ex-mark~
+     1584   ,ext-artic~
+     1585   ,c-ext-artic~
+     1586   ,ext-artic-attr~
+     1587   ,c-ext-artic-attr~
+     1588   ,ext-classif~
+     1589   ,c-ext-classif~
+     1590   ,ext-file~
+     1591   ,ext-file-line~
+     1592   ,ext-file-par~
+     1593   ,ext-system~
+     1594   ,c-ext-system~
+     1595   ,ext-system-attr~
+     1596   ,factur-connect~
+     1597   ,fbr-doc~
+     1598   ,c-fbr-doc~
+     1599   ,fbr-gds-grp~
+     1600   ,c-fbr-gds-grp~
+     1601   ,fbr-gds-grp-attr~
+     1602   ,c-fbr-gds-grp-attr~
+     1603   ,fbr-gds-obj~
+     1604   ,c-fbr-gds-obj~
+     1605   ,fbr-history~
+     1606   ,fbr-pln~
+     1607   ,c-fbr-pln~
+     1608   ,fbr-prn~
+     1609   ,c-fbr-prn~
+     1610   ,fbr-prn-gds~
+     1611   ,c-fbr-prn-gds~
+     1612   ,fbr-prn-grp~
+     1613   ,c-fbr-prn-grp~
+     1614   ,fbr-recipe~
+     1615   ,fbr-recipe-gds~
+     1616   ,fin-bank~
+     1617   ,c-fin-bank~
+     1618   ,fin-code-an-uchet~
+     1619   ,fin-code-cel-nazn~
+     1620   ,fin-code-cor-acc~
+     1621   ,fin-connect~
+     1622   ,fin-doc~
+     1623   ,c-fin-doc~
+     1624   ,fin-ob~
+     1625   ,c-fin-ob~
+     1626   ,fin-ob-before~
+     1627   ,fin-schet~
+     1628   ,c-fin-schet~
+     1629   ,fin-statement~
+     1630   ,c-fin-statement~
+     1631   ,firm~
+     1632   ,c-firm~
+     1633   ,gds-grp~
+     1634   ,c-gds-grp~
+     1635   ,gds-grp-attr~
+     1636   ,c-gds-grp-attr~
+     1637   ,gds-grp-obj~
+     1638   ,c-gds-grp-obj~
+     1639   ,gds-host-attr~
+     1640   ,c-gds-host-attr~
+     1641   ,gds-obj~
+     1642   ,gds-obj-attr~
+     1643   ,c-gds-obj-attr~
+     1644   ,gds-obj-prop~
+     1645   ,c-gds-obj-prop~
+     1646   ,gds-obj-prop-attr~
+     1647   ,assortment-matrix~
+     1648   ,assortment-matrix-attr~
+     1649   ,c-assortment-matrix~
+     1650   ,assortment-matrix-goods~
+     1651   ,c-assortment-matrix-goods~
+     1652   ,gds-prt~
+     1653   ,c-gds-prt~
+     1654   ,gds-season~
+     1655   ,c-gds-season~
+     1656   ,gds-add-charges~
+     1657   ,c-gds-add-charges~
+     1658   ,gds-grp-obj-attr~
+     1659   ,c-gds-obj-ref~
+     1660   ,global-state~
+     1661   ,goods~
+     1662   ,c-goods~
+     1663   ,goods-attr~
+     1664   ,c-goods-attr~
+     1665   ,group-period-validity~
+     1666   ,c-group-period-validity~
+     1667   ,grp-obj-price~
+     1668   ,c-grp-obj-price~
+     1669   ,hist-nws-option~
+     1670   ,c-hist-nws-option~
+     1671   ,icnt-doc~
+     1672   ,inkas~
+     1673   ,c-inkas~
+     1674   ,layout~
+     1675   ,c-layout~
+     1676   ,layout-elem~
+     1677   ,layout-elem-rule~
+     1678   ,c-layout-elem-rule~
+     1679   ,lvl-name~
+     1680   ,menu-user~
+     1681   ,menu-user-call~
+     1682   ,marking~
+     1683   ,marking-lines~
+     1684   ,nozzle~
+     1685   ,c-nozzle~
+     1686   ,nozzle-attr~
+     1687   ,c-nozzle-attr~
+     1688   ,nws-doc-hist~
+     1689   ,nws-outline~
+     1690   ,obj-date~
+     1691   ,ord-cons~
+     1692   ,ord-doc~
+     1693   ,c-ord-doc~
+     1694   ,ord-doc-rcv~
+     1695   ,ord-chain~
+     1696   ,parts~
+     1697   ,parts-attr~
+     1698   ,pay-type~
+     1699   ,c-pay-type~
+     1700   ,pck-rcvd~
+     1701   ,pck-sent~
+     1702   ,person~
+     1703   ,c-person~
+     1704   ,pl-gds~
+     1705   ,c-pl-gds~
+     1706   ,pl-gds-attr~
+     1707   ,c-pl-gds-attr~
+     1708   ,pl-gds-pump~
+     1709   ,c-pl-gds-pump~
+     1710   ,pl-level~
+     1711   ,pl-level-imp~
+     1712   ,c-pl-level~
+     1713   ,pl-level-mm~
+     1714   ,pl-level-mm-imp~
+     1715   ,pl-pump~
+     1716   ,c-pl-pump~
+     1717   ,pl-pump-nozzle~
+     1718   ,c-pl-pump-nozzle~
+     1719   ,place~
+     1720   ,c-place~
+     1721   ,place-attr~
+     1722   ,c-place-attr~
+     1723   ,place-imp~
+     1724   ,place-imp-attr~
+     1725   ,place-io~
+     1726   ,c-place-io~
+     1727   ,point-io~
+     1728   ,c-point-io~
+     1729   ,point-place-rel~
+     1730   ,c-point-place-rel~
+     1731   ,point-point-rel~
+     1732   ,c-point-point-rel~
+     1733   ,price-all~
+     1734   ,price-doc~
+     1735   ,c-price-doc~
+     1736   ,price-doc-forming~
+     1737   ,c-price-doc-forming~
+     1738   ,price-list-type~
+     1739   ,c-price-list-type~
+     1740   ,prod-bc~
+     1741   ,c-prod-bc~
+     1742   ,prod-bc-db~
+     1743   ,profile-by-profile~
+     1744   ,c-profile-by-profile~
+     1745   ,prop-head~
+     1746   ,c-prop-head~
+     1747   ,prop-map~
+     1748   ,prop-ref~
+     1749   ,c-prop-ref~
+     1750   ,prop-ref-call~
+     1751   ,prop-ruleset~
+     1752   ,prop-script~
+     1753   ,prt-obj~
+     1754   ,pscript-ruleset~
+     1755   ,pump~
+     1756   ,c-pump~
+     1757   ,pump-attr~
+     1758   ,c-pump-attr~
+     1759   ,pump-nozzle~
+     1760   ,c-pump-nozzle~
+     1761   ,qnty-group~
+     1762   ,rang-abc-def~
+     1763   ,rang-xyz-def~
+     1764   ,recipe~
+     1765   ,c-recipe~
+     1766   ,recipe-develop~
+     1767   ,c-recipe-develop~
+     1768   ,recipe-gds~
+     1769   ,c-recipe-gds~
+     1770   ,regions~
+     1771   ,c-regions~
+     1772   ,norm-loss~
+     1773   ,c-norm-loss~
+     1774   ,rp-by-call~
+     1775   ,c-rp-by-call~
+     1776   ,rp-rule-param~
+     1777   ,rpt-option~
+     1778   ,rule~
+     1779   ,rule-by-call~
+     1780   ,c-rule-by-call~
+     1781   ,rule-by-profile~
+     1782   ,rule-by-set~
+     1783   ,rule-call-param~
+     1784   ,c-rule-call-param~
+     1785   ,rule-profile~
+     1786   ,rule-process~
+     1787   ,ruledict~
+     1788   ,c-ruledict~
+     1789   ,ruledict-param~
+     1790   ,ruleset~
+     1791   ,rvs-doc~
+     1792   ,c-rvs-doc~
+     1793   ,s-coeff~
+     1794   ,c-s-coeff~
+     1795   ,scales~
+     1796   ,c-scales~
+     1797   ,scales-attr~
+     1798   ,c-scales-attr~
+     1799   ,scales-gds~
+     1800   ,c-scales-gds~
+     1801   ,scales-grp~
+     1802   ,c-scales-grp~
+     1803   ,schedule~
+     1804   ,schedule-attr~
+     1805   ,schet-fact-doc~
+     1806   ,c-schet-fact-doc~
+     1807   ,season~
+     1808   ,c-season~
+     1809   ,sert~
+     1810   ,c-sert~
+     1811   ,sert-join~
+     1812   ,shift-obj~
+     1813   ,c-shift-obj~
+     1814   ,shift-period~
+     1815   ,shop~
+     1816   ,c-shop~
+     1817   ,some-lk~
+     1818   ,sr-izmerenia~
+     1819   ,c-sr-izmerenia~
+     1820   ,sr-izmerenia-attr~
+     1821   ,c-sr-izmerenia-attr~
+     1822   ,staff~
+     1823   ,c-staff~
+     1824   ,stop-list~
+     1825   ,store~
+     1826   ,c-store~
+     1827   ,sum-group~
+     1828   ,sum-grp~
+     1829   ,c-sum-grp~
+     1830   ,sum-grp-obj~
+     1831   ,c-sum-grp-obj~
+     1832   ,sysconf~
+     1833   ,c-sysconf~
+     1834   ,tare~
+     1835   ,c-tare~
+     1836   ,tax~
+     1837   ,c-tax~
+     1838   ,tax-rate~
+     1839   ,c-tax-rate~
+     1840   ,tax-rate-gds~
+     1841   ,tax-rate-gds-grp~
+     1842   ,c-tax-rate-gds-grp~
+     1843   ,tax-rate-value~
+     1844   ,tax-units~
+     1845   ,c-tax-units~
+     1846   ,thbj-attr~
+     1847   ,c-thbj-attr~
+     1848   ,trn-doc~
+     1849   ,c-trn-doc~
+     1850   ,trn-reason~
+     1851   ,turnover-buyer-main~
+     1852   ,turnover-group~
+     1853   ,units~
+     1854   ,c-units~
+     1855   ,upgrade~
+     1856   ,user-account~
+     1857   ,c-user-account~
+     1858   ,user-context-history~
+     1859   ,user-host~
+     1860   ,user-login~
+     1861   ,c-user-login~
+     1862   ,user-login-action-item~
+     1863   ,user-login-action-role~
+     1864   ,user-login-attr~
+     1865   ,user-menu-group~
+     1866   ,user-obj~
+     1867   ,user-window-attr~
+     1868   ,var-deliv-gr-per-val~
+     1869   ,c-var-deliv-gr-per-val~
+     1870   ,variant-delivery~
+     1871   ,c-variant-delivery~
+     1872   ,varianty-delivery-gds-obj~
+     1873   ,c-varianty-delivery-gds-obj~
+     1874   ,wealth~
+     1875   ,c-wealth~
+     1876   ,who-lk~
+     1877   ,wth-doc~
+     1878   ,c-wth-doc~
+     1879   ,wth-doc-attr
+     1880   ,wth-gds~
+     1881   ,c-wth-gds~
+     1882   ,wth-ser~
+     1883   ,c-wth-ser~
+     1884   ,wth-par~
+     1885   ,c-wth-par~
+     1886   ,wth-place~
+     1887   ,c-wth-place~
+     1888   ,xyz-analysis~
+     1889   ,c-user-log~
+     1890   ,egais-clients~
+     1891   ,c-egais-clients~
+     1892   ,egais-gds~
+     1893   ,c-egais-gds~
+     1894   ,c-vsd~
+     1895   ,c-gds-mercury
+     1896   ,vsd~
+     1897   ,vsd-attr~
+     1898   ,c-gds-mercury~
+     1899   ,gds-mercury~
+     1900   ,gds-mercury-attr~
+     1901   ,units-attr~
+     1902   ,c-promo-schedule~
+     1903   ,c-promo-schedule-week~
+     1904   ,c-PromoAction~
+     1905   ,c-PromoAttr~
+     1906   ,c-PromoCriterion~
+     1907   ,c-PromoGift~
+     1908   ,c-PromoGoods~
+     1909   ,c-PromoObject~
+     1910   ,promo-schedule~
+     1911   ,promo-schedule-week~
+     1912   ,PromoAction~
+     1913   ,PromoAttr~
+     1914   ,PromoCriterion~
+     1915   ,PromoGift~
+     1916   ,PromoGoods~
+     1917   ,PromoObject~
+     1918   ,tech-prol-pwd~
+     1919   ,c-tech-prol-pwd~
+     1920   ,c-CashBook~
+     1921   ,c-CashBookAttr~
+     1922   ,c-CashBookRule~
+     1923   ,c-CashBookRuleAttr~
+     1924   ,c-OperServ~
+     1925   ,c-operServAttr~
+     1926   ,CashBook~
+     1927   ,CashBookAttr~
+     1928   ,CashBookRule~
+     1929   ,CashBookRuleAttr~
+     1930   ,OperServ~
+     1931   ,OperServAttr~
+     1932   ,c-counter~
+     1933   ,counter~
+     1934   ,c-cashbook-head~
+     1935   ,c-goods-attr-any~
+     1936   ,c-promo-head~
+     1937   ,code~
+     1938   ,c-code~
+     1939   ,devisPc~
+     1940   ,devisPc-attr~
+     1941   ,utd~
+     1942   ,c-utd-head~
+     1943   ,c-utd~
+     1944   ,c-utd-head~
+     1945   ,c-utd-lines~
+     1946   ,c-utd-marking-lines~
+     1947   ,c-utd-err~
+     1948   ,c-utd-attr~
+     1949   ,c-utd-lines-attr~
+     1950   ,c-utd-marking-lines-attr~
+     1951   ,c-utd-err-attr~
+     1952   ,marking-attr
+     1953   ,Xattr~
+     1954   ,xGroupObj~
+     1955   ,xstatus~
+     1956   ,c-contract-specif-attr~
+     1957   ,tran-fuel~
+     1958   ,chk-slip-head~
+     1959   ,chk-slip-string~
+     1960   ,c-marking
+     1961   ,order-doc~
+     1962   ,order-line~
+     1963   ,order-doc-attr~
+     1964   ,order-line-attr~
+     1965   ,c-order-head~
+     1966   ,c-order-doc~
+     1967   ,c-order-line~
+     1968   ,c-order-doc-attr~
+     1969   ,c-order-line-attr~
+     1970   ,reportShift~
+     1971   ,shift-param~
+     1972   ,susp-chk~
+     1973   ':U .
+     1974   define variable oth-list1 as character no-undo .
+     1975   define variable oth-list2 as character no-undo .
+     1976   define variable vss-include-info6 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     1977   procedure ren-route-dump :
+     1978     define input parameter p-action          as character no-undo .
+     1979     define input parameter p-old-gds-key-rec as character no-undo .
+     1980     define input parameter p-tbl-name        as character no-undo .
+     1981     define input parameter p-old-artic       as character no-undo .
+     1982     define input parameter p-old-prod-type   as character no-undo .
+     1983     define input parameter p-old-prod-code   as integer   no-undo .
+     1984     define input parameter p-new-artic       as character no-undo .
+     1985     define input parameter p-new-prod-type   as character no-undo .
+     1986     define input parameter p-new-prod-code   as integer   no-undo .
+     1987     define input parameter p-old-gds-code    as integer   no-undo .
+     1988     define input parameter p-new-gds-code    as integer   no-undo .
+     1989     do
+     1990     on error  undo, return error substitute( "&1 (ren-route-dump). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     1991     on stop   undo, return error substitute( "&1 (ren-route-dump). stop", vss-workfile )
+     1992     on endkey undo, return error substitute( "&1 (ren-route-dump). endkey", vss-workfile )
+     1993     :
+     1994       define buffer buf_route-dump      for ub.route-dump .
+     1995       define buffer buf_route-dump-link for ub.route-dump-link .
+     1996       define variable v-is-change as logical no-undo .
+     1997       define variable tth           as handle    no-undo .
+     1998       define variable tt-name       as character no-undo .
+     1999       define variable v-ok          as logical   no-undo .
+     2000       define variable bh_tt         as handle    no-undo .
+     2001       define variable bh_route-dump as handle    no-undo .
+     2002       define variable fh_artic      as handle    no-undo .
+     2003       define variable fh_prod-type  as handle    no-undo .
+     2004       define variable fh_prod-code  as handle    no-undo .
+     2005       define variable fh_gds-code   as handle    no-undo .
+     2006       create temp-table tth.
+     2007       assign
+     2008         tt-name = "tt_" + p-tbl-name
+     2009       .
+     2010       assign
+     2011         v-ok = tth:create-like( "ub.":U + p-tbl-name ) no-error
+     2012       .
+     2013       if v-ok <> true then do:
+     2014         undo, return error substitute( "&1 (ren-route-dump). Ошибка при создании временной таблицы &2 (1)", vss-workfile, tt-name ) .
+     2015       end.
+     2016       assign
+     2017         v-ok = tth:temp-table-prepare( tt-name ) no-error
+     2018       .
+     2019       if v-ok <> true then do:
+     2020         undo, return error substitute( "&1 (ren-route-dump). Ошибка при создании временной таблицы &2 (2)", vss-workfile, tt-name ) .
+     2021       end.
+     2022       assign
+     2023         bh_tt = tth:default-buffer-handle
+     2024       .
+     2025       assign
+     2026         v-ok = bh_tt:buffer-create no-error
+     2027       .
+     2028       if v-ok <> true then do:
+     2029         undo, return error substitute( "&1 (ren-route-dump). Ошибка при создании буфера временной таблицы.", vss-workfile, tt-name ).
+     2030       end.
+     2031       for each buf_route-dump-link exclusive-lock
+     2032         where buf_route-dump-link.uniq-key-rec = p-old-gds-key-rec
+     2033           and buf_route-dump-link.dump-name    = p-tbl-name
+     2034       on error undo, return error
+     2035       :
+     2036         for each buf_route-dump exclusive-lock
+     2037           where buf_route-dump.dump-ord = buf_route-dump-link.dump-ord
+     2038             and buf_route-dump.rec-ord  = buf_route-dump-link.rec-ord
+     2039         on error  undo, return error
+     2040         :
+     2041           assign
+     2042             bh_route-dump = buffer buf_route-dump:handle
+     2043           .
+     2044           assign
+     2045             v-ok = bh_tt:raw-transfer ( false, bh_route-dump:buffer-field("value-rec":U) ) no-error
+     2046           .
+     2047           if v-ok <> true then do:
+     2048             undo, return error substitute( "&1 (ren-route-dump). RAW-TRANSFER -> не прошел для таблицы &2. Rowid записи &3", vss-workfile, tt-name, bh_route-dump:rowid ).
+     2049           end.
+     2050           assign
+     2051             v-is-change = false
+     2052           .
+     2053           case p-action :
+     2054             when "ren-art":U then do:
+     2055               assign
+     2056                 fh_artic     = bh_tt:buffer-field("artic":U)
+     2057                 fh_prod-type = bh_tt:buffer-field("prod-type":U)
+     2058                 fh_prod-code = bh_tt:buffer-field("prod-code":U)
+     2059               .
+     2060               if fh_artic:buffer-value  = p-old-artic
+     2061                 and fh_prod-type:buffer-value = p-old-prod-type
+     2062                 and fh_prod-code:buffer-value = p-old-prod-code
+     2063               then do:
+     2064                 assign
+     2065                   fh_artic:buffer-value     = p-new-artic
+     2066                   fh_prod-type:buffer-value = p-new-prod-type
+     2067                   fh_prod-code:buffer-value = p-new-prod-code
+     2068                   v-is-change               = true
+     2069                 .
+     2070               end.
+     2071             end.
+     2072             when "ren-gds-code":U then do:
+     2073               assign
+     2074                 fh_gds-code = bh_tt:buffer-field("gds-code":U)
+     2075               .
+     2076               if fh_gds-code:buffer-value = p-old-gds-code then do:
+     2077                 assign
+     2078                   fh_gds-code:buffer-value = p-new-gds-code
+     2079                   v-is-change              = true
+     2080                 .
+     2081               end.
+     2082             end.
+     2083           end case.
+     2084           if v-is-change = true then do:
+     2085             assign
+     2086               v-ok = bh_tt:raw-transfer ( true, bh_route-dump:buffer-field("value-rec":U) ) no-error
+     2087             .
+     2088             if v-ok <> true then do:
+     2089               undo, return error substitute( "&1 (ren-route-dump). RAW-TRANSFER <- не прошел для таблицы &2. Rowid записи &3", vss-workfile, tt-name, bh_route-dump:rowid ).
+     2090             end.
+     2091           end.
+     2092         end.
+     2093       end.
+     2094       assign
+     2095         v-ok = bh_tt:buffer-delete no-error
+     2096       .
+     2097       if v-ok <> true then do:
+     2098         undo, return error substitute( "&1 (ren-route-dump). Ошибка при удалении буфера временной таблицы.", vss-workfile, tt-name ).
+     2099       end.
+     2100       assign
+     2101         v-ok = tth:clear() no-error
+     2102       .
+     2103       if v-ok <> true then do:
+     2104         undo, return error substitute( "&1 (ren-route-dump). Ошибка при очистке временной таблицы &2", vss-workfile, tt-name ) .
+     2105       end.
+     2106       delete object tth no-error .
+     2107       if error-status:error then do:
+     2108         undo, return error substitute( "&1 (ren-route-dump). Ошибка при удалении временной таблицы для &2", vss-workfile, tt-name ).
+     2109       end.
+     2110     end.
+     2111     return.
+     2112   end procedure.
+     2113   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2114   procedure ren-gds-code :
+     2115     define input parameter p-tbl-name        as character no-undo .
+     2116     define input parameter p-old-gds-key-rec as character no-undo .
+     2117     define input parameter p-old-gds-code    as integer   no-undo .
+     2118     define input parameter p-new-gds-code    as integer   no-undo .
+     2119     define input parameter p-search-bufs     as character no-undo .
+     2120     define input parameter p-search-prefix   as character no-undo .
+     2121     define input parameter p-search-suffix   as character no-undo .
+     2122     do
+     2123     on error  undo, return error substitute( "&1 (ren-gds-code). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2124     on stop   undo, return error substitute( "&1 (ren-gds-code). stop", vss-workfile )
+     2125     on endkey undo, return error substitute( "&1 (ren-gds-code). endkey", vss-workfile )
+     2126     :
+     2127       define variable qh_tbl-name as handle no-undo .
+     2128       define variable bh_tbl-name as handle no-undo .
+     2129       define variable fh_gds-code as handle no-undo .
+     2130       define variable v-query     as character no-undo .
+     2131       define variable v-tbl-name  as character no-undo .
+     2132       assign
+     2133         v-tbl-name = substitute( "ub.&1":U, p-tbl-name )
+     2134         v-query    = substitute( "for &1 each &2 where &2.gds-code = &3 &4", p-search-prefix, v-tbl-name, p-old-gds-code, p-search-suffix )
+     2135       .
+     2136       create buffer bh_tbl-name for table v-tbl-name  .
+     2137       bh_tbl-name:disable-load-triggers ( false ).
+     2138       create query qh_tbl-name .
+     2139       if trim( p-search-bufs ) = "":U
+     2140         or p-search-bufs = ?
+     2141       then do:
+     2142         qh_tbl-name:set-buffers( bh_tbl-name ).
+     2143       end.
+     2144       else do:
+     2145         qh_tbl-name:set-buffers( p-search-bufs, bh_tbl-name ).
+     2146       end.
+     2147       qh_tbl-name:query-prepare( v-query ).
+     2148       qh_tbl-name:query-open() .
+     2149       qh_tbl-name:get-first( exclusive-lock ).
+     2150       do while qh_tbl-name:query-off-end <> true
+     2151       on error  undo, return error substitute( "&1 (ren-gds-code2). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2152       on stop   undo, return error substitute( "&1 (ren-gds-code2). stop", vss-workfile )
+     2153       on quit   undo, return error substitute( "&1 (ren-gds-code2). quit", vss-workfile )
+     2154       on endkey undo, return error substitute( "&1 (ren-gds-code2). endkey", vss-workfile )
+     2155       :
+     2156         assign
+     2157           fh_gds-code = bh_tbl-name:buffer-field( "gds-code":U )
+     2158           fh_gds-code:buffer-value = p-new-gds-code .
+     2159         .
+     2160         bh_tbl-name:buffer-release() no-error .
+     2161         assign
+     2162           fh_gds-code = ?
+     2163         .
+     2164         qh_tbl-name:get-next( exclusive-lock ).
+     2165       END.
+     2166       qh_tbl-name:query-close() .
+     2167       delete object qh_tbl-name.
+     2168       delete object bh_tbl-name.
+     2169       if g#news = true
+     2170         and lookup( p-tbl-name, ( news-list + ",":U + attach-list ) ) <> 0
+     2171       then do:
+     2172         run ren-route-dump in this-procedure
+     2173           ( input "ren-gds-code":U
+     2174            ,input p-old-gds-key-rec
+     2175            ,input p-tbl-name
+     2176            ,input ?
+     2177            ,input ?
+     2178            ,input ?
+     2179            ,input ?
+     2180            ,input ?
+     2181            ,input ?
+     2182            ,input p-old-gds-code
+     2183            ,input p-new-gds-code
+     2184           ) no-error .
+     2185         if error-status :error then do:
+     2186           undo, return error substitute( "&1 (ren-gds-code). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) ) .
+     2187         end.
+     2188       end.
+     2189     end.
+     2190     return .
+     2191   end procedure.
+     2192   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2193   procedure valid-ren-gdsc-tbl-list :
+     2194     do
+     2195     on error  undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2196     on stop   undo, return error substitute( "&1. stop", vss-workfile )
+     2197     on endkey undo, return error substitute( "&1. endkey", vss-workfile )
+     2198     :
+     2199       define variable v-std-list        as character no-undo .
+     2200       define variable v-ignore-list     as character no-undo .
+     2201       define variable v-special-list    as character no-undo .
+     2202       assign
+     2203         v-std-list     = "abc-analysis-gds-obj,abc-analysis-gds-obj-attr,abc-analysis-goods,abc-analysis-goods-attr,abcxyz-analysis-goods,abcxyz-analysis-goods-attr,action-post-role,action-role-item-gds,add-line,c-add-line,aht-gds,aht-gds-attr,aht-ot-line,aht-ot-line-attr,aht-stk-line,aht-stk-line-attr,alc-type-gds,c-alc-type-gds,alc-type-gds-attr,arh-wth-cli,arh-wth-cli-attr,arh-wth-cli-doc,arh-wth-cli-doc-attr,arh-wth-tot,arh-wth-w-p,assortment-matrix-goods,assortment-matrix-goods-attr,c-assortment-matrix-goods,bar-code,bar-code-attr,bar-code-obj-attr,c-bar-code,c-bar-code-attr,c-bar-code-obj-attr,cd-doc-line,c-cd-doc-line,cd-event-log,cd-plu,c-cd-plu,chk-gds-pay,contract-specif,c-contract-specif,contract-specif-attr,dis-gds-rule,c-dis-gds-rule,dis-gds-rule-attr,doc-fbr-gds,c-doc-fbr-gds,doc-fbr-gds-attr,doc-line-attr,c-doc-line-attr,doc-line-sum,c-doc-line-sum,doc-pl,doc-pl-attr,c-doc-pl,doc-pl-pump,doc-pl-pump-attr,c-doc-pl-pump,doc-prts,c-doc-prts,ext-artic,c-ext-artic,ext-artic-attr,c-ext-artic-attr,ext-artic-db,ext-artic-db-attr,ext-artic-host,ext-artic-host-attr,ext-artic-obj,ext-artic-obj-attr,factur-connect-line,fbr-history,fbr-gds-obj,c-fbr-gds-obj,fbr-gds-obj-attr,c-fbr-gds-obj-attr,fbr-pln-line,c-fbr-pln-line,c-fbr-prn,fbr-prn-gds,c-fbr-prn-gds,fbr-prn-gds-attr,fbr-recipe,fbr-recipe-gds,fin-gds-part,fin-gds-part-attr,c-fin-gds-part,c-gds-hist,gds-add-charges,gds-add-charges-attr,c-gds-add-charges,c-gds-add-charges-attr,gds-host-attr,c-gds-host-attr,gds-obj,c-gds-obj,c-gds-obj-ref,gds-obj-attr,c-gds-obj-attr,gds-obj-flag,gds-obj-flag-attr,gds-obj-prop,gds-obj-prop-attr,c-gds-obj-prop,gds-season,gds-season-attr,c-gds-season,c-goods,goods-attr,c-goods-attr,hold-sale,hold-goods,hold-purch,hold-purch-supp-gds,hold-sale-attr,hold-goods-attr,hold-purch-attr,hold-purch-supp-gds-attr,icnt-line,ord-cons-line-attr,ord-dtl,c-ord-dtl,ord-line,c-ord-line,c-ord-line-attr,ord-line-attr,ord-line-rcv,ord-rcv-line-attr,parts-attr,parts-add,c-parts-add,parts-add-attr,c-parts-attr,parts-obj-attr,c-parts-obj-attr,parts-root,parts-root-attr,c-parts-root,pl-gds,c-pl-gds,c-pl-gds-obj,pl-gds-attr,c-pl-gds-attr,c-plc-hist,c-pmp-hist,pl-gds-pump,c-pl-gds-pump,pl-gds-pump-attr,c-pl-gds-pump-attr,price-all,rcs-retail1product,recipe,c-recipe,c-recipe-gds,recipe-gds,recipe-develop,c-recipe-develop,c-recipe-hist,rvs-line,rvs-line-attr,c-rvs-line,rvs-pump,rvs-line-pump,rvs-line-pump-attr,c-rvs-line-pump,s-coeff,c-s-coeff,s-coeff-attr,schet-fact-line,c-schet-fact-line,tax-rate-gds,tax-rate-gds-attr,turnover-buyer-gds,turnover-buyer-gds-attr,user-login-action-item,user-login-action-role,varianty-delivery-gds-obj,c-varianty-delivery-gds-obj,wth-dtl,c-wth-dtl,wth-gds,c-wth-gds,wth-gds-attr,c-wth-gds-attr,wth-dtl,c-wth-dtl,wth-parts,c-wth-parts,xyz-analysis-gds-obj,xyz-analysis-gds-obj-attr,xyz-analysis-goods,xyz-analysis-goods-attr,egais-gds,c-egais-gds,vsd,c-vsd,gds-mercury,c-gds-mercury,PromoGift,PromoGoods,c-PromoGift,c-PromoGoods,OperServ,c-OperServ,c-goods-attr-any,utd-lines,c-utd-marking-lines,c-utd-lines,marking-lines,utd-marking-lines,marking,c-contract-specif-attr,c-marking,order-line,c-order-line,shift-param":U
+     2204         v-ignore-list  = "shift-period":U
+     2205         v-special-list = "goods":U
+     2206       .
+     2207   def var vss-include-info9 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2208       define variable v-ind         as integer   no-undo .
+     2209       define variable v-num-entries as integer   no-undo .
+     2210       define variable v-inform      as character no-undo .
+     2211       define variable bh_tbl-name   as handle    no-undo .
+     2212       define variable v-tbl-not-idx as character no-undo .
+     2213       define variable v-idx-avail   as logical   no-undo .
+     2214       define variable new-tbl-list  as character no-undo .
+     2215       define variable old-tbl-list  as character no-undo .
+     2216       define variable old-tbl-avail as logical   no-undo .
+     2217       define variable v-double-tbl  as character no-undo .
+     2218       define variable v-tbl-name    as character no-undo .
+     2219       define variable v-msg         as character no-undo .
+     2220       assign
+     2221         v-msg         = "":U
+     2222         v-tbl-not-idx = "":U
+     2223         new-tbl-list  = "":U
+     2224       .
+     2225       for each ub._Field no-lock
+     2226         where ub._Field._Field-Name = 'gds-code':U
+     2227       ,first ub._File of ub._Field
+     2228       on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2229       :
+     2230         if  lookup( ub._File._File-Name, v-std-list     ) = 0
+     2231         and lookup( ub._File._File-Name, v-ignore-list  ) = 0
+     2232         and lookup( ub._File._File-Name, v-special-list ) = 0
+     2233         then do:
+     2234           assign
+     2235             new-tbl-list = new-tbl-list + chr(10) + ub._File._File-Name
+     2236           .
+     2237         end.
+     2238         if lookup( ub._File._File-Name, v-std-list ) <> 0
+     2239           or lookup( ub._File._File-Name, new-tbl-list, chr(10) ) <> 0
+     2240         then do:
+     2241           create buffer bh_tbl-name for table substitute( "ub.&1":U, ub._File._File-Name ) .
+     2242           assign
+     2243             v-idx-avail = false
+     2244             v-inform    = bh_tbl-name:index-information(1)
+     2245             v-ind       = 2
+     2246           .
+     2247           block_chk-idx:
+     2248           do while v-inform <> ?
+     2249           on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2250           :
+     2251             if v-inform <> ?
+     2252                 and lookup( entry( 5, v-inform, ",":U ), 'gds-code':U ) > 0
+     2253             then do:
+     2254               assign
+     2255                 v-idx-avail = true
+     2256               .
+     2257               leave block_chk-idx.
+     2258             end.
+     2259             assign
+     2260               v-inform = bh_tbl-name:index-information( v-ind )
+     2261               v-ind    = v-ind + 1
+     2262             .
+     2263           end.
+     2264           if v-idx-avail = false then do:
+     2265             if lookup( ub._File._File-Name, new-tbl-list, chr(10) ) <> 0 then do:
+     2266               assign
+     2267                 new-tbl-list = new-tbl-list + " (индекса нет)"
+     2268               .
+     2269             end.
+     2270             else do:
+     2271               assign
+     2272                 v-tbl-not-idx = v-tbl-not-idx + chr(10) + ub._File._File-Name
+     2273               .
+     2274             end.
+     2275           end.
+     2276           delete object bh_tbl-name.
+     2277         end.
+     2278       end.
+     2279       assign
+     2280         old-tbl-list  = "":U
+     2281         v-double-tbl  = "":U
+     2282         v-num-entries = num-entries( v-std-list )
+     2283       .
+     2284       do v-ind = 1 to v-num-entries
+     2285       on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2286       :
+     2287         assign
+     2288           v-tbl-name    = entry( v-ind, v-std-list )
+     2289           old-tbl-avail = false
+     2290         .
+     2291         find first ub._File no-lock
+     2292           where ub._File._File-Name = v-tbl-name
+     2293           no-error .
+     2294         if not available ub._File then do:
+     2295           assign
+     2296             old-tbl-avail = true
+     2297           .
+     2298         end.
+     2299         else do:
+     2300           find first ub._Field no-lock
+     2301             where ub._Field._File-recid = recid( ub._File )
+     2302               and ub._Field._Field-Name = 'gds-code':U
+     2303             no-error .
+     2304           if not available ub._Field then do:
+     2305             assign
+     2306               old-tbl-avail = true
+     2307             .
+     2308           end.
+     2309         end.
+     2310         if old-tbl-avail = true then do:
+     2311           assign
+     2312             old-tbl-list = old-tbl-list + chr(10) + v-tbl-name
+     2313           .
+     2314         end.
+     2315         if ( lookup( v-tbl-name, v-std-list ) > v-ind
+     2316              or lookup( v-tbl-name, v-ignore-list ) > 0
+     2317              or lookup( v-tbl-name, v-special-list ) > 0
+     2318            )
+     2319           and lookup( v-tbl-name, v-double-tbl, chr(10) ) = 0
+     2320         then do:
+     2321           assign
+     2322             v-double-tbl = v-double-tbl + chr(10) + v-tbl-name
+     2323           .
+     2324         end.
+     2325       end.
+     2326       assign
+     2327         v-num-entries = num-entries( v-ignore-list )
+     2328       .
+     2329       do v-ind = 1 to v-num-entries
+     2330       on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2331       :
+     2332         assign
+     2333           v-tbl-name = entry( v-ind, v-ignore-list )
+     2334           old-tbl-avail = false
+     2335         .
+     2336         find first ub._File no-lock
+     2337           where ub._File._File-Name = v-tbl-name
+     2338           no-error .
+     2339         if not available ub._File then do:
+     2340           assign
+     2341             old-tbl-avail = true
+     2342           .
+     2343         end.
+     2344         else do:
+     2345           find first ub._Field no-lock
+     2346             where ub._Field._File-recid = recid( ub._File )
+     2347               and ub._Field._Field-Name = 'gds-code':U
+     2348             no-error .
+     2349           if not available ub._Field then do:
+     2350             assign
+     2351               old-tbl-avail = true
+     2352             .
+     2353           end.
+     2354         end.
+     2355         if old-tbl-avail = true then do:
+     2356           assign
+     2357             old-tbl-list = old-tbl-list + chr(10) + v-tbl-name
+     2358           .
+     2359         end.
+     2360         if ( lookup( v-tbl-name, v-std-list ) > 0
+     2361              or lookup( v-tbl-name, v-ignore-list ) > v-ind
+     2362              or lookup( v-tbl-name, v-special-list ) > 0
+     2363            )
+     2364           and lookup( v-tbl-name, v-double-tbl, chr(10) ) = 0
+     2365         then do:
+     2366           assign
+     2367             v-double-tbl = v-double-tbl + chr(10) + v-tbl-name
+     2368           .
+     2369         end.
+     2370       end.
+     2371       assign
+     2372         v-num-entries = num-entries( v-special-list )
+     2373       .
+     2374       do v-ind = 1 to v-num-entries
+     2375       on error undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2376       :
+     2377         assign
+     2378           v-tbl-name = entry( v-ind, v-special-list )
+     2379         .
+     2380         find first ub._File no-lock
+     2381           where ub._File._File-Name = v-tbl-name
+     2382           no-error .
+     2383         if available ub._File then do:
+     2384           find first ub._Field no-lock
+     2385             where ub._Field._File-recid = recid( ub._File )
+     2386               and ub._Field._Field-Name = 'gds-code':U
+     2387             no-error .
+     2388         end.
+     2389         if not available ub._File
+     2390           or ( available ub._File
+     2391                and not available ub._Field
+     2392              )
+     2393         then do:
+     2394           assign
+     2395             old-tbl-list = old-tbl-list + chr(10) + v-tbl-name
+     2396           .
+     2397         end.
+     2398         if ( lookup( v-tbl-name, v-std-list ) > 0
+     2399              or lookup( v-tbl-name, v-ignore-list ) > 0
+     2400              or lookup( v-tbl-name, v-special-list ) > v-ind
+     2401            )
+     2402           and lookup( v-tbl-name, v-double-tbl, chr(10) ) = 0
+     2403         then do:
+     2404           assign
+     2405             v-double-tbl = v-double-tbl + chr(10) + v-tbl-name
+     2406           .
+     2407         end.
+     2408       end.
+     2409       if v-tbl-not-idx <> "" then do:
+     2410         assign
+     2411           v-msg = v-msg + substitute( "Таблицы не имеют индекса с полями &3 на первом месте и нет спецобработки: &2&1&1", chr(10), v-tbl-not-idx, 'gds-code':U )
+     2412         .
+     2413       end.
+     2414       if new-tbl-list <> "":U then do:
+     2415         assign
+     2416           v-msg = v-msg + substitute( "Нет обработки таблиц: &2&1&1", chr(10), new-tbl-list )
+     2417         .
+     2418       end.
+     2419       if v-double-tbl <> "":U then do:
+     2420         assign
+     2421           v-msg = v-msg + substitute( "В списках есть задублированные таблицы: &2&1&1", chr(10), v-double-tbl )
+     2422         .
+     2423       end.
+     2424       if old-tbl-list <> "":U then do:
+     2425         assign
+     2426           v-msg = v-msg + substitute( "В списках есть несуществующие таблицы или таблицы в которых отсутствуют переименовываемые поля: &2&1&1", chr(10), old-tbl-list )
+     2427         .
+     2428       end.
+     2429       if v-msg <> "":U then do:
+     2430         return error substitute( "Утилита переименования &3 не корректна.&1&1&2", chr(10), v-msg, 'gds-code':U ) .
+     2431       end.
+     2432     end.
+     2433   end procedure.
+     2434   do
+     2435   on error  undo, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2436   on stop   undo, return error substitute( "&1. stop", vss-workfile )
+     2437   on quit   undo, return error substitute( "&1. quit", vss-workfile )
+     2438   on endkey undo, return error substitute( "&1. endkey", vss-workfile )
+     2439   :
+     2440     define buffer buf_rename_goods for ub.goods .
+     2441     define buffer b-goods for ub.goods .
+     2442     define buffer buf_lock_batchprocess for ub.batchprocess .
+     2443     define variable old-gds-key-rec like ub.route.uniq-key-rec  no-undo.
+     2444     define variable v-ind         as integer   no-undo .
+     2445     define variable v-num-entries as integer   no-undo .
+     2446     define variable v-tbl-name    as character no-undo .
+     2447     run gbl/lockrngd.p
+     2448       (input 'grgc':U
+     2449       ,input 'enable':U
+     2450       ,buffer buf_lock_batchprocess
+     2451       ) no-error .
+     2452     if error-status :error then do:
+     2453       undo, return error substitute( "&1. Ошибка при блокировании функции переименования кода товара&2&3&2&4"
+     2454                                     ,vss-workfile
+     2455                                     ,chr(10)
+     2456                                     ,error-status :get-message(1)
+     2457                                     ,return-value
+     2458                                     ) .
+     2459     end.
+     2460     update_block:
+     2461     do transaction
+     2462     on error  undo update_block, return error substitute( "&1 (update_block). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2463     on stop   undo update_block, return error substitute( "&1 (update_block). stop", vss-workfile )
+     2464     on quit   undo update_block, return error substitute( "&1 (update_block). quit", vss-workfile )
+     2465     on endkey undo update_block, return error substitute( "&1 (update_block). endkey", vss-workfile )
+     2466     :
+     2467       find first buf_rename_goods exclusive-lock
+     2468         where buf_rename_goods.gds-code = old-gds-code
+     2469         no-error .
+     2470       if not available buf_rename_goods then do:
+     2471         if g#news
+     2472         then do:
+     2473           return.
+     2474         end.
+     2475         else do:
+     2476           return error "Товар не доступен".
+     2477         end.
+     2478       end.
+     2479       if buf_rename_goods.gds-code <> old-gds-code then do:
+     2480         return error substitute( "Товарa с gds-code &1 НЕСУЩЕСТВУЕТ! Переименование не возможно.", old-gds-code ) .
+     2481       end.
+     2482       if new-gds-code = old-gds-code then do:
+     2483         if g#news then do:
+     2484           return.
+     2485         end.
+     2486         else do:
+     2487           return error "Новый код товара должен отличаться от старого" .
+     2488         end.
+     2489       end.
+     2490       if can-find(first b-goods no-lock where b-goods.gds-code  = new-gds-code) then do:
+     2491         return error substitute( "Уже существует товар с кодом &1", new-gds-code ) .
+     2492       end.
+     2493       RUN gen-key-rec
+     2494         (input 'goods':U
+     2495         ,input (buffer buf_rename_goods:handle)
+     2496         ,output old-gds-key-rec
+     2497         ).
+     2498       run waitfram-show in this-procedure
+     2499         (input 'Переименование кода товара ' + string( buf_rename_goods.gds-code )
+     2500         ).
+     2501       run invalidate-md5-signature in this-procedure .
+     2502       assign
+     2503         v-num-entries = num-entries( "abc-analysis-gds-obj,abc-analysis-gds-obj-attr,abc-analysis-goods,abc-analysis-goods-attr,abcxyz-analysis-goods,abcxyz-analysis-goods-attr,action-post-role,action-role-item-gds,add-line,c-add-line,aht-gds,aht-gds-attr,aht-ot-line,aht-ot-line-attr,aht-stk-line,aht-stk-line-attr,alc-type-gds,c-alc-type-gds,alc-type-gds-attr,arh-wth-cli,arh-wth-cli-attr,arh-wth-cli-doc,arh-wth-cli-doc-attr,arh-wth-tot,arh-wth-w-p,assortment-matrix-goods,assortment-matrix-goods-attr,c-assortment-matrix-goods,bar-code,bar-code-attr,bar-code-obj-attr,c-bar-code,c-bar-code-attr,c-bar-code-obj-attr,cd-doc-line,c-cd-doc-line,cd-event-log,cd-plu,c-cd-plu,chk-gds-pay,contract-specif,c-contract-specif,contract-specif-attr,dis-gds-rule,c-dis-gds-rule,dis-gds-rule-attr,doc-fbr-gds,c-doc-fbr-gds,doc-fbr-gds-attr,doc-line-attr,c-doc-line-attr,doc-line-sum,c-doc-line-sum,doc-pl,doc-pl-attr,c-doc-pl,doc-pl-pump,doc-pl-pump-attr,c-doc-pl-pump,doc-prts,c-doc-prts,ext-artic,c-ext-artic,ext-artic-attr,c-ext-artic-attr,ext-artic-db,ext-artic-db-attr,ext-artic-host,ext-artic-host-attr,ext-artic-obj,ext-artic-obj-attr,factur-connect-line,fbr-history,fbr-gds-obj,c-fbr-gds-obj,fbr-gds-obj-attr,c-fbr-gds-obj-attr,fbr-pln-line,c-fbr-pln-line,c-fbr-prn,fbr-prn-gds,c-fbr-prn-gds,fbr-prn-gds-attr,fbr-recipe,fbr-recipe-gds,fin-gds-part,fin-gds-part-attr,c-fin-gds-part,c-gds-hist,gds-add-charges,gds-add-charges-attr,c-gds-add-charges,c-gds-add-charges-attr,gds-host-attr,c-gds-host-attr,gds-obj,c-gds-obj,c-gds-obj-ref,gds-obj-attr,c-gds-obj-attr,gds-obj-flag,gds-obj-flag-attr,gds-obj-prop,gds-obj-prop-attr,c-gds-obj-prop,gds-season,gds-season-attr,c-gds-season,c-goods,goods-attr,c-goods-attr,hold-sale,hold-goods,hold-purch,hold-purch-supp-gds,hold-sale-attr,hold-goods-attr,hold-purch-attr,hold-purch-supp-gds-attr,icnt-line,ord-cons-line-attr,ord-dtl,c-ord-dtl,ord-line,c-ord-line,c-ord-line-attr,ord-line-attr,ord-line-rcv,ord-rcv-line-attr,parts-attr,parts-add,c-parts-add,parts-add-attr,c-parts-attr,parts-obj-attr,c-parts-obj-attr,parts-root,parts-root-attr,c-parts-root,pl-gds,c-pl-gds,c-pl-gds-obj,pl-gds-attr,c-pl-gds-attr,c-plc-hist,c-pmp-hist,pl-gds-pump,c-pl-gds-pump,pl-gds-pump-attr,c-pl-gds-pump-attr,price-all,rcs-retail1product,recipe,c-recipe,c-recipe-gds,recipe-gds,recipe-develop,c-recipe-develop,c-recipe-hist,rvs-line,rvs-line-attr,c-rvs-line,rvs-pump,rvs-line-pump,rvs-line-pump-attr,c-rvs-line-pump,s-coeff,c-s-coeff,s-coeff-attr,schet-fact-line,c-schet-fact-line,tax-rate-gds,tax-rate-gds-attr,turnover-buyer-gds,turnover-buyer-gds-attr,user-login-action-item,user-login-action-role,varianty-delivery-gds-obj,c-varianty-delivery-gds-obj,wth-dtl,c-wth-dtl,wth-gds,c-wth-gds,wth-gds-attr,c-wth-gds-attr,wth-dtl,c-wth-dtl,wth-parts,c-wth-parts,xyz-analysis-gds-obj,xyz-analysis-gds-obj-attr,xyz-analysis-goods,xyz-analysis-goods-attr,egais-gds,c-egais-gds,vsd,c-vsd,gds-mercury,c-gds-mercury,PromoGift,PromoGoods,c-PromoGift,c-PromoGoods,OperServ,c-OperServ,c-goods-attr-any,utd-lines,c-utd-marking-lines,c-utd-lines,marking-lines,utd-marking-lines,marking,c-contract-specif-attr,c-marking,order-line,c-order-line,shift-param":U )
+     2504       .
+     2505       do v-ind = 1 to v-num-entries
+     2506       on error  undo update_block, return error substitute( "&1 (TABLE-RGDS_LIST). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+     2507       on stop   undo update_block, return error substitute( "&1 (TABLE-RGDS_LIST). stop", vss-workfile )
+     2508       on quit   undo update_block, return error substitute( "&1 (TABLE-RGDS_LIST). quit", vss-workfile )
+     2509       on endkey undo update_block, return error substitute( "&1 (TABLE-RGDS_LIST). endkey", vss-workfile )
+     2510       :
+     2511         assign
+     2512           v-tbl-name = entry( v-ind, "abc-analysis-gds-obj,abc-analysis-gds-obj-attr,abc-analysis-goods,abc-analysis-goods-attr,abcxyz-analysis-goods,abcxyz-analysis-goods-attr,action-post-role,action-role-item-gds,add-line,c-add-line,aht-gds,aht-gds-attr,aht-ot-line,aht-ot-line-attr,aht-stk-line,aht-stk-line-attr,alc-type-gds,c-alc-type-gds,alc-type-gds-attr,arh-wth-cli,arh-wth-cli-attr,arh-wth-cli-doc,arh-wth-cli-doc-attr,arh-wth-tot,arh-wth-w-p,assortment-matrix-goods,assortment-matrix-goods-attr,c-assortment-matrix-goods,bar-code,bar-code-attr,bar-code-obj-attr,c-bar-code,c-bar-code-attr,c-bar-code-obj-attr,cd-doc-line,c-cd-doc-line,cd-event-log,cd-plu,c-cd-plu,chk-gds-pay,contract-specif,c-contract-specif,contract-specif-attr,dis-gds-rule,c-dis-gds-rule,dis-gds-rule-attr,doc-fbr-gds,c-doc-fbr-gds,doc-fbr-gds-attr,doc-line-attr,c-doc-line-attr,doc-line-sum,c-doc-line-sum,doc-pl,doc-pl-attr,c-doc-pl,doc-pl-pump,doc-pl-pump-attr,c-doc-pl-pump,doc-prts,c-doc-prts,ext-artic,c-ext-artic,ext-artic-attr,c-ext-artic-attr,ext-artic-db,ext-artic-db-attr,ext-artic-host,ext-artic-host-attr,ext-artic-obj,ext-artic-obj-attr,factur-connect-line,fbr-history,fbr-gds-obj,c-fbr-gds-obj,fbr-gds-obj-attr,c-fbr-gds-obj-attr,fbr-pln-line,c-fbr-pln-line,c-fbr-prn,fbr-prn-gds,c-fbr-prn-gds,fbr-prn-gds-attr,fbr-recipe,fbr-recipe-gds,fin-gds-part,fin-gds-part-attr,c-fin-gds-part,c-gds-hist,gds-add-charges,gds-add-charges-attr,c-gds-add-charges,c-gds-add-charges-attr,gds-host-attr,c-gds-host-attr,gds-obj,c-gds-obj,c-gds-obj-ref,gds-obj-attr,c-gds-obj-attr,gds-obj-flag,gds-obj-flag-attr,gds-obj-prop,gds-obj-prop-attr,c-gds-obj-prop,gds-season,gds-season-attr,c-gds-season,c-goods,goods-attr,c-goods-attr,hold-sale,hold-goods,hold-purch,hold-purch-supp-gds,hold-sale-attr,hold-goods-attr,hold-purch-attr,hold-purch-supp-gds-attr,icnt-line,ord-cons-line-attr,ord-dtl,c-ord-dtl,ord-line,c-ord-line,c-ord-line-attr,ord-line-attr,ord-line-rcv,ord-rcv-line-attr,parts-attr,parts-add,c-parts-add,parts-add-attr,c-parts-attr,parts-obj-attr,c-parts-obj-attr,parts-root,parts-root-attr,c-parts-root,pl-gds,c-pl-gds,c-pl-gds-obj,pl-gds-attr,c-pl-gds-attr,c-plc-hist,c-pmp-hist,pl-gds-pump,c-pl-gds-pump,pl-gds-pump-attr,c-pl-gds-pump-attr,price-all,rcs-retail1product,recipe,c-recipe,c-recipe-gds,recipe-gds,recipe-develop,c-recipe-develop,c-recipe-hist,rvs-line,rvs-line-attr,c-rvs-line,rvs-pump,rvs-line-pump,rvs-line-pump-attr,c-rvs-line-pump,s-coeff,c-s-coeff,s-coeff-attr,schet-fact-line,c-schet-fact-line,tax-rate-gds,tax-rate-gds-attr,turnover-buyer-gds,turnover-buyer-gds-attr,user-login-action-item,user-login-action-role,varianty-delivery-gds-obj,c-varianty-delivery-gds-obj,wth-dtl,c-wth-dtl,wth-gds,c-wth-gds,wth-gds-attr,c-wth-gds-attr,wth-dtl,c-wth-dtl,wth-parts,c-wth-parts,xyz-analysis-gds-obj,xyz-analysis-gds-obj-attr,xyz-analysis-goods,xyz-analysis-goods-attr,egais-gds,c-egais-gds,vsd,c-vsd,gds-mercury,c-gds-mercury,PromoGift,PromoGoods,c-PromoGift,c-PromoGoods,OperServ,c-OperServ,c-goods-attr-any,utd-lines,c-utd-marking-lines,c-utd-lines,marking-lines,utd-marking-lines,marking,c-contract-specif-attr,c-marking,order-line,c-order-line,shift-param":U )
+     2513         .
+     2514         run waitfram-show in this-procedure
+     2515           ( input substitute( "Переименование кода товара &1. Обработка таблицы &2", old-gds-code, v-tbl-name )
+     2516           ).
+     2517         run ren-gds-code in this-procedure
+     2518           ( input v-tbl-name
+     2519            ,input old-gds-key-rec
+     2520            ,input old-gds-code
+     2521            ,input new-gds-code
+     2522            ,input "":U
+     2523            ,input "":U
+     2524            ,input "":U
+     2525           ) no-error.
+     2526         if error-status :error then do:
+     2527           undo, return error substitute( "&1. Ошибка при переименовании кода товара в таблице &2&3&4&3&5"
+     2528                                         ,vss-workfile
+     2529                                         ,v-tbl-name
+     2530                                         ,chr(10)
+     2531                                         ,error-status :get-message(1)
+     2532                                         ,return-value
+     2533                                       ) .
+     2534         end.
+     2535       end.
+     2536       run waitfram-show in this-procedure
+     2537         (input substitute( "Переименование кода товара &1. Обработка таблицы &2", old-gds-code, 'goods':U )
+     2538         ).
+     2539       run ren-gds-code in this-procedure
+     2540         ( input 'goods':U
+     2541          ,input old-gds-key-rec
+     2542          ,input old-gds-code
+     2543          ,input new-gds-code
+     2544          ,input "":U
+     2545          ,input "":U
+     2546          ,input "":U
+     2547         ) no-error.
+     2548       if error-status :error then do:
+     2549         undo, return error substitute( "&1. Ошибка при переименовании кода товара в таблице &2&3&4&3&5"
+     2550                                       ,vss-workfile
+     2551                                       ,'goods':U
+     2552                                       ,chr(10)
+     2553                                       ,error-status :get-message(1)
+     2554                                       ,return-value
+     2555                                     ) .
+     2556       end.
+     2557       run waitfram-show in this-procedure
+     2558         (input substitute( "Переименование кода товара &1. Создание записи истории", old-gds-code )
+     2559         ).
+     2560       run goodsh_write-goods-proc in this-procedure
+     2561         ( buffer buf_rename_goods
+     2562          ,input integer('9':U)
+     2563          ,input 'ren-gdsc':U
+     2564          ,input string( old-gds-code )
+     2565         ) .
+     2566     end.
+     2567     run waitfram-hide in this-procedure .
+     2568     return .
+     2569   end.
+     2570   procedure invalidate-md5-signature :
+     2571     define buffer buf_archive-history for ub.archive-history .
+     2572     do
+     2573     on error undo, return error return-value
+     2574     :
+     2575       define variable v-create-chip-num as integer   no-undo .
+     2576       for each buf_archive-history exclusive-lock
+     2577         where buf_archive-history.file-valid = true
+     2578       break
+     2579       by buf_archive-history.obj-type
+     2580       by buf_archive-history.obj-code
+     2581       by buf_archive-history.archive-type
+     2582       on error undo, return error return-value
+     2583       :
+     2584         if first-of(buf_archive-history.archive-type)
+     2585         then do:
+     2586           run utl/arhiscr.p
+     2587             (input  buf_archive-history.obj-type
+     2588             ,input  buf_archive-history.obj-code
+     2589             ,input  buf_archive-history.archive-type
+     2590             ,input  'ren-gds-code':U
+     2591             ,input  ""
+     2592             ,input  ""
+     2593             ,input  0
+     2594             ,input  ""
+     2595             ,input  ""
+     2596             ,input  ?
+     2597             ,output v-create-chip-num
+     2598             ) .
+     2599         end.
+     2600         assign
+     2601           buf_archive-history.file-valid            = false
+     2602           buf_archive-history.file-invalid-chip-num = v-create-chip-num
+     2603         .
+     2604       end.
+     2605     end.
+     2606   end procedure.

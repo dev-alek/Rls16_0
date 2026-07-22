@@ -1,0 +1,3085 @@
+        1   block-level on error undo, throw.
+        2   using ibs.th.str.*.
+        3   define  shared temp-table tt-susp-chk no-undo like ub.susp-chk .
+        4   define input parameter parparentproc as widget-handle no-undo .
+        5   define input parameter p-curr-obj-type like ub.clients.obj-type no-undo .
+        6   define input parameter p-curr-obj-code like ub.clients.obj-code no-undo .
+        7   define input  parameter p-check-cass    as   logical             no-undo.
+        8   define input  parameter p-silent        as   logical             no-undo .
+        9   define variable vss-revision    as char no-undo init "$Revision$":U .
+       10   define variable vss-author      as char no-undo init "$Author$":U .
+       11   define variable vss-date        as char no-undo init "$Date$":U .
+       12   define variable vss-workfile    as char no-undo init "$Workfile$":U .
+       13   define variable vss-archive     as char no-undo init "$Archive$":U .
+       14   define variable vss-description as char no-undo init "Закрытие смены".
+       15   define new global shared variable g#language as character no-undo .
+       16   if g#language <> '' and g#language <> 'rus':U then do:
+       17     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       18   end.
+       19   define new global shared variable g#library  as handle no-undo .
+       20   define new global shared variable g#library2 as handle no-undo .
+       21   define   shared variable g#auto as logical no-undo.
+       22   define   shared variable g#news as logical no-undo.
+       23   define   shared variable g#oxml as logical no-undo.
+       24   define   shared variable g#esys as logical no-undo.
+       25   define   shared variable g#news-source-db as integer no-undo.
+       26   define   shared variable g#esys-source-esys as integer no-undo.
+       27   define   shared variable g#db-num as integer   no-undo .
+       28   define   shared variable g#userid as character no-undo .
+       29   define   shared variable g#passwd as character no-undo .
+       30   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       31     define variable v-cntxt-db-num        as integer   no-undo .
+       32     define variable v-cntxt-userid        as character no-undo .
+       33     define variable v-cntxt-level         as character no-undo .
+       34     define variable v-cntxt-host-code-obj as integer   no-undo .
+       35     define variable v-cntxt-obj-type      as character no-undo .
+       36     define variable v-cntxt-obj-code      as integer   no-undo .
+       37     define variable v-cntxt-db-num-obj    as integer   no-undo .
+       38     define variable v-cntxt-is-admin      as logical   no-undo .
+       39   def var vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       40   procedure gen-key-rec :
+       41     define input  parameter p-tbl-name    as character no-undo.
+       42     define input  parameter p-bh_tbl-name as handle    no-undo.
+       43     define output parameter p-key-rec     as character no-undo.
+       44     do
+       45     on error  undo, return error substitute( "&1 (gen-key-rec). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+       46     on stop   undo, return error substitute( "&1 (gen-key-rec). stop", vss-workfile )
+       47     on endkey undo, return error substitute( "&1 (gen-key-rec). endkey", vss-workfile )
+       48     :
+       49       define variable fh               as handle    no-undo .
+       50       define variable v-ok             as logical   no-undo .
+       51       define variable v-inform         as character no-undo .
+       52       define variable v-ind            as integer   no-undo .
+       53       define variable v-idx-field-qnty as integer   no-undo .
+       54       if p-tbl-name = ?
+       55         or p-tbl-name = "":U
+       56       then do:
+       57         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Не задано имя таблицы.", vss-include-info1 ).
+       58       end.
+       59       if not p-bh_tbl-name:available then do:
+       60         return error substitute( "&1 (gen-key-rec). Ошибка задания входных параметров. Переданый буфер таблицы &2 не доступен", vss-include-info1, p-tbl-name ).
+       61       end.
+       62       assign
+       63         p-key-rec = p-tbl-name
+       64         v-inform  = p-bh_tbl-name:index-information(1)
+       65         v-ind     = 2
+       66       .
+       67       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+       68       on error undo, return error
+       69       :
+       70         assign
+       71           v-inform = p-bh_tbl-name:index-information( v-ind )
+       72           v-ind    = v-ind + 1
+       73         .
+       74       end.
+       75       if v-inform = ?
+       76         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+       77         or entry( 3, v-inform, ",":U ) <> "1":U
+       78       then do:
+       79         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info1, p-tbl-name ).
+       80       end.
+       81       else do:
+       82         assign
+       83           v-idx-field-qnty = num-entries( v-inform ) - 4
+       84         .
+       85         if v-idx-field-qnty < 2 then do:
+       86           return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info1, v-inform, p-tbl-name ).
+       87         end.
+       88         do v-ind = 1 to v-idx-field-qnty by 2
+       89         on error undo, return error
+       90         :
+       91           assign
+       92             fh = p-bh_tbl-name:buffer-field( entry( 4 + v-ind, v-inform, ",":U ) ).
+       93             p-key-rec = p-key-rec + chr(3) + substitute("&1", replace(fh:buffer-value(),chr(3),chr(2) + chr(9) + chr (2)))
+       94           .
+       95         end.
+       96       end.
+       97       if p-key-rec = ? then do:
+       98         assign
+       99           p-key-rec = "":U
+      100         .
+      101         return error substitute( "&1. Поле(поля) первичного ключа таблицы &2 имеет(ют) неопределенное значение", vss-include-info1, p-tbl-name ).
+      102       end.
+      103     end.
+      104     return.
+      105   end procedure.
+      106   procedure gen-where-keyr-tab :
+      107     define input  parameter i-tableSerach as character no-undo.
+      108     define input  parameter i-tablekey   as character  no-undo.
+      109     define input  parameter p-key-rec    as character  no-undo.
+      110     define input  parameter p-key-handle as handle     no-undo .
+      111     define input  parameter p-db-name    as character  no-undo .
+      112     define input  parameter p-tt-handle  as handle     no-undo .
+      113     define output parameter o-Where      as character  no-undo.
+      114     do
+      115     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      116     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      117     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile )
+      118     :
+      119       define variable v-full-tbl-name  as character no-undo .
+      120       define variable bh_tbl-name      as handle    no-undo .
+      121       define variable fh_key           as handle    no-undo .
+      122       define variable fh_search        as handle    no-undo .
+      123       define variable v-field-num      as integer   no-undo .
+      124       define variable v-count-fld      as integer   no-undo .
+      125       define variable v-inform         as character no-undo .
+      126       define variable v-ind            as integer   no-undo .
+      127       define variable v-idx-field-qnty as integer   no-undo .
+      128       define variable v-field-name     as character no-undo .
+      129       define variable v-field-val      as character no-undo .
+      130       define variable v-word-link      as character no-undo .
+      131       define variable vTable           as character no-undo.
+      132       define variable bh_tbl-key       as handle    no-undo .
+      133       assign
+      134         p-key-rec = trim( p-key-rec )
+      135       .
+      136       if p-key-handle <> ? then do:
+      137         if not valid-handle(p-key-handle)
+      138            or p-key-handle:type <> "buffer"
+      139         then do:
+      140           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Задан невалидный буфер для поиска.", vss-include-info1 ).
+      141         end.
+      142         if num-entries( p-key-rec, chr(3) ) > 1
+      143           or p-key-rec = ?
+      144           or p-key-rec = "":U
+      145         then do:
+      146           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. При поиске по буферу вместо ключа (&2) должено быть 'имя таблицы'.", vss-include-info1, p-key-rec ).
+      147         end.
+      148       end.
+      149       else do:
+      150         if p-key-rec = ?
+      151           or p-key-rec = "":U
+      152         then do:
+      153           return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info1 ).
+      154         end.
+      155       end.
+      156       assign
+      157         vTable = entry( 1 , p-key-rec, chr(3) )
+      158       .
+      159       if p-tt-handle <> ?
+      160         and ( not valid-handle(p-tt-handle)
+      161               or p-tt-handle:type <> "buffer"
+      162             )
+      163       then do:
+      164         return error substitute( "&1 (gen-row-keyr). Ошибка задания входных параметров. &2&3Передан невалидный handle для поиска или handle не типа BUFFER", vss-include-info1, vTable, chr(10) ).
+      165       end.
+      166       if p-tt-handle = ? then do:
+      167         assign
+      168           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable )
+      169         .
+      170         create buffer bh_tbl-name for table v-full-tbl-name .
+      171       end.
+      172       else do:
+      173         create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      174       end.
+      175       assign
+      176         v-inform = bh_tbl-name:index-information(1)
+      177         v-ind    = 2
+      178       .
+      179       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      180       on error undo, return error
+      181       :
+      182         assign
+      183           v-inform = bh_tbl-name:index-information( v-ind )
+      184           v-ind    = v-ind + 1
+      185         .
+      186       end.
+      187       if v-inform = ?
+      188         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      189         or entry( 3, v-inform, ",":U ) <> "1":U
+      190       then do:
+      191         delete object bh_tbl-name no-error.
+      192         return error substitute( "&1. Таблица &2 не имеет первичного ключа", vss-include-info1, vTable ).
+      193       end.
+      194       assign
+      195         v-idx-field-qnty = num-entries( v-inform ) - 4
+      196       .
+      197       if v-idx-field-qnty < 2 then do:
+      198         delete object bh_tbl-name no-error.
+      199         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info1, v-inform, vTable ).
+      200       end.
+      201       assign
+      202         o-where     = "where":U
+      203         v-word-link = "":U
+      204         v-field-num = num-entries( p-key-rec, chr(3) ) - 1
+      205         v-count-fld = 0
+      206       .
+      207       if i-tablekey ne "" and i-tablekey ne ?
+      208       then do:
+      209         assign
+      210           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tablekey )
+      211         .
+      212         create buffer bh_tbl-key for table v-full-tbl-name .
+      213       end.
+      214       if i-tableSerach ne "" and i-tableSerach ne ?
+      215       then do:
+      216         delete object bh_tbl-name no-error.
+      217         assign
+      218           v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach )
+      219         .
+      220         create buffer bh_tbl-name for table v-full-tbl-name .
+      221       end.
+      222       block_where:
+      223       do v-ind = 1 to v-idx-field-qnty by 2
+      224       on error undo, return error
+      225       :
+      226         assign
+      227           v-count-fld = v-count-fld + 1
+      228         .
+      229         if p-key-handle = ?
+      230           and v-count-fld > v-field-num
+      231         then do:
+      232           leave block_where.
+      233         end.
+      234         define variable VfieldKeyTable as handle no-undo.
+      235         assign
+      236           v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+      237           fh_search    = bh_tbl-name:buffer-field( v-field-name )
+      238         .
+      239         if     bh_tbl-key ne ?
+      240         then do:
+      241            VfieldKeyTable = bh_tbl-key:buffer-field( v-field-name ) no-error.
+      242            if VfieldKeyTable eq ?
+      243            then next block_where.
+      244         end.
+      245         if v-full-tbl-name ne "" and v-full-tbl-name ne ?
+      246         then
+      247            o-where = substitute( "&1 &2 &3.&4 =", o-where, v-word-link,v-full-tbl-name, v-field-name ).
+      248         else
+      249            o-where = substitute( "&1 &2 &3 =", o-where, v-word-link, v-field-name ).
+      250         if p-key-handle = ? then do:
+      251           assign
+      252             v-field-val = replace (entry( v-count-fld + 1 , p-key-rec, chr(3) ),chr(2) + chr(9) + chr (2),chr(3))
+      253           .
+      254         end.
+      255         else do:
+      256           assign
+      257             fh_key = p-key-handle:buffer-field( v-field-name )
+      258           .
+      259           if fh_key = ?
+      260             or not valid-handle( fh_key )
+      261           then do:
+      262             delete object bh_tbl-name.
+      263             if     bh_tbl-key ne ?
+      264             then
+      265                delete object bh_tbl-key.
+      266             return error substitute( "&1. Буфер &2 не содержит поля &3 необходимого для поиска.", vss-include-info1, p-key-handle:name, v-field-name ).
+      267           end.
+      268           assign
+      269             v-field-val = fh_key:buffer-value
+      270           .
+      271         end.
+      272         if fh_search:data-type ="character":U then do:
+      273           assign
+      274             v-field-val = replace( v-field-val, '~~':U, '~~~~':U )
+      275             v-field-val = replace( v-field-val, '"':U, '~~"':U )
+      276             v-field-val = replace( v-field-val, "'":U, "~~'":U )
+      277             v-field-val = replace( v-field-val, '~{':U, '~~~{':U )
+      278             v-field-val = replace( v-field-val, '~}':U, '~~~}':U )
+      279             v-field-val = replace( v-field-val, '~\':U, '~~~\':U )
+      280             v-field-val = replace( v-field-val, chr(10), '~~n':U )
+      281             v-field-val = replace( v-field-val, chr(9), '~~t':U )
+      282             v-field-val = replace( v-field-val, chr(13), '~~r':U )
+      283             v-field-val = replace( v-field-val, chr(27), '~~E':U )
+      284             v-field-val = replace( v-field-val, chr(8), '~~b':U )
+      285             v-field-val = replace( v-field-val, chr(12), '~~f':U )
+      286             v-field-val = substitute( '"&1"', v-field-val )
+      287           .
+      288         end.
+      289         assign
+      290           o-where = substitute( "&1 &2", o-where, v-field-val )
+      291         .
+      292         if v-word-link = "":U then do:
+      293           assign
+      294             v-word-link = "and":U
+      295           .
+      296         end.
+      297       end.
+      298       delete object bh_tbl-name.
+      299       if     bh_tbl-key ne ?
+      300       then
+      301          delete object bh_tbl-key.
+      302       if p-key-handle = ?
+      303         and v-count-fld <> v-field-num
+      304       then do:
+      305         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2", vss-include-info1, vTable ).
+      306       end.
+      307     end.
+      308   end procedure.
+      309   procedure gen-hn-keyr-tab :
+      310     define input  parameter i-tableSerach as character no-undo.
+      311     define input  parameter i-tablekey   as character no-undo.
+      312     define input  parameter p-key-rec    as character no-undo.
+      313     define input  parameter p-key-handle as handle    no-undo .
+      314     define input  parameter p-db-name    as character no-undo .
+      315     define input  parameter p-tt-handle  as handle    no-undo .
+      316     define input  parameter p-stts-lock  as integer   no-undo .
+      317     define output parameter o-hn         as handle    no-undo.
+      318     define variable v-full-tbl-name as character no-undo.
+      319     define variable v-where         as character no-undo.
+      320     define variable bh_tbl-name     as handle    no-undo.
+      321     define variable vTable          as character no-undo.
+      322     do
+      323     on error  undo, return error substitute( "&1 (gen-row-keyr). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      324     on stop   undo, return error substitute( "&1 (gen-row-keyr). stop", vss-workfile )
+      325     on endkey undo, return error substitute( "&1 (gen-row-keyr). endkey", vss-workfile ):
+      326         run gen-where-keyr-tab(i-tableSerach,
+      327                                i-tablekey,
+      328                                p-key-rec,
+      329                                p-key-handle,
+      330                                p-db-name,
+      331                                p-tt-handle,
+      332                                output v-where).
+      333         if i-tableSerach ne "" and i-tableSerach ne ?
+      334         then do:
+      335            v-full-tbl-name = substitute( "&1.&2":U, p-db-name, i-tableSerach ).
+      336            create buffer bh_tbl-name for table v-full-tbl-name .
+      337         end.
+      338         else do:
+      339            if p-tt-handle = ? then do:
+      340               assign
+      341                  vTable = entry( 1 , p-key-rec, chr(3) )
+      342               .
+      343               v-full-tbl-name = substitute( "&1.&2":U, p-db-name, vTable ).
+      344               create buffer bh_tbl-name for table v-full-tbl-name .
+      345            end.
+      346            else do:
+      347               create buffer bh_tbl-name for table p-tt-handle:table-handle .
+      348            end.
+      349         end.
+      350         if p-tt-handle = ? then do:
+      351            bh_tbl-name:find-first( v-where, p-stts-lock ) no-error .
+      352         end.
+      353         else do:
+      354            bh_tbl-name:find-first( v-where ) no-error .
+      355         end.
+      356         o-hn = bh_tbl-name.
+      357      end.
+      358   end procedure.
+      359   procedure gen-hn-keyr :
+      360     define input  parameter p-key-rec    as character no-undo.
+      361     define input  parameter p-key-handle as handle    no-undo .
+      362     define input  parameter p-db-name    as character no-undo .
+      363     define input  parameter p-tt-handle  as handle    no-undo .
+      364     define input  parameter p-stts-lock  as integer   no-undo .
+      365     define output parameter o-hn         as handle    no-undo.
+      366     run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output o-hn).
+      367   end.
+      368   procedure gen-row-keyr :
+      369     define input  parameter p-key-rec    as character no-undo.
+      370     define input  parameter p-key-handle as handle    no-undo .
+      371     define input  parameter p-db-name    as character no-undo .
+      372     define input  parameter p-tt-handle  as handle    no-undo .
+      373     define input  parameter p-stts-lock  as integer   no-undo .
+      374     define output parameter p-tbl-row    as rowid     no-undo.
+      375     define output parameter p-tbl-name   as character no-undo.
+      376     define variable vHn as handle no-undo.
+      377       run gen-hn-keyr-tab(?,?,p-key-rec,p-key-handle,p-db-name,p-tt-handle,p-stts-lock,output vHn).
+      378       p-tbl-row = if vHn:available then vHn:rowid else ?.
+      379       p-tbl-name =  vHn:table.
+      380       delete object vHn no-error.
+      381     if p-tbl-row = ? then do:
+      382       return substitute( "Не найдена запись таблицы &2 по ключу &3", vss-include-info1, p-tbl-name, p-key-rec ).
+      383     end.
+      384     else do:
+      385       return.
+      386     end.
+      387   end procedure.
+      388   procedure gen-key-fv :
+      389     define input  parameter p-key-rec    as character no-undo .
+      390     define output parameter p-field-list as character no-undo .
+      391     define output parameter p-value-list as character no-undo.
+      392     do
+      393     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      394     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      395     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      396     :
+      397       define variable v-full-tbl-name  as character no-undo .
+      398       define variable bh_tbl-name      as handle    no-undo .
+      399       define variable v-tbl-name       as character no-undo .
+      400       define variable v-field-num      as integer   no-undo .
+      401       define variable v-count-fld      as integer   no-undo .
+      402       define variable v-inform         as character no-undo .
+      403       define variable v-ind            as integer   no-undo .
+      404       define variable v-idx-field-qnty as integer   no-undo .
+      405       define variable v-delim-key      as character no-undo .
+      406       if p-key-rec = ?
+      407         or p-key-rec = "":U
+      408       then do:
+      409         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан уникальный ключ.", vss-include-info1 ).
+      410       end.
+      411       assign
+      412         v-tbl-name      = entry( 1 , p-key-rec, chr(3) )
+      413         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      414       .
+      415       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      416       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверный уникальный ключ.", vss-include-info1 ).
+      417       assign
+      418         v-inform = bh_tbl-name:index-information(1)
+      419         v-ind    = 2
+      420       .
+      421       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      422       on error undo, return error
+      423       :
+      424         assign
+      425           v-inform = bh_tbl-name:index-information( v-ind )
+      426           v-ind    = v-ind + 1
+      427         .
+      428       end.
+      429       if v-inform = ?
+      430         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      431         or entry( 3, v-inform, ",":U ) <> "1":U
+      432       then do:
+      433         delete object bh_tbl-name no-error.
+      434         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info1, v-tbl-name ).
+      435       end.
+      436       assign
+      437         v-idx-field-qnty = num-entries( v-inform ) - 4
+      438       .
+      439       if v-idx-field-qnty < 2 then do:
+      440         delete object bh_tbl-name no-error.
+      441         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info1, v-inform, v-tbl-name ).
+      442       end.
+      443       assign
+      444         p-field-list = "":U
+      445         p-value-list = "":U
+      446         v-delim-key  = "":U
+      447         v-field-num  = num-entries( p-key-rec, chr(3) ) - 1
+      448         v-count-fld  = 0
+      449       .
+      450       block_where:
+      451       do v-ind = 1 to v-idx-field-qnty by 2
+      452       on error undo, return error
+      453       :
+      454         assign
+      455           v-count-fld = v-count-fld + 1
+      456         .
+      457         if v-count-fld > v-field-num then do:
+      458           leave block_where.
+      459         end.
+      460         assign
+      461           p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U )
+      462           p-value-list = p-value-list + v-delim-key + entry( v-count-fld + 1 , p-key-rec, chr(3) )
+      463         .
+      464         if v-ind = 1 then do:
+      465           assign
+      466             v-delim-key = chr(3)
+      467           .
+      468         end.
+      469       end.
+      470       delete object bh_tbl-name.
+      471       if v-count-fld <> v-field-num then do:
+      472         return error substitute( "&1. Не совпадает количество полей первичного ключа для таблицы &2 в БД", vss-include-info1, v-tbl-name ).
+      473       end.
+      474     end.
+      475   end procedure.
+      476   procedure gen-key-field :
+      477     define input  parameter p-table      as character no-undo .
+      478     define output parameter p-field-list as character no-undo .
+      479     do
+      480     on error  undo, return error substitute( "&1 (gen-key-fv). &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( error-status :num-messages ) )
+      481     on stop   undo, return error substitute( "&1 (gen-key-fv). stop", vss-workfile )
+      482     on endkey undo, return error substitute( "&1 (gen-key-fv). endkey", vss-workfile )
+      483     :
+      484       define variable v-full-tbl-name  as character no-undo .
+      485       define variable bh_tbl-name      as handle    no-undo .
+      486       define variable v-tbl-name       as character no-undo .
+      487       define variable v-field-num      as integer   no-undo .
+      488       define variable v-count-fld      as integer   no-undo .
+      489       define variable v-inform         as character no-undo .
+      490       define variable v-ind            as integer   no-undo .
+      491       define variable v-idx-field-qnty as integer   no-undo .
+      492       define variable v-delim-key      as character no-undo .
+      493       if p-table = ?
+      494         or p-table = "":U
+      495       then do:
+      496         return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Не задан таблица.", vss-include-info1 ).
+      497       end.
+      498       assign
+      499         v-tbl-name      = p-table
+      500         v-full-tbl-name = substitute( "ub.&1":U, v-tbl-name )
+      501       .
+      502       create buffer bh_tbl-name for table v-full-tbl-name no-error .
+      503       if error-status:error then return error substitute( "&1 (gen-key-fv). Ошибка задания входных параметров. Неверная таблица.", vss-include-info1 ).
+      504       assign
+      505         v-inform = bh_tbl-name:index-information(1)
+      506         v-ind    = 2
+      507       .
+      508       do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+      509       on error undo, return error
+      510       :
+      511         assign
+      512           v-inform = bh_tbl-name:index-information( v-ind )
+      513           v-ind    = v-ind + 1
+      514         .
+      515       end.
+      516       if v-inform = ?
+      517         or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+      518         or entry( 3, v-inform, ",":U ) <> "1":U
+      519       then do:
+      520         return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-include-info1, v-tbl-name ).
+      521       end.
+      522       assign
+      523         v-idx-field-qnty = num-entries( v-inform ) - 4
+      524       .
+      525       if v-idx-field-qnty < 2 then do:
+      526         return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-include-info1, v-inform, v-tbl-name ).
+      527       end.
+      528       assign
+      529         p-field-list = "":U
+      530         v-delim-key  = "":U
+      531         v-count-fld  = 0
+      532       .
+      533       block_where:
+      534       do v-ind = 1 to v-idx-field-qnty by 2
+      535       on error undo, return error
+      536       :
+      537         assign
+      538           v-count-fld = v-count-fld + 1
+      539         .
+      540         p-field-list = p-field-list + v-delim-key + entry( 4 + v-ind, v-inform, ",":U ).
+      541         if v-ind = 1 then do:
+      542           assign
+      543             v-delim-key = chr(3)
+      544           .
+      545         end.
+      546       end.
+      547       delete object bh_tbl-name.
+      548     end.
+      549   end procedure.
+      550   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      551   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      552   define variable tempcxml_v-num_ as integer no-undo .
+      553   define  temp-table temp-xml-tables no-undo
+      554   field order as integer
+      555   field tbl-name as character
+      556   field tbl-handle_ as handle
+      557   field table-handle_ as handle
+      558   field uniq-gate-rec as character
+      559   field gate-name as character
+      560   field gate-handle_ as handle
+      561   field is-parent as logical
+      562   index pi is unique primary
+      563   uniq-gate-rec
+      564   tbl-name
+      565   index iorder
+      566   order
+      567   index gr
+      568   uniq-gate-rec
+      569   index gh
+      570   gate-handle_
+      571   index iparent
+      572   is-parent
+      573   .
+      574   define  temp-table temp-xml-records no-undo
+      575   field tbl-name as character
+      576   field uniq-key-rec as character
+      577   index pi is unique primary
+      578   tbl-name
+      579   uniq-key-rec
+      580   .
+      581   define variable s-date                as date      no-undo .
+      582   define variable e-date                as date      no-undo .
+      583   define variable s-time                as integer   no-undo .
+      584   define variable e-time                as integer   no-undo .
+      585   define variable s-num                 as integer   no-undo .
+      586   define variable s-name                as character no-undo .
+      587   define variable is-super              as logical   no-undo .
+      588   define variable v-cancel              as logical   no-undo .
+      589   define variable glog                  as logical   no-undo .
+      590   define variable v-cur-date-error-code as integer   no-undo .
+      591   define variable v-err-msg             as character no-undo .
+      592   define variable v-rum-err             as logical   no-undo .
+      593   define variable v-shift-date          as date      no-undo .
+      594   define variable v-shift-num           as integer   no-undo .
+      595   define variable v-shift-name          as character no-undo .
+      596   define variable v-obj-date            as date      no-undo .
+      597   define variable ii                    as integer   no-undo .
+      598   define variable place-list            as character no-undo .
+      599   define buffer buf_pl-gds     for ub.pl-gds .
+      600   define buffer buf_shift-obj  for ub.shift-obj .
+      601   define buffer buf_place-attr for ub.place-attr .
+      602   define buffer buf_place-imp  for ub.place-imp .
+      603   define buffer cur_rvs-doc    for ub.rvs-doc .
+      604   define buffer cur_rvs-line   for ub.rvs-line .
+      605   define buffer prev_shift-obj for ub.shift-obj .
+      606   define buffer prev_rvs-doc   for ub.rvs-doc .
+      607   define buffer prev_rvs-line  for ub.rvs-line .
+      608   define buffer buf_place      for ub.place .
+      609   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      610     run mainmenu_getcntxt in parparentproc
+      611       (output v-cntxt-db-num
+      612       ,output v-cntxt-userid
+      613       ,output v-cntxt-level
+      614       ,output v-cntxt-host-code-obj
+      615       ,output v-cntxt-obj-type
+      616       ,output v-cntxt-obj-code
+      617       ,output v-cntxt-db-num-obj
+      618       ,output v-cntxt-is-admin
+      619       ) .
+      620   assign
+      621       is-super = no
+      622       .
+      623   define variable vss-include-info5 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      624   do:
+      625     if (valid-handle(g#library2) <> true) then do:   run gbl/library2.p persistent no-error .   if error-status :error or (valid-handle(g#library2) <> true) then do:     message       "Error starting library2.p" skip       g#library2 skip       g#library2 :type skip       g#library2 :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run chk-actg in g#library2
+      626       (input  v-cntxt-db-num
+      627       ,input  v-cntxt-userid
+      628       ,input  0
+      629       ,input  'actn_shift_super':U
+      630       ,input  'object':U
+      631       ,input  v-cntxt-host-code-obj
+      632       ,input  v-cntxt-obj-type
+      633       ,input  v-cntxt-obj-code
+      634       ,input  0
+      635       ,input  0
+      636       ,input  0
+      637       ,input  false
+      638       ,output glog
+      639       )  .
+      640   end.
+      641   if glog
+      642       then
+      643   do:
+      644       assign
+      645           is-super = yes
+      646           .
+      647   end.
+      648   else
+      649   do:
+      650   define variable vss-include-info6 as character format "X(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      651   do:
+      652     if (valid-handle(g#library2) <> true) then do:   run gbl/library2.p persistent no-error .   if error-status :error or (valid-handle(g#library2) <> true) then do:     message       "Error starting library2.p" skip       g#library2 skip       g#library2 :type skip       g#library2 :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run chk-actg in g#library2
+      653       (input  v-cntxt-db-num
+      654       ,input  v-cntxt-userid
+      655       ,input  0
+      656       ,input  'actn_shift_regular':U
+      657       ,input  'object':U
+      658       ,input  v-cntxt-host-code-obj
+      659       ,input  v-cntxt-obj-type
+      660       ,input  v-cntxt-obj-code
+      661       ,input  0
+      662       ,input  0
+      663       ,input  0
+      664       ,input  false
+      665       ,output glog
+      666       )  .
+      667   end.
+      668   end.
+      669   if not glog then
+      670   do:
+      671       assign
+      672           v-err-msg = substitute( "Вы не имеете прав для работы со сменами.&1Объект: &2&3&1", chr(10), p-curr-obj-type, p-curr-obj-code )
+      673           .
+      674       if p-silent <> true then
+      675       do:
+      676           message
+      677               v-err-msg
+      678               view-as alert-box information.
+      679       end.
+      680       undo, return error v-err-msg .
+      681   end.
+      682   find first buf_shift-obj
+      683       where buf_shift-obj.obj-type = p-curr-obj-type
+      684       and buf_shift-obj.obj-code = p-curr-obj-code
+      685       and buf_shift-obj.status_ = 'тек':U
+      686       use-index pi
+      687       no-error.
+      688   if not available buf_shift-obj then
+      689   do:
+      690       assign
+      691           v-err-msg = substitute( "Нет открытой смены на объекте: &2&3&1Невозможно закрыть текущую смену.", chr(10), p-curr-obj-type, p-curr-obj-code )
+      692           .
+      693       if p-silent <> true then
+      694       do:
+      695           message
+      696               v-err-msg
+      697               view-as alert-box error.
+      698       end.
+      699       undo, return error v-err-msg .
+      700   end.
+      701   assign
+      702       s-date       = buf_shift-obj.shift-date
+      703       s-num        = buf_shift-obj.shift-num
+      704       s-name       = buf_shift-obj.shift-name
+      705       s-time       = buf_shift-obj.open-time
+      706       v-shift-date = buf_shift-obj.shift-date
+      707       v-shift-num  = buf_shift-obj.shift-num
+      708       v-shift-name = buf_shift-obj.shift-name
+      709       .
+      710   if p-silent <> true then
+      711   do:
+      712       glog = no.
+      713       message
+      714           "Закрыть текущую смену по" p-curr-obj-type p-curr-obj-code skip
+      715           "Дата начала смены:" buf_shift-obj.open-date skip
+      716           "Время начала смены:" string( buf_shift-obj.open-time, "HH:MM" ) skip
+      717           "Номер смены:" s-name skip
+      718           "Порядок смены:" s-num "?"
+      719           view-as alert-box question buttons OK-Cancel update glog.
+      720       if not glog then
+      721           return error.
+      722   end.
+      723   if buf_shift-obj.open-id <> v-cntxt-userid
+      724       and is-super = false
+      725       then
+      726   do:
+      727       assign
+      728           v-err-msg = substitute( "Смена должна быть закрыта тем же пользователем,&1"
+      729                               + "который ее открывал или менеджером.&1"
+      730                               + "Невозможно закрыть текущую смену.&1"
+      731                               + "Открыл текущую смену: &2&1"
+      732                               , chr(10)
+      733                               , buf_shift-obj.open-id
+      734                             ) .
+      735       if p-silent <> true then
+      736       do:
+      737           message
+      738               v-err-msg
+      739               view-as alert-box.
+      740       end.
+      741       undo, return error v-err-msg .
+      742   end.
+      743   if p-check-cass = true then
+      744   do:
+      745       run str/deskshft.p
+      746           ( input parparentproc
+      747           ,input p-silent
+      748           ,input p-curr-obj-type
+      749           ,input p-curr-obj-code
+      750           ,input s-date
+      751           ,input s-num
+      752           ,input s-name
+      753           ) no-error.
+      754       if error-status :error then
+      755       do:
+      756           assign
+      757               v-err-msg = substitute( "&1.&2&3&2&4&2"
+      758                                   , vss-workfile
+      759                                   , chr(10)
+      760                                   , return-value
+      761                                   , error-status :get-message (1)
+      762                                 ).
+      763           if p-silent <> true then
+      764           do:
+      765               message
+      766                   v-err-msg
+      767                   view-as alert-box error.
+      768           end.
+      769           undo, return error v-err-msg .
+      770       end.
+      771   end.
+      772   if p-silent <> true then
+      773   do:
+      774       run gbl/shift.w
+      775           ( input parparentproc
+      776           ,input p-curr-obj-type
+      777           ,input p-curr-obj-code
+      778           ,input-output s-date
+      779           ,input-output e-date
+      780           ,input-output s-time
+      781           ,input-output e-time
+      782           ,input-output s-num
+      783           ,input-output s-name
+      784           ,input 'time-only':U
+      785           ,output v-cancel
+      786           ) no-error.
+      787       if error-status:error then
+      788       do:
+      789           message
+      790               vss-workfile vss-revision vss-description
+      791               skip
+      792               "Ошибка ввода времени для закрытия смены."
+      793               skip return-value
+      794               skip trim(error-status :get-message(1))
+      795               trim(error-status :get-message(2))
+      796               trim(error-status :get-message(3))
+      797               trim(error-status :get-message(4))
+      798               trim(error-status :get-message(5))
+      799               view-as alert-box error.
+      800           undo, return error .
+      801       end.
+      802       if v-cancel = true then
+      803       do:
+      804           undo, return error.
+      805       end.
+      806   end.
+      807   run str/checknakl.p
+      808       ( input parparentproc
+      809       ,input p-silent
+      810       ,input p-curr-obj-type
+      811       ,input p-curr-obj-code
+      812       ,input s-date
+      813       ,input s-num
+      814       ,input s-name
+      815       ,output v-cancel
+      816       ) no-error.
+      817   if v-cancel = false then
+      818   do:
+      819       undo, return error.
+      820   end.
+      821   stop-shift:
+      822   do transaction
+      823       on error undo stop-shift, return error return-value
+      824       :
+      825   define variable prc-dev-mass as decimal no-undo .
+      826   define variable dev-paid-trans as decimal no-undo .
+      827   define buffer buf_shift-param for ub.shift-param .
+      828   define buffer buf_rvs-doc       for ub.rvs-doc .
+      829   define buffer buf_rvs-line      for ub.rvs-line .
+      830   define buffer buf_chk-doc       for ub.chk-doc .
+      831   define buffer buf_chk-gds       for ub.chk-gds.
+      832   define buffer bf_chk-gds        for ub.chk-gds.
+      833   define buffer buf_bar-code      for ub.bar-code.
+      834   define buffer bf_place          for ub.place .
+      835   define buffer buf_goods         for ub.goods .
+      836   define buffer buf_rvs-line-pump for ub.rvs-line-pump .
+      837   define buffer buf_chk-doc-attr  for ub.chk-doc-attr .
+      838   define buffer bf_chk-doc-attr   for ub.chk-doc-attr .
+      839   define buffer buf_chk-pay       for ub.chk-pay .
+      840   define buffer buf_cash-pay      for ub.cash-pay .
+      841   define buffer buf_susp-chk      for ub.susp-chk .
+      842   define buffer bf_susp-chk       for ub.susp-chk .
+      843   define variable v-qnty          like ub.chk-gds.doc-qnty no-undo init 0.
+      844   define variable ShiftDate-Start as date      no-undo .
+      845   define variable ShiftNum-Start  as integer   no-undo .
+      846   define variable v-gds-name      as character no-undo .
+      847   define variable v-dop           as decimal   no-undo .
+      848   define variable errorTRK        as logical   no-undo init false .
+      849   define variable errorMass       as logical   no-undo init false .
+      850   define variable errorCheck      as logical   no-undo init false .
+      851   define variable v-num           as character no-undo .
+      852   define variable v-ok            as logical   no-undo init false.
+      853   define variable v-close         as logical   no-undo .
+      854   define variable close-date      as date      no-undo .
+      855   define variable close-time      as integer   no-undo .
+      856   define temp-table t-9 no-undo
+      857       field gds-code           like ub.goods.gds-code
+      858       field gds-name           like ub.goods.gds-name
+      859       field pl-code            like ub.rvs-line-pump.pl-code
+      860       field obj-code           as integer
+      861       field obj-type           as character
+      862       field shift-date         as date
+      863       field shift-name         as character
+      864       field shift-num          as integer
+      865       field pump-code          like ub.rvs-line-pump.pump-code
+      866       field nozzle-code        like ub.rvs-line-pump.nozzle-code
+      867       field start-mh-qnty      like ub.rvs-line-pump.meas-mh-cnt
+      868       field end-mh-qnty        like ub.rvs-line-pump.meas-mh-cnt
+      869       field meas-qnty          like ub.rvs-line-pump.meas-mh-cnt
+      870       field prev-start-mh-qnty like ub.rvs-line-pump.meas-mh-cnt
+      871       field itog-meas-qnty     like ub.rvs-line-pump.meas-mh-cnt
+      872       field start-el-qnty      like ub.rvs-line-pump.meas-el-cnt
+      873       field end-el-qnty        like ub.rvs-line-pump.meas-el-cnt
+      874       field prev-start-el-qnty like ub.rvs-line-pump.meas-el-cnt
+      875       field sale-kg            as decimal
+      876       field itog-sale          as decimal
+      877       field loc1               as character
+      878       field doc-qnty           as decimal   INITIAL 0
+      879       field delta              as decimal   INITIAL 0
+      880       field itog-delta         as decimal   INITIAL 0
+      881       field cancell-qnty       as decimal   INITIAL 0
+      882       field cancell-qnty-notot as decimal   INITIAL 0
+      883       field overflow-qnty      as decimal   INITIAL 0
+      884       field trans-qnty         as decimal   INITIAL 0
+      885       field tech-refuell-qnty  as decimal   INITIAL 0
+      886       index pi is unique primary
+      887       gds-code
+      888       pump-code
+      889       nozzle-code
+      890       .
+      891   define temp-table tt-rvs-line no-undo
+      892       field gds-code         as integer
+      893       field pl-code          as integer
+      894       field gds-name         as character
+      895       field fact-stock-start as decimal
+      896       field fact-stock-end   as decimal
+      897       field rast-stock-end   as decimal
+      898       field sale-kg          as decimal
+      899       field tech-refuell     as decimal
+      900       field obj-code         as integer
+      901       field obj-type         as character
+      902       field income           as decimal
+      903       field loc1             as character
+      904       index pi as unique primary
+      905       gds-code
+      906       pl-code
+      907       .
+      908   define temp-table tt-chk-doc like ub.susp-chk
+      909       .
+      910   define buffer buf_t-9  for t-9 .
+      911   define buffer buf2_t-9 for t-9 .
+      912   FIND LAST  buf_shift-obj
+      913       WHERE buf_shift-obj.obj-type = p-curr-obj-type
+      914       AND buf_shift-obj.obj-code = p-curr-obj-code
+      915       and (
+      916       (buf_shift-obj.shift-date = v-shift-date
+      917       AND     buf_shift-obj.shift-num < v-shift-num)
+      918       OR
+      919       buf_shift-obj.shift-date < v-shift-date)
+      920       use-index pi
+      921       NO-LOCK
+      922       NO-ERROR
+      923       .
+      924   IF AVAILABLE buf_shift-obj THEN
+      925   DO:
+      926       ShiftDate-Start = buf_shift-obj.shift-date .
+      927       ShiftNum-Start = buf_shift-obj.shift-num .
+      928       for each buf_rvs-doc
+      929           where  buf_rvs-doc.obj-type  = p-curr-obj-type
+      930           and   buf_rvs-doc.obj-code   = p-curr-obj-code
+      931           and   buf_rvs-doc.status_    = 'факт':U
+      932           and   buf_rvs-doc.shift-date = buf_shift-obj.shift-date
+      933           and   buf_rvs-doc.shift-num  = buf_shift-obj.shift-num
+      934           and   buf_rvs-doc.rvs-type   = 'смена':U
+      935           no-lock:
+      936           for each prev_rvs-line no-lock where prev_rvs-line.rvs-code = buf_rvs-doc.rvs-code and
+      937               prev_rvs-line.obj-code = buf_rvs-doc.obj-code and
+      938               prev_rvs-line.obj-type = buf_rvs-doc.obj-type:
+      939               find first tt-rvs-line where tt-rvs-line.gds-code = prev_rvs-line.gds-code and
+      940                   tt-rvs-line.pl-code = prev_rvs-line.pl-code no-error .
+      941               if not available (tt-rvs-line) then
+      942               do:
+      943                   create tt-rvs-line .
+      944                   assign
+      945                       tt-rvs-line.gds-code = prev_rvs-line.gds-code
+      946                       tt-rvs-line.pl-code  = prev_rvs-line.pl-code
+      947                       .
+      948                   find first ub.place no-lock
+      949                       where ub.place.obj-code = prev_rvs-line.obj-code
+      950                       and ub.place.obj-type = prev_rvs-line.obj-type
+      951                       and ub.place.pl-code  = prev_rvs-line.pl-code
+      952                       no-error.
+      953                   if available ub.place then
+      954                   do:
+      955                       tt-rvs-line.loc1 = ub.place.loc1
+      956                           .
+      957                   end.
+      958               end.
+      959               tt-rvs-line.fact-stock-start = prev_rvs-line.state-measure-qnty + prev_rvs-line.state-add-qnty * prev_rvs-line.state-density .
+      960           end.
+      961           FOR EACH    buf_rvs-line-pump
+      962               WHERE buf_rvs-line-pump.rvs-code = buf_rvs-doc.rvs-code
+      963               NO-LOCK
+      964               :
+      965               find first buf_t-9
+      966                   WHERE  buf_t-9.gds-code    = buf_rvs-line-pump.gds-code
+      967                   AND buf_t-9.pump     = buf_rvs-line-pump.pump-code
+      968                   and buf_t-9.nozzle-code = buf_rvs-line-pump.nozzle-code
+      969                   no-error
+      970                   .
+      971               if not available buf_t-9 then
+      972               do:
+      973                   find first buf_goods
+      974                       where buf_goods.gds-code = buf_rvs-line-pump.gds-code
+      975                       no-lock
+      976                       no-error
+      977                       .
+      978                   IF AVAILABLE buf_goods THEN
+      979                   DO:
+      980                       assign
+      981                           v-gds-name = buf_goods.gds-name
+      982                           .
+      983                   END.
+      984                   else
+      985                   do:
+      986                       assign
+      987                           v-gds-name = SUBSTITUTE("Товар &1 не найден", buf_rvs-line-pump.gds-code)
+      988                           .
+      989                   end.
+      990                   create buf_t-9.
+      991                   assign
+      992                       buf_t-9.gds-code    = buf_rvs-line-pump.gds-code
+      993                       buf_t-9.pl-code     = buf_rvs-line-pump.pl-code
+      994                       buf_t-9.pump-code   = buf_rvs-line-pump.pump-code
+      995                       buf_t-9.nozzle-code = buf_rvs-line-pump.nozzle-code
+      996                       buf_t-9.gds-name    = v-gds-name
+      997                       .
+      998                   ASSIGN
+      999                       buf_t-9.start-mh-qnty      = buf_rvs-line-pump.state-mh-cnt
+     1000                       buf_t-9.end-mh-qnty        = buf_rvs-line-pump.state-mh-cnt
+     1001                       buf_t-9.prev-start-mh-qnty = buf_rvs-line-pump.state-mh-cnt
+     1002                       buf_t-9.start-el-qnty      = buf_rvs-line-pump.state-el-cnt
+     1003                       buf_t-9.end-el-qnty        = buf_rvs-line-pump.state-el-cnt
+     1004                       buf_t-9.prev-start-el-qnty = buf_rvs-line-pump.state-el-cnt
+     1005                       buf_t-9.delta              = - buf_t-9.meas-qnty
+     1006                       .
+     1007               end.
+     1008           END.
+     1009           RELEASE buf_rvs-doc.
+     1010       END.
+     1011   END.
+     1012   for each buf_shift-obj no-lock where
+     1013       buf_shift-obj.obj-type = p-curr-obj-type
+     1014       and buf_shift-obj.obj-code = p-curr-obj-code
+     1015       and (buf_shift-obj.shift-date > v-shift-date
+     1016       or (buf_shift-obj.shift-date = v-shift-date
+     1017       and
+     1018       buf_shift-obj.shift-num >= v-shift-num))
+     1019       and
+     1020       (buf_shift-obj.shift-date < v-shift-date
+     1021       or (buf_shift-obj.shift-date = v-shift-date
+     1022       and
+     1023       buf_shift-obj.shift-num <= v-shift-num))
+     1024       by buf_shift-obj.shift-date
+     1025       by buf_shift-obj.shift-num:
+     1026       for first buf_rvs-doc
+     1027           where  buf_rvs-doc.obj-type  = p-curr-obj-type
+     1028           and   buf_rvs-doc.obj-code   = p-curr-obj-code
+     1029           and   buf_rvs-doc.status_    = 'факт':U
+     1030           and   buf_rvs-doc.shift-date = buf_shift-obj.shift-date
+     1031           and   buf_rvs-doc.shift-num  = buf_shift-obj.shift-num
+     1032           and   buf_rvs-doc.rvs-type   = 'смена':U
+     1033           no-lock:
+     1034               assign
+     1035               close-date = buf_rvs-doc.fact-date
+     1036               close-time = buf_rvs-doc.fact-order
+     1037               .
+     1038           FOR EACH    buf_rvs-line-pump
+     1039               WHERE buf_rvs-line-pump.rvs-code = buf_rvs-doc.rvs-code
+     1040               NO-LOCK
+     1041               :
+     1042               find first buf_t-9
+     1043                   WHERE  buf_t-9.gds-code    = buf_rvs-line-pump.gds-code
+     1044                   AND buf_t-9.pump-code       = buf_rvs-line-pump.pump-code
+     1045                   and buf_t-9.nozzle-code = buf_rvs-line-pump.nozzle-code
+     1046                   no-error
+     1047                   .
+     1048               if not available buf_t-9 then
+     1049               do:
+     1050                   find first buf2_t-9
+     1051                       WHERE   buf2_t-9.pump-code        = buf_rvs-line-pump.pump-code
+     1052                       and buf_t-9.nozzle-code = buf_rvs-line-pump.nozzle-code
+     1053                       no-error
+     1054                       .
+     1055                   find first buf_goods
+     1056                       where buf_goods.gds-code = buf_rvs-line-pump.gds-code
+     1057                       no-lock
+     1058                       no-error
+     1059                       .
+     1060                   IF AVAILABLE buf_goods THEN
+     1061                   DO:
+     1062                       assign
+     1063                           v-gds-name = buf_goods.gds-name
+     1064                           .
+     1065                   END.
+     1066                   else
+     1067                   do:
+     1068                       assign
+     1069                           v-gds-name = SUBSTITUTE("Товар &1 не найден", buf_rvs-line-pump.gds-code)
+     1070                           .
+     1071                   end.
+     1072                   create buf_t-9.
+     1073                   assign
+     1074                       buf_t-9.gds-code    = buf_rvs-line-pump.gds-code
+     1075                       buf_t-9.pl-code     = buf_rvs-line-pump.pl-code
+     1076                       buf_t-9.pump-code   = buf_rvs-line-pump.pump-code
+     1077                       buf_t-9.nozzle-code = buf_rvs-line-pump.nozzle-code
+     1078                       buf_t-9.gds-name    = v-gds-name
+     1079                       .
+     1080                   if available buf2_t-9 then
+     1081                   do:
+     1082                       assign
+     1083                           buf_t-9.start-mh-qnty      = buf2_t-9.prev-start-mh-qnty
+     1084                           buf_t-9.end-mh-qnty        = buf2_t-9.prev-start-mh-qnty
+     1085                           buf_t-9.prev-start-mh-qnty = buf2_t-9.prev-start-mh-qnty
+     1086                           buf_t-9.start-el-qnty      = buf2_t-9.prev-start-el-qnty
+     1087                           buf_t-9.end-el-qnty        = buf2_t-9.prev-start-el-qnty
+     1088                           buf_t-9.prev-start-el-qnty = buf2_t-9.prev-start-el-qnty
+     1089                           .
+     1090                   end.
+     1091                   else
+     1092                   do:
+     1093                       v-dop = ?.
+     1094                       run get-state-mh-cnt-from-icnt-doc in this-procedure (
+     1095                           input p-curr-obj-type
+     1096                           ,input p-curr-obj-code
+     1097                           ,input buf_shift-obj.shift-date
+     1098                           ,input buf_shift-obj.shift-num
+     1099                           ,input buf_rvs-doc.fact-order
+     1100                           ,input buf_t-9.gds-code
+     1101                           ,input buf_t-9.pl-code
+     1102                           ,input buf_t-9.pump-code
+     1103                           ,input buf_t-9.nozzle-code
+     1104                           ,input-output buf_t-9.prev-start-mh-qnty
+     1105                           ,input-output buf_t-9.prev-start-el-qnty
+     1106                           ).
+     1107                       ASSIGN
+     1108                           buf_t-9.start-mh-qnty = buf_t-9.prev-start-mh-qnty
+     1109                           buf_t-9.end-mh-qnty   = buf_t-9.prev-start-mh-qnty
+     1110                           buf_t-9.start-el-qnty = buf_t-9.prev-start-el-qnty
+     1111                           buf_t-9.end-el-qnty   = buf_t-9.prev-start-el-qnty
+     1112                           .
+     1113                   end.
+     1114               end.
+     1115               if buf_rvs-line-pump.state-mh-cnt <  buf_t-9.end-mh-qnty then
+     1116               do:
+     1117                   v-dop = ?.
+     1118                   run get-state-mh-cnt-from-icnt-doc in this-procedure (
+     1119                       input p-curr-obj-type
+     1120                       ,input p-curr-obj-code
+     1121                       ,input buf_shift-obj.shift-date
+     1122                       ,input buf_shift-obj.shift-num
+     1123                       ,input buf_rvs-doc.fact-order
+     1124                       ,input buf_t-9.gds-code
+     1125                       ,input buf_t-9.pl-code
+     1126                       ,input buf_t-9.pump-code
+     1127                       ,input buf_t-9.nozzle-code
+     1128                       ,input-output buf_t-9.prev-start-mh-qnty
+     1129                       ,input-output buf_t-9.prev-start-el-qnty
+     1130                       ).
+     1131               end.
+     1132               ASSIGN
+     1133                   buf_t-9.end-mh-qnty        = buf_rvs-line-pump.state-mh-cnt
+     1134                   buf_t-9.end-el-qnty        = buf_rvs-line-pump.state-el-cnt
+     1135                   buf_t-9.meas-qnty          = buf_t-9.meas-qnty + buf_rvs-line-pump.state-el-cnt - buf_t-9.prev-start-el-qnty
+     1136                   buf_t-9.delta              = - buf_t-9.meas-qnty
+     1137                   buf_t-9.prev-start-mh-qnty = buf_rvs-line-pump.state-mh-cnt
+     1138                   buf_t-9.prev-start-el-qnty = buf_rvs-line-pump.state-el-cnt
+     1139                   .
+     1140           END.
+     1141           for each buf_rvs-line no-lock where buf_rvs-line.rvs-code = buf_rvs-doc.rvs-code and
+     1142               buf_rvs-line.obj-code = buf_rvs-doc.obj-code and
+     1143               buf_rvs-line.obj-type = buf_rvs-doc.obj-type:
+     1144               find first tt-rvs-line where tt-rvs-line.gds-code = buf_rvs-line.gds-code and
+     1145                   tt-rvs-line.pl-code = buf_rvs-line.pl-code no-error .
+     1146               if not available (tt-rvs-line) then
+     1147               do:
+     1148                   find first buf_goods
+     1149                       where buf_goods.gds-code = buf_rvs-line.gds-code
+     1150                       no-lock
+     1151                       no-error
+     1152                       .
+     1153                   IF AVAILABLE buf_goods THEN
+     1154                   DO:
+     1155                       assign
+     1156                           v-gds-name = buf_goods.gds-name
+     1157                           .
+     1158                   END.
+     1159                   else
+     1160                   do:
+     1161                       assign
+     1162                           v-gds-name = SUBSTITUTE("Товар &1 не найден", buf_rvs-line.gds-code)
+     1163                           .
+     1164                   end.
+     1165                   create tt-rvs-line .
+     1166                   assign
+     1167                       tt-rvs-line.gds-code = buf_rvs-line.gds-code
+     1168                       tt-rvs-line.gds-name = v-gds-name
+     1169                       tt-rvs-line.pl-code  = buf_rvs-line.pl-code
+     1170                       tt-rvs-line.obj-code = buf_rvs-line.obj-code
+     1171                       tt-rvs-line.obj-type = buf_rvs-line.obj-type .
+     1172                   find first ub.place no-lock
+     1173                       where ub.place.obj-code = buf_rvs-line.obj-code
+     1174                       and ub.place.obj-type = buf_rvs-line.obj-type
+     1175                       and ub.place.pl-code  = buf_rvs-line.pl-code
+     1176                       no-error.
+     1177                   if available ub.place then
+     1178                   do:
+     1179                       tt-rvs-line.loc1 = ub.place.loc1
+     1180                           .
+     1181                   end.
+     1182               end.
+     1183               tt-rvs-line.fact-stock-end = buf_rvs-line.state-measure-qnty + buf_rvs-line.state-add-qnty * buf_rvs-line.state-density .
+     1184           end.
+     1185       END.
+     1186   end.
+     1187   for each tt-rvs-line:
+     1188       for each ub.trn-doc no-lock
+     1189           where ub.trn-doc.obj-type   = p-curr-obj-type
+     1190           and ub.trn-doc.obj-code   = p-curr-obj-code
+     1191           and ub.trn-doc.shift-date = v-shift-date
+     1192           and ub.trn-doc.shift-num = v-shift-num
+     1193           and ub.trn-doc.status_    = 'факт':U
+     1194           and ub.trn-doc.doc-type   = 'при':U
+     1195           on error undo, return error return-value
+     1196           :
+     1197           for each ub.doc-pl no-lock
+     1198               where ub.doc-pl.gds-code = tt-rvs-line.gds-code
+     1199               and ub.doc-pl.obj-code = tt-rvs-line.obj-code
+     1200               and ub.doc-pl.obj-type = tt-rvs-line.obj-type
+     1201               and ub.doc-pl.out-code = ub.trn-doc.doc-code
+     1202               and ub.doc-pl.pl-code  = tt-rvs-line.pl-code
+     1203               on error undo, return error return-value
+     1204               :
+     1205               assign
+     1206                   tt-rvs-line.income = tt-rvs-line.income + ub.doc-pl.cli-fact-qnty
+     1207                   .
+     1208           end.
+     1209       end.
+     1210   end.
+     1211   _shift-chk:
+     1212   FOR EACH buf_chk-doc
+     1213       WHERE buf_chk-doc.obj-type = p-curr-obj-type
+     1214       AND   buf_chk-doc.obj-code = p-curr-obj-code
+     1215       AND   buf_chk-doc.shift-date = v-shift-date
+     1216       and  buf_chk-doc.shift-num = v-shift-num
+     1217       and buf_chk-doc.shift-name = v-shift-name
+     1218       NO-LOCK
+     1219       :
+     1220       for each buf_chk-gds
+     1221           where buf_chk-gds.doc-code = buf_chk-doc.doc-code
+     1222           no-lock,
+     1223           first buf_bar-code
+     1224           where buf_bar-code.b-code = buf_chk-gds.b-code
+     1225           no-lock,
+     1226           first buf_goods where buf_goods.gds-code = buf_bar-code.gds-code no-lock
+     1227           :
+     1228           find first tt-rvs-line no-lock where tt-rvs-line.gds-code = buf_goods.gds-code no-error .
+     1229           if available (tt-rvs-line) then
+     1230           do:
+     1231               find first buf_t-9
+     1232                   WHERE
+     1233                   buf_t-9.gds-code    = buf_bar-code.gds-code and
+     1234                   buf_t-9.pump-code   = buf_chk-gds.pump and
+     1235                   buf_t-9.nozzle-code = buf_chk-gds.nozzle-code
+     1236                   no-error
+     1237                   .
+     1238               if not available buf_t-9 then
+     1239               do:
+     1240                   create buf_t-9.
+     1241                   assign
+     1242                       buf_t-9.gds-code    = buf_bar-code.gds-code
+     1243                       buf_t-9.gds-name    = buf_goods.gds-name
+     1244                       buf_t-9.pl-code     = buf_chk-gds.pl-code
+     1245                       buf_t-9.pump-code   = buf_chk-gds.pump
+     1246                       buf_t-9.nozzle-code = buf_chk-gds.nozzle-code
+     1247                       .
+     1248               end.
+     1249           end.
+     1250           v-qnty        = buf_chk-gds.doc-qnty .
+     1251           case buf_chk-doc.chk-type:
+     1252               WHEN integer('1':U) or
+     1253               WHEN integer('6':U)
+     1254               then
+     1255                   do:
+     1256                       if available (tt-rvs-line) then
+     1257                       do:
+     1258                           assign
+     1259                               buf_t-9.doc-qnty    = buf_t-9.doc-qnty + v-qnty
+     1260                               buf_t-9.delta       = buf_t-9.delta + v-qnty
+     1261                               tt-rvs-line.sale-kg = buf_t-9.doc-qnty * buf_chk-gds.density
+     1262                               buf_t-9.sale-kg     = buf_t-9.doc-qnty
+     1263                               .
+     1264                       end.
+     1265                   end.
+     1266               WHEN integer('17':U) THEN
+     1267                   DO:
+     1268                       if available (tt-rvs-line) then
+     1269                       do:
+     1270                           assign
+     1271                               buf_t-9.tech-refuell-qnty = buf_t-9.tech-refuell-qnty + v-qnty
+     1272                               tt-rvs-line.tech-refuell  = tt-rvs-line.tech-refuell + v-qnty
+     1273                               .
+     1274                       end.
+     1275                   end.
+     1276               OTHERWISE
+     1277               DO:
+     1278               end.
+     1279           END case.
+     1280       end.
+     1281       case buf_chk-doc.chk-type:
+     1282           WHEN integer('1':U) then
+     1283               do:
+     1284                   for each buf_chk-doc-attr no-lock where buf_chk-doc-attr.doc-code = buf_chk-doc.doc-code and
+     1285                       buf_chk-doc-attr.attr-code = "create-type" and
+     1286                       buf_chk-doc-attr.attr-value = "manual":
+     1287                       if can-find (first buf_chk-gds where buf_chk-gds.doc-code = buf_chk-doc.doc-code
+     1288                           and buf_chk-gds.pass-gds = 1) then
+     1289                       do:
+     1290                           if not can-find (ub.chk-doc-attr where chk-doc-attr.doc-code = buf_chk-doc.doc-code and
+     1291                               ub.chk-doc-attr.attr-code = "CHFiscalDocNumber") then
+     1292                           do:
+     1293                               find first tt-chk-doc where tt-chk-doc.doc-code = buf_chk-doc.doc-code no-error .
+     1294                               if not available (tt-chk-doc) then
+     1295                               do:
+     1296                                   create tt-chk-doc.
+     1297                                   assign
+     1298                                       tt-chk-doc.chk-date   = buf_chk-doc.chk-date
+     1299                                       tt-chk-doc.chk-time   = buf_chk-doc.chk-time
+     1300                                       tt-chk-doc.chk-num    = buf_chk-doc.chk-num
+     1301                                       tt-chk-doc.chk-type   = buf_chk-doc.chk-type
+     1302                                       tt-chk-doc.doc-code   = buf_chk-doc.doc-code
+     1303                                       tt-chk-doc.obj-code   = buf_chk-doc.obj-code
+     1304                                       tt-chk-doc.obj-type   = buf_chk-doc.obj-type
+     1305                                       tt-chk-doc.pay-desk   = buf_chk-doc.pay-desk
+     1306                                       tt-chk-doc.shift-date = buf_chk-doc.shift-date
+     1307                                       tt-chk-doc.shift-name = buf_chk-doc.shift-name
+     1308                                       tt-chk-doc.shift-num  = buf_chk-doc.shift-num
+     1309                                       .
+     1310                               end.
+     1311                               if tt-chk-doc.office = "" then tt-chk-doc.office = "сухой чек прихода в ТН" .
+     1312                               else tt-chk-doc.office = tt-chk-doc.office + ", " + "сухой чек прихода в ТН" .
+     1313                           end.
+     1314                       end.
+     1315                   end.
+     1316                   if available (tt-rvs-line) then
+     1317                   do:
+     1318                       find first bar-code no-lock where bar-code.gds-code = tt-rvs-line.gds-code no-error .
+     1319                       find first buf_chk-gds where buf_chk-gds.doc-code = buf_chk-doc.doc-code
+     1320                           and buf_chk-gds.b-code = bar-code.b-code and buf_chk-gds.pass-gds = 1 no-lock no-error.
+     1321                       IF AVAILABLE buf_chk-gds THEN
+     1322                       DO:
+     1323                           if not can-find (ub.chk-doc-attr where chk-doc-attr.doc-code = buf_chk-doc.doc-code and
+     1324                               ub.chk-doc-attr.attr-code = "CHFiscalDocNumber") then next .
+     1325                           find first tt-chk-doc where tt-chk-doc.doc-code = buf_chk-doc.doc-code no-error .
+     1326                           if not available (tt-chk-doc) then
+     1327                           do:
+     1328                               create tt-chk-doc.
+     1329                               assign
+     1330                                   tt-chk-doc.chk-date   = buf_chk-doc.chk-date
+     1331                                   tt-chk-doc.chk-time   = buf_chk-doc.chk-time
+     1332                                   tt-chk-doc.chk-num    = buf_chk-doc.chk-num
+     1333                                   tt-chk-doc.chk-type   = buf_chk-doc.chk-type
+     1334                                   tt-chk-doc.doc-code   = buf_chk-doc.doc-code
+     1335                                   tt-chk-doc.obj-code   = buf_chk-doc.obj-code
+     1336                                   tt-chk-doc.obj-type   = buf_chk-doc.obj-type
+     1337                                   tt-chk-doc.pay-desk   = buf_chk-doc.pay-desk
+     1338                                   tt-chk-doc.shift-date = buf_chk-doc.shift-date
+     1339                                   tt-chk-doc.shift-name = buf_chk-doc.shift-name
+     1340                                   tt-chk-doc.shift-num  = buf_chk-doc.shift-num
+     1341                                   .
+     1342                           end.
+     1343                           if tt-chk-doc.office = "" then tt-chk-doc.office = "сухой чек прихода топлива на кассе" .
+     1344                           else tt-chk-doc.office = tt-chk-doc.office + ", сухой чек прихода топлива на кассе" .
+     1345                       end.
+     1346                   end.
+     1347               end.
+     1348           WHEN integer('6':U)
+     1349           then
+     1350               do:
+     1351                   if available (tt-rvs-line) then
+     1352                   do:
+     1353                       find first buf_chk-doc-attr where buf_chk-doc-attr.doc-code = buf_chk-doc.doc-code
+     1354                           and buf_chk-doc-attr.attr-code = 'CHFlag1' and (buf_chk-doc-attr.attr-value = "4" or
+     1355                           buf_chk-doc-attr.attr-value = "3" or buf_chk-doc-attr.attr-value = "2") no-lock no-error.
+     1356                       IF AVAILABLE buf_chk-doc-attr THEN
+     1357                       DO:
+     1358                           find first bf_chk-doc-attr where buf_chk-doc-attr.doc-code = buf_chk-doc.doc-code
+     1359                               and bf_chk-doc-attr.attr-code = 'CHMgrKey' and bf_chk-doc-attr.attr-value = "1" no-lock no-error .
+     1360                           if available (bf_chk-doc-attr) then
+     1361                           do:
+     1362                               find first tt-chk-doc where tt-chk-doc.doc-code = buf_chk-doc.doc-code no-error .
+     1363                               if not available (tt-chk-doc) then
+     1364                               do:
+     1365                                   create tt-chk-doc.
+     1366                                   assign
+     1367                                       tt-chk-doc.chk-date   = buf_chk-doc.chk-date
+     1368                                       tt-chk-doc.chk-time   = buf_chk-doc.chk-time
+     1369                                       tt-chk-doc.chk-num    = buf_chk-doc.chk-num
+     1370                                       tt-chk-doc.chk-type   = buf_chk-doc.chk-type
+     1371                                       tt-chk-doc.doc-code   = buf_chk-doc.doc-code
+     1372                                       tt-chk-doc.obj-code   = buf_chk-doc.obj-code
+     1373                                       tt-chk-doc.obj-type   = buf_chk-doc.obj-type
+     1374                                       tt-chk-doc.pay-desk   = buf_chk-doc.pay-desk
+     1375                                       tt-chk-doc.shift-date = buf_chk-doc.shift-date
+     1376                                       tt-chk-doc.shift-name = buf_chk-doc.shift-name
+     1377                                       tt-chk-doc.shift-num  = buf_chk-doc.shift-num
+     1378                                       .
+     1379                               end.
+     1380                               if tt-chk-doc.office = "" then tt-chk-doc.office = "полный возврат" .
+     1381                               else tt-chk-doc.office = tt-chk-doc.office + ", полный возврат" .
+     1382                           end.
+     1383                       end.
+     1384                   end.
+     1385               end.
+     1386           WHEN integer('14':U) THEN
+     1387               DO:
+     1388                   find first tt-chk-doc where tt-chk-doc.doc-code = buf_chk-doc.doc-code no-error .
+     1389                   if not available (tt-chk-doc) then
+     1390                   do:
+     1391                       create tt-chk-doc.
+     1392                       assign
+     1393                           tt-chk-doc.chk-date   = buf_chk-doc.chk-date
+     1394                           tt-chk-doc.chk-time   = buf_chk-doc.chk-time
+     1395                           tt-chk-doc.chk-num    = buf_chk-doc.chk-num
+     1396                           tt-chk-doc.chk-type   = buf_chk-doc.chk-type
+     1397                           tt-chk-doc.doc-code   = buf_chk-doc.doc-code
+     1398                           tt-chk-doc.obj-code   = buf_chk-doc.obj-code
+     1399                           tt-chk-doc.obj-type   = buf_chk-doc.obj-type
+     1400                           tt-chk-doc.pay-desk   = buf_chk-doc.pay-desk
+     1401                           tt-chk-doc.shift-date = buf_chk-doc.shift-date
+     1402                           tt-chk-doc.shift-name = buf_chk-doc.shift-name
+     1403                           tt-chk-doc.shift-num  = buf_chk-doc.shift-num
+     1404                           .
+     1405                   end.
+     1406                   if tt-chk-doc.office = "" then tt-chk-doc.office = "сброс топл.транзакции" .
+     1407                   else tt-chk-doc.office = tt-chk-doc.office + ", сброс топл.транзакции" .
+     1408               end.
+     1409           OTHERWISE
+     1410           DO:
+     1411           end.
+     1412       END case.
+     1413       if available (tt-rvs-line) then
+     1414       do:
+     1415           define variable disp_ as character no-undo .
+     1416           for each buf_chk-pay no-lock where buf_chk-pay.doc-code = buf_chk-doc.doc-code and (buf_chk-pay.pay-code = 0064 or buf_chk-pay.pay-code = 4006):
+     1417               if buf_chk-pay.pay-code = 0064 then disp_ = "постоплата" .
+     1418               else disp_ = "криминальный уезд" .
+     1419               find first tt-chk-doc where tt-chk-doc.doc-code = buf_chk-doc.doc-code no-error .
+     1420               if not available (tt-chk-doc) then
+     1421               do:
+     1422                   create tt-chk-doc.
+     1423                   assign
+     1424                       tt-chk-doc.chk-date   = buf_chk-doc.chk-date
+     1425                       tt-chk-doc.chk-time   = buf_chk-doc.chk-time
+     1426                       tt-chk-doc.chk-num    = buf_chk-doc.chk-num
+     1427                       tt-chk-doc.chk-type   = buf_chk-doc.chk-type
+     1428                       tt-chk-doc.doc-code   = buf_chk-doc.doc-code
+     1429                       tt-chk-doc.obj-code   = buf_chk-doc.obj-code
+     1430                       tt-chk-doc.obj-type   = buf_chk-doc.obj-type
+     1431                       tt-chk-doc.pay-desk   = buf_chk-doc.pay-desk
+     1432                       tt-chk-doc.shift-date = buf_chk-doc.shift-date
+     1433                       tt-chk-doc.shift-name = buf_chk-doc.shift-name
+     1434                       tt-chk-doc.shift-num  = buf_chk-doc.shift-num
+     1435                       .
+     1436               end.
+     1437               if tt-chk-doc.office = "" then tt-chk-doc.office = disp_ .
+     1438               else tt-chk-doc.office = tt-chk-doc.office + ", " + disp_ .
+     1439           end.
+     1440       end.
+     1441   END.
+     1442   define buffer buf_tt-rvs-line for tt-rvs-line .
+     1443   define buffer bf_shift-param  for ub.shift-param .
+     1444   find first ub.shift-param no-lock where ub.shift-param.obj-code = p-curr-obj-code and
+     1445       ub.shift-param.obj-type = p-curr-obj-type and
+     1446       ub.shift-param.shift-date = v-shift-date and
+     1447       ub.shift-param.shift-name = v-shift-name and
+     1448       ub.shift-param.shift-num = v-shift-num and
+     1449       ub.shift-param.gds-code = 0 and
+     1450       ub.shift-param.pl-code = 0 no-error .
+     1451   if not available (ub.shift-param) then
+     1452   do:
+     1453       find first ub.shift-param no-lock where ub.shift-param.obj-code = 0 and
+     1454           ub.shift-param.obj-type = "" and
+     1455           ub.shift-param.shift-date = 01/01/1900 no-error .
+     1456       if not available (ub.shift-param) then
+     1457       do:
+     1458           assign
+     1459               prc-dev-mass   = 0.65
+     1460               dev-paid-trans = 1
+     1461               .
+     1462       end.
+     1463       else
+     1464       do:
+     1465           assign
+     1466               prc-dev-mass   = ub.shift-param.prc-dev-mass
+     1467               dev-paid-trans = ub.shift-param.dev-paid-trans
+     1468               .
+     1469       end.
+     1470   end.
+     1471   else
+     1472       assign
+     1473           prc-dev-mass   = ub.shift-param.prc-dev-mass
+     1474           dev-paid-trans = ub.shift-param.dev-paid-trans
+     1475           .
+     1476   for each ub.shift-param exclusive-lock where ub.shift-param.obj-code = p-curr-obj-code and
+     1477       ub.shift-param.obj-type = p-curr-obj-type and
+     1478       ub.shift-param.shift-date = v-shift-date and
+     1479       ub.shift-param.shift-name = v-shift-name and
+     1480       ub.shift-param.shift-num = v-shift-num and
+     1481       ub.shift-param.gds-code <> 0 and
+     1482       ub.shift-param.pl-code <> 0 :
+     1483       delete ub.shift-param .
+     1484   end.
+     1485   define variable v-com-tanks     as character no-undo .
+     1486   define variable v-main-tanks    as character no-undo .
+     1487   define variable v-num-com-tanks as integer   no-undo .
+     1488   define buffer com_temp-rvs-line for tt-rvs-line .
+     1489   define buffer com_t-9           for t-9 .
+     1490   procedure placelib_write-attr:
+     1491   define input  parameter p-code     like ub.place-attr.attr-code .
+     1492   define input  parameter p-obj-code like ub.place-attr.obj-code .
+     1493   define input  parameter p-obj-type like ub.place-attr.obj-type .
+     1494   define input  parameter p-pl-code  like ub.place-attr.pl-code .
+     1495   define input  parameter p-value    like ub.place-attr.attr-value .
+     1496   define output parameter p-ok       as logical.
+     1497   define buffer buf_place-attr for ub.place-attr .
+     1498     do on error undo, return error return-value :
+     1499        p-ok = false.
+     1500        find first buf_place-attr exclusive-lock where buf_place-attr.attr-code   = p-code
+     1501                                                   and buf_place-attr.obj-code    = p-obj-code
+     1502                                                   and buf_place-attr.obj-type    = p-obj-type
+     1503                                                   and buf_place-attr.pl-code     = p-pl-code no-error.
+     1504        if not available buf_place-attr then do :
+     1505           create buf_place-attr.
+     1506           assign
+     1507             buf_place-attr.attr-code   = p-code
+     1508             buf_place-attr.attr-value  = p-value
+     1509             buf_place-attr.obj-code    = p-obj-code
+     1510             buf_place-attr.obj-type    = p-obj-type
+     1511             buf_place-attr.pl-code     = p-pl-code
+     1512           .
+     1513           p-ok = true.
+     1514        end.
+     1515        else do:
+     1516           buf_place-attr.attr-value  = p-value .
+     1517           p-ok = true.
+     1518        end.
+     1519     end.
+     1520   end.
+     1521   procedure placelib_get-attr:
+     1522   define input  parameter  p-code     like ub.place-attr.attr-code .
+     1523   define input  parameter  p-obj-code like ub.place-attr.obj-code .
+     1524   define input  parameter  p-obj-type like ub.place-attr.obj-type .
+     1525   define input  parameter  p-pl-code  like ub.place-attr.pl-code .
+     1526   define output parameter  p-value    like ub.place-attr.attr-value .
+     1527   define output parameter  p-ok       as logical.
+     1528   define buffer buf_place-attr for ub.place-attr .
+     1529     do on error undo, return error return-value :
+     1530        p-ok = false.
+     1531        find first buf_place-attr no-lock where buf_place-attr.attr-code   = p-code
+     1532                                                   and buf_place-attr.obj-code    = p-obj-code
+     1533                                                   and buf_place-attr.obj-type    = p-obj-type
+     1534                                                   and buf_place-attr.pl-code     = p-pl-code no-error.
+     1535        if available buf_place-attr then do :
+     1536          p-value = buf_place-attr.attr-value.
+     1537          p-ok = true.
+     1538        end.
+     1539        else do :
+     1540          p-ok = false.
+     1541        end.
+     1542     end.
+     1543   end.
+     1544   procedure placelib_del-attr:
+     1545   define input parameter  p-code     like ub.place-attr.attr-code .
+     1546   define input parameter  p-obj-code like ub.place-attr.obj-code .
+     1547   define input parameter  p-obj-type like ub.place-attr.obj-type .
+     1548   define input parameter  p-pl-code  like ub.place-attr.pl-code .
+     1549   define input parameter  p-value    like ub.place-attr.attr-value .
+     1550   define output parameter p-ok       as logical.
+     1551   define buffer buf_place-attr for ub.place-attr .
+     1552     do on error undo, return error return-value :
+     1553        p-ok = false.
+     1554        find first buf_place-attr exclusive-lock where buf_place-attr.attr-code   = p-code
+     1555                                                   and buf_place-attr.obj-code    = p-obj-code
+     1556                                                   and buf_place-attr.obj-type    = p-obj-type
+     1557                                                   and buf_place-attr.pl-code     = p-pl-code no-error.
+     1558        if available buf_place-attr then do :
+     1559           delete buf_place-attr.
+     1560           p-ok = true.
+     1561        end.
+     1562     end.
+     1563   end.
+     1564   define temp-table with-action no-undo
+     1565   field f_name as character
+     1566   field l_name as character
+     1567   field v_old as character
+     1568   field v_new as character
+     1569   field t_name as character
+     1570   field num_ as integer
+     1571   field uniq-key-rec as character
+     1572   field action as integer
+     1573   field fNotChange as logical
+     1574   index pi is unique primary
+     1575   num_
+     1576   t_name
+     1577   f_name
+     1578   index
+     1579   Chan
+     1580   fnotChange
+     1581   t_name
+     1582   f_name
+     1583   index imain uniq-key-rec
+     1584   .
+     1585   procedure c-place_get-attr :
+     1586     define input parameter attr-code as character no-undo .
+     1587     define input parameter obj-code as integer no-undo .
+     1588     define input parameter obj-type as character no-undo .
+     1589     define input parameter pl-code as integer no-undo .
+     1590     define input parameter endDate as date no-undo .
+     1591     define input parameter endTime as integer no-undo .
+     1592     define output parameter attr-value as character no-undo .
+     1593     define buffer bf_c-place-attr for ub.c-place-attr .
+     1594     define variable is-place-attr as logical no-undo .
+     1595     find last bf_c-place-attr no-lock where bf_c-place-attr.pl-code = pl-code and
+     1596       bf_c-place-attr.obj-code = obj-code and
+     1597       bf_c-place-attr.obj-type = obj-type and
+     1598       bf_c-place-attr.attr-code = attr-code and
+     1599       ((bf_c-place-attr.corr-date = endDate and
+     1600       bf_c-place-attr.corr-time < endTime) or
+     1601       bf_c-place-attr.corr-date < endDate) no-error .
+     1602     if available (bf_c-place-attr) then attr-value = bf_c-place-attr.attr-value .
+     1603     else attr-value = "true" .
+     1604   end procedure.
+     1605   FUNCTION get_max-qnty returns decimal (
+     1606     input obj-code as integer,
+     1607     input obj-type as character,
+     1608     input pl-code as integer,
+     1609     input endDate as date,
+     1610     input endTime as integer ):
+     1611     define buffer bf_c-place     for ub.c-place .
+     1612     define buffer buf_c-place    for ub.c-place .
+     1613     define buffer bf_place       for ub.place .
+     1614     define buffer curr_c-place   for c-place .
+     1615     define buffer buf_c-plc-hist for ub.c-plc-hist .
+     1616     define variable ii      as integer no-undo init 0.
+     1617     define variable is-max-qnty as logical no-undo .
+     1618     define variable is-true as logical no-undo .
+     1619     find last curr_c-place no-lock where curr_c-place.pl-code = pl-code and
+     1620       curr_c-place.obj-code = obj-code and
+     1621       curr_c-place.obj-type = obj-type and
+     1622       ((curr_c-place.corr-date = endDate and
+     1623       curr_c-place.corr-time < endTime) or
+     1624       curr_c-place.corr-date < endDate) no-error .
+     1625     if available (curr_c-place) then
+     1626     do:
+     1627       find first buf_c-plc-hist no-lock where
+     1628         buf_c-plc-hist.obj-type = obj-type
+     1629         AND buf_c-plc-hist.obj-code = obj-code
+     1630         AND buf_c-plc-hist.pl-code = pl-code
+     1631         AND buf_c-plc-hist.subject  = "place"
+     1632         and buf_c-plc-hist.chip-num = curr_c-place.chip-num no-error .
+     1633       if available (buf_c-plc-hist) then
+     1634       do:
+     1635         define variable v-label-param as character no-undo .
+     1636         v-label-param =
+     1637           "max-qnty" + chr(4) + "Максимальное количество" + chr(4) + "" .
+     1638         run proc-full-temp-changes in this-procedure (
+     1639           input buf_c-plc-hist.action = integer('1':U)
+     1640           ,input buf_c-plc-hist.action = integer('99':U)
+     1641           ,input  buffer curr_c-place:handle
+     1642           ,input  'place':U
+     1643           ,input  "max-qnty"
+     1644           ,input  v-label-param).
+     1645       end.
+     1646     end.
+     1647     for each with-action:
+     1648       return decimal(with-action.v_new) .
+     1649     end.
+     1650     if available (curr_c-place) then
+     1651     do:
+     1652       return curr_c-place.max-qnty .
+     1653     end.
+     1654     find first bf_place no-lock where bf_place.pl-code = pl-code and
+     1655       bf_place.obj-code = obj-code and
+     1656       bf_place.obj-type = obj-type no-error .
+     1657     return bf_place.max-qnty .
+     1658   end function.
+     1659   FUNCTION get_meas returns logical (
+     1660     input obj-code as integer,
+     1661     input obj-type as character,
+     1662     input pl-code as integer,
+     1663     input endDate as date,
+     1664     input endTime as integer ):
+     1665     define buffer bf_c-place     for ub.c-place .
+     1666     define buffer buf_c-place    for ub.c-place .
+     1667     define buffer bf_place       for ub.place .
+     1668     define buffer curr_c-place   for c-place .
+     1669     define buffer buf_c-plc-hist for ub.c-plc-hist .
+     1670     define variable ii      as integer no-undo init 0.
+     1671     define variable is-meas as logical no-undo .
+     1672     define variable is-true as logical no-undo .
+     1673     find last curr_c-place no-lock where curr_c-place.pl-code = pl-code and
+     1674       curr_c-place.obj-code = obj-code and
+     1675       curr_c-place.obj-type = obj-type and
+     1676       ((curr_c-place.corr-date = endDate and
+     1677       curr_c-place.corr-time < endTime) or
+     1678       curr_c-place.corr-date < endDate) no-error .
+     1679     if available (curr_c-place) then
+     1680     do:
+     1681       find first buf_c-plc-hist no-lock where
+     1682         buf_c-plc-hist.obj-type = obj-type
+     1683         AND buf_c-plc-hist.obj-code = obj-code
+     1684         AND buf_c-plc-hist.pl-code = pl-code
+     1685         AND buf_c-plc-hist.subject  = "place"
+     1686         and buf_c-plc-hist.chip-num = curr_c-place.chip-num no-error .
+     1687       if available (buf_c-plc-hist) then
+     1688       do:
+     1689         define variable v-label-param as character no-undo .
+     1690         v-label-param =
+     1691           "is-meas" + chr(4) + "Измеряется приборами" + chr(4) + "" .
+     1692         run proc-full-temp-changes in this-procedure (
+     1693           input buf_c-plc-hist.action = integer('1':U)
+     1694           ,input buf_c-plc-hist.action = integer('99':U)
+     1695           ,input  buffer curr_c-place:handle
+     1696           ,input  'place':U
+     1697           ,input  "is-meas"
+     1698           ,input  v-label-param).
+     1699       end.
+     1700     end.
+     1701     for each with-action:
+     1702       return logical (with-action.v_new) .
+     1703     end.
+     1704     find first bf_place no-lock where bf_place.pl-code = pl-code and
+     1705       bf_place.obj-code = obj-code and
+     1706       bf_place.obj-type = obj-type no-error .
+     1707     return bf_place.is-meas .
+     1708   end function.
+     1709   FUNCTION get_com-vessel returns logical (
+     1710     input obj-code as integer,
+     1711     input obj-type as character,
+     1712     input attr-code as character,
+     1713     input pl-code as integer,
+     1714     input openDate as date,
+     1715     input endDate as date,
+     1716     input openTime as integer,
+     1717     input endTime as integer ):
+     1718     define buffer current_c-place-attr for c-place-attr .
+     1719     define buffer buf_c-plc-hist       for ub.c-plc-hist .
+     1720     define variable ii      as integer   no-undo init 0.
+     1721     define variable is-meas as logical   no-undo .
+     1722     define variable is-true as logical   no-undo .
+     1723     define variable v-label as character no-undo .
+     1724     define variable p-ok    as logical   no-undo .
+     1725     find last current_c-place-attr no-lock where
+     1726       current_c-place-attr.obj-type = obj-type
+     1727       AND current_c-place-attr.obj-code = obj-code
+     1728       AND current_c-place-attr.pl-code = pl-code
+     1729       and current_c-place-attr.attr-code = attr-code
+     1730       and ((current_c-place-attr.corr-date = endDate
+     1731       and current_c-place-attr.corr-time < endTime) or
+     1732       current_c-place-attr.corr-date < endDate)
+     1733       no-error .
+     1734     if avail current_c-place-attr then
+     1735     do:
+     1736       find first buf_c-plc-hist no-lock where
+     1737         buf_c-plc-hist.obj-type = obj-type
+     1738         AND buf_c-plc-hist.obj-code = obj-code
+     1739         AND buf_c-plc-hist.pl-code = pl-code
+     1740         AND buf_c-plc-hist.subject  = "place-attr"
+     1741         and buf_c-plc-hist.chip-num = current_c-place-attr.chip-num no-error .
+     1742       if available (buf_c-plc-hist) then
+     1743       do:
+     1744         define variable v-label-param as character no-undo .
+     1745         if current_c-place-attr.attr-code = "place-SI"
+     1746           or current_c-place-attr.attr-code = "place-SI-temp"
+     1747           or current_c-place-attr.attr-code = "place-SI-dens"
+     1748           or current_c-place-attr.attr-code = "place-SI-level"
+     1749           then
+     1750         do :
+     1751           v-label-param =
+     1752             "attr-value" + chr(4) + "Значение атрибута" + chr(4) + "getSIname" + chr(8)
+     1753             + "attr-code" + chr(4) + "Код атрибута" + chr(4) + "getPlaceAttrCode"   .
+     1754         end .
+     1755         else
+     1756         do :
+     1757           v-label-param =
+     1758             "attr-value" + chr(4) + "Значение атрибута" + chr(4) + "getPlaceAttrValue" + chr(8)
+     1759             + "attr-code" + chr(4) + "Код атрибута" + chr(4) + "getPlaceAttrCode" + chr(8)
+     1760             + "PS" + chr(4) + "Примечание" + chr(4) + "" + chr(8)
+     1761             + "status_" + chr(4) + "Статус" + chr(4) + ""  .
+     1762         end .
+     1763         run proc-full-temp-changes in this-procedure (
+     1764           input buf_c-plc-hist.action = integer('1':U)
+     1765           ,input buf_c-plc-hist.action = integer('99':U)
+     1766           ,input  buffer current_c-place-attr:handle
+     1767           ,input  'place-attr':U
+     1768           ,input  "attr-code,attr-value,PS,status_"
+     1769           ,input  v-label-param).
+     1770       end.
+     1771     end.
+     1772     for each with-action:
+     1773       p-ok = logical (with-action.v_new) no-error .
+     1774       if error-status:error then p-ok = false .
+     1775       return   p-ok .
+     1776     end.
+     1777     return no .
+     1778   end function.
+     1779   FUNCTION get_com-tanks returns character (
+     1780     input obj-code as integer,
+     1781     input obj-type as character,
+     1782     input attr-code as character,
+     1783     input pl-code as integer,
+     1784     input openDate as date,
+     1785     input endDate as date,
+     1786     input openTime as integer,
+     1787     input endTime as integer ):
+     1788     define buffer current_c-place-attr for ub.c-place-attr .
+     1789       define buffer buf_c-plc-hist       for ub.c-plc-hist .
+     1790     define variable ii        as integer   no-undo init 0.
+     1791     define variable is-meas   as logical   no-undo .
+     1792     define variable is-true   as logical   no-undo .
+     1793     define variable v-label   as character no-undo .
+     1794     define variable p-ok as character no-undo .
+     1795     find last current_c-place-attr no-lock where
+     1796       current_c-place-attr.obj-type = obj-type
+     1797       AND current_c-place-attr.obj-code = obj-code
+     1798       AND current_c-place-attr.pl-code = pl-code
+     1799       and current_c-place-attr.attr-code = attr-code
+     1800       and ((current_c-place-attr.corr-date = endDate
+     1801       and current_c-place-attr.corr-time < endTime) or
+     1802       current_c-place-attr.corr-date < endDate)
+     1803       no-error .
+     1804     if avail current_c-place-attr then
+     1805     do:
+     1806       find first buf_c-plc-hist no-lock where
+     1807         buf_c-plc-hist.obj-type = obj-type
+     1808         AND buf_c-plc-hist.obj-code = obj-code
+     1809         AND buf_c-plc-hist.pl-code = pl-code
+     1810         AND buf_c-plc-hist.subject  = "place-attr"
+     1811         and buf_c-plc-hist.chip-num = current_c-place-attr.chip-num no-error .
+     1812       if available (buf_c-plc-hist) then
+     1813       do:
+     1814         define variable v-label-param as character no-undo .
+     1815         if current_c-place-attr.attr-code = "place-SI"
+     1816           or current_c-place-attr.attr-code = "place-SI-temp"
+     1817           or current_c-place-attr.attr-code = "place-SI-dens"
+     1818           or current_c-place-attr.attr-code = "place-SI-level"
+     1819           then
+     1820         do :
+     1821           v-label-param =
+     1822             "attr-value" + chr(4) + "Значение атрибута" + chr(4) + "getSIname" + chr(8)
+     1823             + "attr-code" + chr(4) + "Код атрибута" + chr(4) + "getPlaceAttrCode"   .
+     1824         end .
+     1825         else
+     1826         do :
+     1827           v-label-param =
+     1828             "attr-value" + chr(4) + "Значение атрибута" + chr(4) + "getPlaceAttrValue" + chr(8)
+     1829             + "attr-code" + chr(4) + "Код атрибута" + chr(4) + "getPlaceAttrCode" + chr(8)
+     1830             + "PS" + chr(4) + "Примечание" + chr(4) + "" + chr(8)
+     1831             + "status_" + chr(4) + "Статус" + chr(4) + ""  .
+     1832         end .
+     1833         run proc-full-temp-changes in this-procedure (
+     1834           input buf_c-plc-hist.action = integer('1':U)
+     1835           ,input buf_c-plc-hist.action = integer('99':U)
+     1836           ,input  buffer current_c-place-attr:handle
+     1837           ,input  'place-attr':U
+     1838           ,input  "attr-code,attr-value,PS,status_"
+     1839           ,input  v-label-param).
+     1840       end.
+     1841     end.
+     1842     for each with-action:
+     1843        p-ok = with-action.v_new no-error .
+     1844        if error-status:error then p-ok = "" .
+     1845       return   p-ok .
+     1846     end.
+     1847     return "" .
+     1848   end function.
+     1849   function getSIname returns character (si-code as char) :
+     1850     for first sr-izmerenia no-lock where sr-izmerenia.node-code = integer(si-code) :
+     1851       return sr-izmerenia.sr-model .
+     1852     end .
+     1853   end .
+     1854   function  getPlaceAttrCode returns character (istr as char ):
+     1855     define variable OStr as character no-undo.
+     1856     if istr eq "disable-level-alarm"
+     1857       then
+     1858       OStr = "Сообщения о переполнении".
+     1859     else if istr eq "disable-water-alarm"
+     1860         then
+     1861         OStr = "Сообщения по воде".
+     1862       else if istr eq "place-need-RVD-rvs"
+     1863           then
+     1864           OStr = "Необходимо сделать сверку с РВД".
+     1865         else if istr eq "place-SI-level"
+     1866             then
+     1867             OStr = "Доп. средство измерения уровня".
+     1868           else if istr eq "place-SI-dens"
+     1869               then
+     1870               OStr = "Доп. средство измерения плотности".
+     1871             else if istr eq "place-SI-temp"
+     1872                 then
+     1873                 OStr = "Доп. средство измерения температуры".
+     1874               else if istr eq "place-SI"
+     1875                   then
+     1876                   OStr = "Основное средство измерения".
+     1877                 else
+     1878                   OStr = istr.
+     1879     return OStr.
+     1880   end.
+     1881   function  getPlaceAttrValue returns character (istr as char ):
+     1882     define variable OStr  as character no-undo.
+     1883     define variable vFlag as logical   no-undo.
+     1884     if    entry(1,istr,chr(4)) eq "enable"
+     1885       then
+     1886       assign
+     1887         OStr  = "Включено"
+     1888         vFlag = yes
+     1889         .
+     1890     else if    entry(1,istr,chr(4)) eq "disable"
+     1891         then
+     1892         assign
+     1893           OStr  = "Выключено"
+     1894           vFlag = yes
+     1895           .
+     1896       else
+     1897         OStr = istr.
+     1898     if     vFlag
+     1899       and num-entries (istr,chr(4)) > 2
+     1900       then
+     1901       OStr = OStr + " для смены № " + entry(3,istr,chr(4)) + " Дата " + entry(2,istr,chr(4)).
+     1902     return OStr.
+     1903   end.
+     1904   PROCEDURE proc-full-temp-changes :
+     1905     define input  parameter p-act-create as logical   no-undo .
+     1906     define input  parameter p-act-delete as logical   no-undo .
+     1907     define input  parameter p-hst-handle as handle    no-undo .
+     1908     define input  parameter p-main-table as character no-undo .
+     1909     define input  parameter p-field-list as character no-undo .
+     1910     define input  parameter p-label-form as character no-undo .
+     1911     define variable h-new-buf         as handle    no-undo .
+     1912     define variable h-main-buf        as handle    no-undo .
+     1913     define variable h-for-comp        as handle    no-undo .
+     1914     define variable v-inform          as character no-undo .
+     1915     define variable v-ind             as integer   no-undo .
+     1916     define variable v-idx-field-qnty  as integer   no-undo .
+     1917     define variable v-num-entries     as integer   no-undo .
+     1918     define variable fh                as handle    no-undo .
+     1919     define variable fh-main           as handle    no-undo .
+     1920     define variable fh-old            as handle    no-undo .
+     1921     define variable fh-new            as handle    no-undo .
+     1922     define variable v-field-name      as character no-undo .
+     1923     define variable v-field-lvl       as character no-undo .
+     1924     define variable v-field-form      as character no-undo .
+     1925     define variable v-search-exp      as character no-undo .
+     1926     define variable v-srch-main       as character no-undo .
+     1927     define variable v-word-link       as character no-undo .
+     1928     define variable v-av-chip-num     as logical   no-undo .
+     1929     define variable v-main-pi-fld-lst as character no-undo .
+     1930     define variable v-main-fld-lst    as character no-undo .
+     1931     define variable v-delim-list      as character no-undo .
+     1932     define variable v-label           as character no-undo .
+     1933     define variable v-old-value       as character no-undo case-sensitive.
+     1934     define variable v-new-value       as character no-undo case-sensitive.
+     1935     define variable v-chg-fields      as character no-undo.
+     1936     for each with-action:
+     1937       delete with-action.
+     1938     end.
+     1939     if not p-hst-handle:available then
+     1940     do:
+     1941       return .
+     1942     end.
+     1943     create buffer h-new-buf  for table p-hst-handle .
+     1944     create buffer h-main-buf for table p-main-table .
+     1945     assign
+     1946       v-inform = h-main-buf:index-information(1)
+     1947       v-ind    = 2
+     1948       .
+     1949     do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+     1950       on error undo, return error
+     1951       :
+     1952       assign
+     1953         v-inform = h-main-buf:index-information( v-ind )
+     1954         v-ind    = v-ind + 1
+     1955         .
+     1956     end.
+     1957     if v-inform = ?
+     1958       or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+     1959       or entry( 3, v-inform, ",":U ) <> "1":U
+     1960       then
+     1961     do:
+     1962       return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-workfile, h-main-buf:name ).
+     1963     end.
+     1964     assign
+     1965       v-idx-field-qnty = num-entries( v-inform ) - 4
+     1966       .
+     1967     if v-idx-field-qnty < 2 then
+     1968     do:
+     1969       return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-workfile, v-inform, h-main-buf:name ).
+     1970     end.
+     1971     assign
+     1972       v-srch-main   = "where":U
+     1973       v-word-link   = "":U
+     1974       v-av-chip-num = false
+     1975       v-delim-list  = "":U
+     1976       .
+     1977     do v-ind = 1 to v-idx-field-qnty by 2
+     1978       on error undo, return error
+     1979       :
+     1980       assign
+     1981         v-field-name      = entry( 4 + v-ind, v-inform, ",":U )
+     1982         fh                = p-hst-handle:buffer-field( v-field-name )
+     1983         fh-main           = h-main-buf:buffer-field( v-field-name )
+     1984         v-srch-main       = substitute( "&1 &2 &3.&4 =", v-srch-main, v-word-link, fh-main:table, v-field-name )
+     1985         v-main-pi-fld-lst = v-main-pi-fld-lst + v-delim-list + v-field-name
+     1986         .
+     1987       if fh:data-type ="character":U then
+     1988       do:
+     1989         assign
+     1990           v-srch-main = substitute( '&1 "&2"', v-srch-main, replace( replace( fh:buffer-value(), '"':U, '""':U ), '~~':U, '~~~~':U ) )
+     1991           .
+     1992       end.
+     1993       else
+     1994       do:
+     1995         assign
+     1996           v-srch-main = substitute( "&1 &2", v-srch-main, fh:buffer-value() )
+     1997           .
+     1998       end.
+     1999       if v-delim-list = "":U then
+     2000       do:
+     2001         assign
+     2002           v-delim-list = ",":U
+     2003           .
+     2004       end.
+     2005       if v-word-link = "":U then
+     2006       do:
+     2007         assign
+     2008           v-word-link = "and":U
+     2009           .
+     2010       end.
+     2011     end.
+     2012     assign
+     2013       v-delim-list = "":U
+     2014       .
+     2015     do v-ind = 1 to h-main-buf:num-fields
+     2016       on error undo, return error
+     2017       :
+     2018       assign
+     2019         fh-main      = h-main-buf:buffer-field( v-ind )
+     2020         v-field-name = fh-main:name
+     2021         .
+     2022       assign
+     2023         v-main-fld-lst = v-main-fld-lst + v-delim-list + v-field-name
+     2024         .
+     2025       if v-delim-list = "":U then
+     2026       do:
+     2027         assign
+     2028           v-delim-list = ",":U
+     2029           .
+     2030       end.
+     2031     end.
+     2032     assign
+     2033       v-inform = p-hst-handle:index-information(1)
+     2034       v-ind    = 2
+     2035       .
+     2036     do while v-inform <> ? and entry( 3, v-inform, ",":U ) <> "1":U
+     2037       on error undo, return error
+     2038       :
+     2039       assign
+     2040         v-inform = p-hst-handle:index-information( v-ind )
+     2041         v-ind    = v-ind + 1
+     2042         .
+     2043     end.
+     2044     if v-inform = ?
+     2045       or LC( entry( 1, v-inform, ",":U ) ) = "default":U
+     2046       or entry( 3, v-inform, ",":U ) <> "1":U
+     2047       then
+     2048     do:
+     2049       return error substitute( "&1. Таблица &2 не имеет первичного ключа в БД", vss-workfile, p-hst-handle:name ).
+     2050     end.
+     2051     assign
+     2052       v-idx-field-qnty = num-entries( v-inform ) - 4
+     2053       .
+     2054     if v-idx-field-qnty < 2 then
+     2055     do:
+     2056       return error substitute( "&1. Определенный первичный индекс (&2) не содержит списка полей для таблицы &3", vss-workfile, v-inform, p-hst-handle:name ).
+     2057     end.
+     2058     assign
+     2059       v-search-exp  = "where":U
+     2060       v-word-link   = "":U
+     2061       v-av-chip-num = false
+     2062       .
+     2063     do v-ind = 1 to v-idx-field-qnty by 2
+     2064       on error undo, return error
+     2065       :
+     2066       assign
+     2067         v-field-name = entry( 4 + v-ind, v-inform, ",":U )
+     2068         fh           = p-hst-handle:buffer-field( v-field-name )
+     2069         v-search-exp = substitute( "&1 &2 &3.&4", v-search-exp, v-word-link, fh:table, v-field-name )
+     2070         .
+     2071       if v-field-name = "chip-num":U then
+     2072       do:
+     2073         assign
+     2074           v-search-exp  = substitute( "&1 >", v-search-exp )
+     2075           v-av-chip-num = true
+     2076           .
+     2077       end.
+     2078       else
+     2079       do:
+     2080         assign
+     2081           v-search-exp = substitute( "&1 =", v-search-exp )
+     2082           .
+     2083       end.
+     2084       if fh:data-type ="character":U then
+     2085       do:
+     2086         assign
+     2087           v-search-exp = substitute( '&1 "&2"', v-search-exp, replace( replace( fh:buffer-value(), '"':U, '""':U ), '~~':U, '~~~~':U ) )
+     2088           .
+     2089       end.
+     2090       else
+     2091       do:
+     2092         assign
+     2093           v-search-exp = substitute( '&1 &2', v-search-exp, fh:buffer-value() )
+     2094           .
+     2095       end.
+     2096       if v-word-link = "":U then
+     2097       do:
+     2098         assign
+     2099           v-word-link = "and":U
+     2100           .
+     2101       end.
+     2102     end.
+     2103     if v-av-chip-num = false then
+     2104     do:
+     2105       message
+     2106         vss-workfile vss-revision vss-description skip
+     2107         substitute( "Таблица &2 не содержит поля chip-num.", vss-workfile, p-hst-handle:name ) skip
+     2108         "Использование данной процедуры невозможно!" skip
+     2109         view-as alert-box error .
+     2110       return error .
+     2111     end.
+     2112     h-new-buf:find-first( v-search-exp, no-lock ) no-error .
+     2113     if not h-new-buf:available then
+     2114     do:
+     2115       h-main-buf:find-first( v-srch-main, no-lock ) no-error .
+     2116       if not h-main-buf:available then
+     2117       do:
+     2118         assign
+     2119           h-for-comp = ?
+     2120           .
+     2121       end.
+     2122       else
+     2123       do:
+     2124         assign
+     2125           h-for-comp = h-main-buf
+     2126           .
+     2127       end.
+     2128     end.
+     2129     else
+     2130     do:
+     2131       assign
+     2132         h-for-comp = h-new-buf
+     2133         .
+     2134     end.
+     2135     assign
+     2136       v-num-entries = num-entries( v-main-fld-lst, ",":U )
+     2137       .
+     2138     do v-ind = 1 to v-num-entries
+     2139       on error undo, return error return-value
+     2140       :
+     2141       assign
+     2142         v-field-name = entry( v-ind, v-main-fld-lst )
+     2143         fh-old       = p-hst-handle:buffer-field( v-field-name )
+     2144         v-old-value  = fh-old:buffer-value()
+     2145         v-label      = trim( fh-old:label )
+     2146         .
+     2147       if ( trim( p-field-list ) <> "":U
+     2148         and lookup( v-field-name, p-field-list ) > 0
+     2149         )
+     2150         or trim( p-field-list ) = "":U
+     2151         then
+     2152       do:
+     2153         if h-for-comp <> ? then
+     2154         do:
+     2155           assign
+     2156             fh-new      = h-for-comp:buffer-field( v-field-name )
+     2157             v-new-value = fh-new:buffer-value()
+     2158             .
+     2159         end.
+     2160         else
+     2161         do:
+     2162           assign
+     2163             v-new-value = "":U
+     2164             .
+     2165         end.
+     2166         if p-act-create = true then
+     2167         do:
+     2168           assign
+     2169             v-old-value = "":U
+     2170             .
+     2171         end.
+     2172         if p-act-delete = true then
+     2173         do:
+     2174           assign
+     2175             v-new-value = "":U
+     2176             .
+     2177         end.
+     2178         if v-old-value <> v-new-value
+     2179           then
+     2180         do:
+     2181           create with-action.
+     2182           assign
+     2183             with-action.t_name     = p-main-table
+     2184             with-action.f_name     = v-field-name
+     2185             with-action.l_name     = replace( v-label, "&":U, "":U )
+     2186             with-action.v_old      = trim( v-old-value )
+     2187             with-action.v_new      = trim( v-new-value )
+     2188             with-action.num_       = 0
+     2189             with-action.fNotChange = v-old-value eq v-new-value
+     2190             .
+     2191         end.
+     2192       end.
+     2193     end.
+     2194     assign
+     2195       v-num-entries = num-entries( p-label-form, chr(8) )
+     2196       .
+     2197     do v-ind = 1 to v-num-entries
+     2198       on error undo, return error return-value
+     2199       :
+     2200       if num-entries( entry( v-ind, p-label-form, chr(8) ), chr(4) ) = 3 then
+     2201       do:
+     2202         assign
+     2203           v-field-name = entry( 1, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+     2204           v-field-lvl  = entry( 2, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+     2205           v-field-form = entry( 3, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+     2206           .
+     2207         find first with-action
+     2208           where with-action.f_name = v-field-name
+     2209           no-error .
+     2210         if available with-action then
+     2211         do:
+     2212           if trim( v-field-lvl ) <> "":U then
+     2213           do:
+     2214             assign
+     2215               with-action.l_name = v-field-lvl
+     2216               .
+     2217           end.
+     2218           if trim( v-field-form ) <> "":U then
+     2219           do:
+     2220             assign
+     2221               with-action.v_old = dynamic-function( v-field-form, with-action.v_old )
+     2222               .
+     2223             if h-for-comp <> ? then
+     2224             do:
+     2225               assign
+     2226                 with-action.v_new = dynamic-function( v-field-form, with-action.v_new )
+     2227                 .
+     2228             end.
+     2229           end.
+     2230         end.
+     2231       end.
+     2232       else
+     2233       do:
+     2234         message
+     2235           vss-workfile vss-revision vss-description skip
+     2236           "Ошибка! Список должен содержать три поля с разделителем delim-par!" skip
+     2237           substitute( "список для поля '&1': '&2'"
+     2238           ,entry( 1, entry( v-ind, p-label-form, chr(8) ), chr(4) )
+     2239           ,entry( v-ind, p-label-form, chr(8) )
+     2240           ) skip
+     2241           substitute( "полный список: &2", p-label-form ) skip
+     2242           view-as alert-box error .
+     2243       end.
+     2244     end.
+     2245     delete object h-new-buf .
+     2246     delete object h-main-buf .
+     2247   END PROCEDURE.
+     2248   for first ub.shift-obj no-lock where ub.shift-obj.obj-code = p-curr-obj-code and
+     2249       ub.shift-obj.obj-type = p-curr-obj-type and ub.shift-obj.shift-date = v-shift-date and
+     2250       ub.shift-obj.shift-num = v-shift-num:
+     2251       for each buf_tt-rvs-line break by buf_tt-rvs-line.gds-code by buf_tt-rvs-line.pl-code:
+     2252           v-main-tanks = "" .
+     2253           v-com-tanks = "" .
+     2254           for each tt-rvs-line where tt-rvs-line.gds-code = buf_tt-rvs-line.gds-code:
+     2255               if get_com-vessel(p-curr-obj-code, p-curr-obj-type, "place-com-vessel", tt-rvs-line.pl-code, ub.shift-obj.open-date,
+     2256                   close-date, ub.shift-obj.open-time, close-time) then
+     2257               do:
+     2258                   v-com-tanks = get_com-tanks(p-curr-obj-code, p-curr-obj-type, "place-com-tanks", tt-rvs-line.pl-code,
+     2259                       ub.shift-obj.open-date, close-date, ub.shift-obj.open-time, close-time) .
+     2260                   if v-com-tanks > "" then
+     2261                   do:
+     2262                       v-main-tanks = trim(v-main-tanks,",") .
+     2263                       if lookup(v-main-tanks, v-com-tanks, ",") <> 0 then next .
+     2264                       if not get_com-vessel(p-curr-obj-code, p-curr-obj-type, "place-is-main", tt-rvs-line.pl-code, ub.shift-obj.open-date,
+     2265                           close-date, ub.shift-obj.open-time, close-time) then next .
+     2266                       else
+     2267                       do :
+     2268                           v-main-tanks = v-main-tanks + "," + tt-rvs-line.loc1 .
+     2269                           v-num-com-tanks = num-entries(v-com-tanks) + 1 .
+     2270                           do ii = 1 to num-entries(v-com-tanks) :
+     2271                               find first buf_place no-lock where buf_place.obj-type = p-curr-obj-type
+     2272                                   and buf_place.obj-code = p-curr-obj-code
+     2273                                   and buf_place.loc1 = entry(ii, v-com-tanks)
+     2274                                   and buf_place.status_ = ""
+     2275                                   no-error .
+     2276                               if not available buf_place
+     2277                                   then
+     2278                               do :
+     2279                                   undo, return error ("Не найден сообщающийся резервуар " + entry(ii, v-com-tanks)) .
+     2280                               end .
+     2281                               find first com_temp-rvs-line where com_temp-rvs-line.gds-code = tt-rvs-line.gds-code
+     2282                                   and com_temp-rvs-line.pl-code  = buf_place.pl-code
+     2283                                   no-error .
+     2284                               if not available com_temp-rvs-line
+     2285                                   then
+     2286                               do :
+     2287                               end .
+     2288                               else
+     2289                               do :
+     2290                                   tt-rvs-line.tech-refuell = tt-rvs-line.tech-refuell + com_temp-rvs-line.tech-refuell .
+     2291                                   tt-rvs-line.rast-stock-end = tt-rvs-line.rast-stock-end + com_temp-rvs-line.rast-stock-end .
+     2292                                   tt-rvs-line.fact-stock-end = tt-rvs-line.fact-stock-end + com_temp-rvs-line.fact-stock-end .
+     2293                                   tt-rvs-line.fact-stock-start = tt-rvs-line.fact-stock-start + com_temp-rvs-line.fact-stock-start .
+     2294                                   tt-rvs-line.income = tt-rvs-line.income + com_temp-rvs-line.income .
+     2295                                   tt-rvs-line.sale-kg = tt-rvs-line.sale-kg + com_temp-rvs-line.sale-kg .
+     2296                                   tt-rvs-line.rast-stock-end = tt-rvs-line.fact-stock-start + tt-rvs-line.income - tt-rvs-line.sale-kg - tt-rvs-line.tech-refuell .
+     2297                                   tt-rvs-line.loc1 = tt-rvs-line.loc1 + "," + v-com-tanks .
+     2298                                   delete com_temp-rvs-line .
+     2299                               end .
+     2300                           end.
+     2301                       end.
+     2302                   end.
+     2303               end.
+     2304           end.
+     2305       end.
+     2306       for each buf_t-9 break by buf_t-9.gds-code by buf_t-9.pl-code:
+     2307           v-main-tanks = "" .
+     2308           v-com-tanks = "" .
+     2309           for each t-9 where t-9.gds-code = buf_t-9.gds-code:
+     2310               if get_com-vessel(p-curr-obj-code, p-curr-obj-type, "place-com-vessel", t-9.pl-code, ub.shift-obj.open-date,
+     2311                   ub.shift-obj.close-date, ub.shift-obj.open-time, ub.shift-obj.close-time) then
+     2312               do:
+     2313                   v-com-tanks = get_com-tanks(p-curr-obj-code, p-curr-obj-type, "place-com-tanks", t-9.pl-code,
+     2314                       ub.shift-obj.open-date, ub.shift-obj.close-date, ub.shift-obj.open-time, ub.shift-obj.close-time) .
+     2315                   if v-com-tanks > "" then
+     2316                   do:
+     2317                       v-main-tanks = trim(v-main-tanks,",") .
+     2318                       if lookup(v-main-tanks, v-com-tanks, ",") <> 0 then next .
+     2319                       if not get_com-vessel(p-curr-obj-code, p-curr-obj-type, "place-is-main", t-9.pl-code, ub.shift-obj.open-date,
+     2320                           ub.shift-obj.close-date, ub.shift-obj.open-time, ub.shift-obj.close-time) then next .
+     2321                       else
+     2322                       do :
+     2323                           v-main-tanks = v-main-tanks + "," + t-9.loc1 .
+     2324                           v-num-com-tanks = num-entries(v-com-tanks) + 1 .
+     2325                           do ii = 1 to num-entries(v-com-tanks) :
+     2326                               find first buf_place no-lock where buf_place.obj-type = p-curr-obj-type
+     2327                                   and buf_place.obj-code = p-curr-obj-code
+     2328                                   and buf_place.loc1 = entry(ii, v-com-tanks)
+     2329                                   and buf_place.status_ = ""
+     2330                                   no-error .
+     2331                               if not available buf_place
+     2332                                   then
+     2333                               do :
+     2334                                   undo, return error ("Не найден сообщающийся резервуар " + entry(ii, v-com-tanks)) .
+     2335                               end .
+     2336                               find first com_t-9 where com_t-9.gds-code = t-9.gds-code
+     2337                                   and com_t-9.pl-code  = buf_place.pl-code
+     2338                                   no-error .
+     2339                               if not available com_t-9
+     2340                                   then
+     2341                               do :
+     2342                               end .
+     2343                               else
+     2344                               do :
+     2345                                   t-9.delta = t-9.delta + com_t-9.delta .
+     2346                                   t-9.meas-qnty = t-9.meas-qnty + com_t-9.meas-qnty .
+     2347                                   t-9.sale-kg = t-9.sale-kg + com_t-9.sale-kg .
+     2348                                   t-9.loc1 = t-9.loc1 + "," + v-com-tanks .
+     2349                                   delete com_t-9 .
+     2350                               end .
+     2351                           end.
+     2352                       end.
+     2353                   end.
+     2354               end.
+     2355           end.
+     2356       end.
+     2357   end.
+     2358   for each buf_tt-rvs-line no-lock:
+     2359       find first buf_shift-param exclusive-lock where buf_shift-param.gds-code = buf_tt-rvs-line.gds-code and
+     2360           buf_shift-param.pl-code = buf_tt-rvs-line.pl-code and
+     2361           buf_shift-param.obj-code = p-curr-obj-code and
+     2362           buf_shift-param.obj-type = p-curr-obj-type and
+     2363           buf_shift-param.shift-date = v-shift-date and
+     2364           buf_shift-param.shift-name = v-shift-name and
+     2365           buf_shift-param.shift-num = v-shift-num no-error .
+     2366       if not available (buf_shift-param) then
+     2367       do:
+     2368           create buf_shift-param .
+     2369           assign
+     2370               buf_shift-param.gds-code       = buf_tt-rvs-line.gds-code
+     2371               buf_shift-param.pl-code        = buf_tt-rvs-line.pl-code
+     2372               buf_shift-param.obj-code       = p-curr-obj-code
+     2373               buf_shift-param.obj-type       = p-curr-obj-type
+     2374               buf_shift-param.shift-date     = v-shift-date
+     2375               buf_shift-param.shift-name     = v-shift-name
+     2376               buf_shift-param.shift-num      = v-shift-num
+     2377               buf_shift-param.diff-cash-trk  = 0
+     2378               buf_shift-param.diff-stock-end = 0
+     2379               .
+     2380           buf_shift-param.loc1 = buf_tt-rvs-line.loc1 .
+     2381       end.
+     2382       buf_tt-rvs-line.rast-stock-end = buf_tt-rvs-line.fact-stock-start + buf_tt-rvs-line.income - buf_tt-rvs-line.sale-kg - buf_tt-rvs-line.tech-refuell .
+     2383       assign
+     2384           buf_shift-param.tech-refuell    = buf_tt-rvs-line.tech-refuell
+     2385           buf_shift-param.prc-dev-mass    = prc-dev-mass
+     2386           buf_shift-param.dev-paid-trans  = dev-paid-trans
+     2387           buf_shift-param.diff-stock-end  = absolut(buf_tt-rvs-line.rast-stock-end - buf_tt-rvs-line.fact-stock-end)
+     2388           buf_shift-param.dev-mass        = buf_tt-rvs-line.fact-stock-end * buf_shift-param.prc-dev-mass / 100
+     2389           buf_shift-param.system-cli-qnty = buf_tt-rvs-line.rast-stock-end
+     2390           buf_shift-param.fact-stock-end  = buf_tt-rvs-line.fact-stock-end
+     2391           buf_shift-param.disc-diffMass   = ""
+     2392           .
+     2393   end.
+     2394   for each buf_t-9:
+     2395       find first buf_shift-param exclusive-lock where buf_shift-param.gds-code = buf_t-9.gds-code and
+     2396           buf_shift-param.pl-code = buf_t-9.pl-code and
+     2397           buf_shift-param.obj-code = p-curr-obj-code and
+     2398           buf_shift-param.obj-type = p-curr-obj-type and
+     2399           buf_shift-param.shift-date = v-shift-date and
+     2400           buf_shift-param.shift-name = v-shift-name and
+     2401           buf_shift-param.shift-num = v-shift-num no-error .
+     2402       if not available (buf_shift-param) then
+     2403       do:
+     2404           create buf_shift-param .
+     2405           assign
+     2406               buf_shift-param.gds-code       = buf_t-9.gds-code
+     2407               buf_shift-param.pl-code        = buf_t-9.pl-code
+     2408               buf_shift-param.obj-code       = p-curr-obj-code
+     2409               buf_shift-param.obj-type       = p-curr-obj-type
+     2410               buf_shift-param.shift-date     = v-shift-date
+     2411               buf_shift-param.shift-name     = v-shift-name
+     2412               buf_shift-param.shift-num      = v-shift-num
+     2413               buf_shift-param.diff-cash-trk  = 0
+     2414               buf_shift-param.diff-stock-end = 0
+     2415               .
+     2416           buf_shift-param.loc1 = buf_t-9.loc1 .
+     2417       end.
+     2418       buf_shift-param.disc-diffTRK = "" .
+     2419       buf_shift-param.diff-cash-trk = buf_shift-param.diff-cash-trk + absolut(buf_t-9.delta - buf_t-9.tech-refuell-qnty) .
+     2420       buf_shift-param.meas-qnty = buf_shift-param.meas-qnty + buf_t-9.meas-qnty.
+     2421       buf_shift-param.cash-qnty = buf_shift-param.cash-qnty + buf_t-9.sale-kg.
+     2422   end.
+     2423   assign
+     2424       errorCheck = false
+     2425       errorMass  = false
+     2426       errorTRK   = false
+     2427       .
+     2428   for each bf_susp-chk exclusive-lock where bf_susp-chk.shift-date = v-shift-date and
+     2429       bf_susp-chk.shift-num = v-shift-num and
+     2430       bf_susp-chk.shift-name = v-shift-name and
+     2431       bf_susp-chk.obj-code = p-curr-obj-code and
+     2432       bf_susp-chk.obj-type = p-curr-obj-type:
+     2433       find first tt-chk-doc where tt-chk-doc.doc-code = bf_susp-chk.doc-code no-lock no-error .
+     2434       if not available (tt-chk-doc) then delete bf_susp-chk .
+     2435   end.
+     2436   for each tt-chk-doc:
+     2437       errorCheck = true .
+     2438       find first bf_susp-chk exclusive-lock where bf_susp-chk.doc-code = tt-chk-doc.doc-code no-error .
+     2439       if not available (bf_susp-chk) then
+     2440       do:
+     2441           create bf_susp-chk .
+     2442           buffer-copy tt-chk-doc to bf_susp-chk .
+     2443       end.
+     2444       bf_susp-chk.chk-time = tt-chk-doc.chk-time .
+     2445   end.
+     2446   for each ub.shift-param no-lock where ub.shift-param.obj-code = p-curr-obj-code and
+     2447       ub.shift-param.obj-type = p-curr-obj-type and
+     2448       ub.shift-param.shift-date = v-shift-date and
+     2449       ub.shift-param.shift-num = v-shift-num and
+     2450       ub.shift-param.shift-name = v-shift-name and
+     2451       ub.shift-param.gds-code > 0:
+     2452       for first buf_shift-param exclusive-lock where buf_shift-param.obj-code = ub.shift-param.obj-code and
+     2453           buf_shift-param.obj-type = ub.shift-param.obj-type and
+     2454           buf_shift-param.shift-date = ub.shift-param.shift-date and
+     2455           buf_shift-param.shift-name = ub.shift-param.shift-name and
+     2456           buf_shift-param.shift-num = ub.shift-param.shift-num and
+     2457           buf_shift-param.gds-code = ub.shift-param.gds-code and
+     2458           buf_shift-param.pl-code = ub.shift-param.pl-code:
+     2459           if absolute(buf_shift-param.diff-stock-end) > buf_shift-param.dev-mass then
+     2460               assign
+     2461                   buf_shift-param.error-mass = true
+     2462                   errorMass                  = true .
+     2463               .
+     2464           if absolute(buf_shift-param.diff-cash-trk) > buf_shift-param.dev-paid-trans then
+     2465               assign
+     2466                   buf_shift-param.error-paid-trans = true
+     2467                   errorTRK                         = true .
+     2468       end.
+     2469   end.
+     2470   if errorCheck or errorMass or errorTRK then
+     2471   do:
+     2472       define variable v-text-button as character no-undo .
+     2473       if errorMass then v-text-button = v-text-button + '|' + "errorMass" .
+     2474       if errorTRK then v-text-button = v-text-button + '|' + "errorTRK" .
+     2475       if errorCheck then v-text-button = v-text-button + '|' + "errorCheck" .
+     2476       v-text-button = trim(v-text-button,'|') .
+     2477       run gbl/d-askwShiftClose.w
+     2478           (input parparentproc
+     2479           ,input "Закрытие смены"
+     2480           ,input "При закрытии смены выявлены ошибки"
+     2481           ,input "|^"
+     2482           ,input string(errorMass) + '|' + string(errorTRK) + '|' + string(errorCheck)
+     2483           ,input "Просмотр|Просмотр|Просмотр"
+     2484           ,input "Превышено допустимое отклонение по 1 части сменного отчета|"
+     2485           + "Превышено допустимое отклонение по 9 части сменного отчета|"
+     2486           + 'Найдены «подозрительные» чеки'
+     2487           ,input 4
+     2488           ,input 5
+     2489           ,input v-text-button
+     2490           ,input  p-curr-obj-type
+     2491           ,input  p-curr-obj-code
+     2492           ,input  v-shift-date
+     2493           ,input  v-shift-num
+     2494           ,input  v-shift-name
+     2495           ,output v-num
+     2496           ) no-error.
+     2497       if error-status:error then
+     2498       do:
+     2499           message return-value
+     2500               view-as alert-box.
+     2501       end.
+     2502       case v-num:
+     2503           when "closeWith" then
+     2504               do:
+     2505                   if errorMass then
+     2506                   do:
+     2507                       run str/diffShiftClose.w (
+     2508                           input parparentproc,
+     2509                           input 'ИЗМЕНЕНИЕ':U,
+     2510                           input p-curr-obj-type,
+     2511                           input p-curr-obj-code,
+     2512                           input v-shift-date,
+     2513                           input v-shift-num,
+     2514                           input v-shift-name,
+     2515                           input "diff-mass",
+     2516                           output v-ok)  no-error .
+     2517                       if not v-ok then
+     2518                       do:
+     2519                           return error .
+     2520                       end.
+     2521                   end.
+     2522                   if errorTRK then
+     2523                   do:
+     2524                       run str/diffShiftClose.w (
+     2525                           input parparentproc,
+     2526                           input 'ИЗМЕНЕНИЕ':U,
+     2527                           input p-curr-obj-type,
+     2528                           input p-curr-obj-code,
+     2529                           input v-shift-date,
+     2530                           input v-shift-num,
+     2531                           input v-shift-name,
+     2532                           input "diff-TRK",
+     2533                           output v-ok)  no-error .
+     2534                       if not v-ok then
+     2535                       do:
+     2536                           return error .
+     2537                       end.
+     2538                   end.
+     2539                   run str/susp-chk.w (
+     2540                       input parparentproc,
+     2541                       input 'ИЗМЕНЕНИЕ':U,
+     2542                       input p-curr-obj-type,
+     2543                       input p-curr-obj-code,
+     2544                       input v-shift-date,
+     2545                       input v-shift-num,
+     2546                       input v-shift-name,
+     2547                       output table tt-susp-chk,
+     2548                       output v-ok) no-error .
+     2549                   if not v-ok then
+     2550                   do:
+     2551                       return error.
+     2552                   end.
+     2553               end.
+     2554           when "cancel" then
+     2555               do:
+     2556                   for each buf_shift-param exclusive-lock where buf_shift-param.obj-code = p-curr-obj-code and
+     2557                       buf_shift-param.obj-type = p-curr-obj-type and
+     2558                       buf_shift-param.shift-date = v-shift-date and
+     2559                       buf_shift-param.shift-num = v-shift-num:
+     2560                       delete buf_shift-param .
+     2561                   end.
+     2562                   return error .
+     2563               end.
+     2564       end case .
+     2565   end.
+     2566   procedure get-state-mh-cnt-from-icnt-doc :
+     2567       define input parameter p-obj-type as character no-undo .
+     2568       define input parameter p-obj-code as integer no-undo .
+     2569       define input parameter p-from-shift-date as date no-undo.
+     2570       define input parameter p-from-shift-num as integer no-undo.
+     2571       define input parameter p-fact-order as decimal no-undo.
+     2572       define input parameter p-gds-code as integer no-undo .
+     2573       define input parameter p-pl-code as integer no-undo .
+     2574       define input parameter p-pump-code as integer no-undo .
+     2575       define input parameter p-nozzle-code as integer no-undo .
+     2576       define input-output parameter p-state-mh-cnt as decimal no-undo .
+     2577       define input-output parameter p-state-el-cnt as decimal no-undo .
+     2578       define buffer buf_icnt-doc  for ub.icnt-doc.
+     2579       define buffer buf_icnt-line for ub.icnt-line.
+     2580       for each buf_icnt-doc no-lock
+     2581           where buf_icnt-doc.obj-type = p-obj-type
+     2582           and buf_icnt-doc.obj-code = p-obj-code
+     2583           and buf_icnt-doc.status_ = 'факт':U
+     2584           and buf_icnt-doc.fact-order < p-fact-order
+     2585           by buf_icnt-doc.fact-order
+     2586           descending
+     2587           on error undo, return error return-value
+     2588           :
+     2589           for each buf_icnt-line no-lock where
+     2590               buf_icnt-line.doc-code = buf_icnt-doc.doc-code
+     2591               and buf_icnt-line.obj-code = buf_icnt-doc.obj-code
+     2592               and buf_icnt-line.obj-type = buf_icnt-doc.obj-type
+     2593               and buf_icnt-line.gds-code = p-gds-code
+     2594               and buf_icnt-line.pl-code = p-pl-code
+     2595               and buf_icnt-line.pump-code = p-pump-code
+     2596               and buf_icnt-line.nozzle-code = p-nozzle-code:
+     2597               assign
+     2598                   p-state-mh-cnt = p-state-mh-cnt + buf_icnt-line.state-mh-cnt.
+     2599               p-state-el-cnt = p-state-el-cnt + buf_icnt-line.state-el-cnt.
+     2600               leave.
+     2601           end.
+     2602       end.
+     2603   end procedure.
+     2604   find first ub.shift-param exclusive-lock where ub.shift-param.obj-code = p-curr-obj-code and
+     2605       ub.shift-param.obj-type = p-curr-obj-type and
+     2606       ub.shift-param.shift-date = v-shift-date and
+     2607       ub.shift-param.shift-name = v-shift-name and
+     2608       ub.shift-param.shift-num = v-shift-num and
+     2609       ub.shift-param.gds-code = 0 and
+     2610       ub.shift-param.pl-code = 0 no-error .
+     2611   if not available (ub.shift-param) then
+     2612   do:
+     2613       create ub.shift-param .
+     2614       assign
+     2615           ub.shift-param.obj-code   = p-curr-obj-code
+     2616           ub.shift-param.obj-type   = p-curr-obj-type
+     2617           ub.shift-param.shift-date = v-shift-date
+     2618           ub.shift-param.shift-name = v-shift-name
+     2619           ub.shift-param.shift-num  = v-shift-num .
+     2620   end.
+     2621   assign
+     2622       ub.shift-param.prc-dev-mass   = prc-dev-mass
+     2623       ub.shift-param.dev-paid-trans = dev-paid-trans
+     2624       .
+     2625   find first buf_shift-obj
+     2626       where buf_shift-obj.obj-type = p-curr-obj-type
+     2627       and buf_shift-obj.obj-code = p-curr-obj-code
+     2628       and buf_shift-obj.status_ = 'тек':U
+     2629       use-index pi
+     2630       no-error.
+     2631       if not g#news then
+     2632       do:
+     2633           run str/diallog.w ( input parparentproc
+     2634               , input this-procedure
+     2635               , input ('local-rum':U + chr(4) +
+     2636               "1" + chr(4) +
+     2637               "1" + chr(4) +
+     2638               "1" + chr(4) +
+     2639               "1" + chr(4) +
+     2640               "yes")
+     2641               , input string(1)
+     2642               , input p-silent
+     2643               , input ''
+     2644               , input 'Операции, выполняемые перед закрытием смены') no-error .
+     2645       end.
+     2646       if v-rum-err then
+     2647       do:
+     2648           undo stop-shift, return error .
+     2649       end.
+     2650       for each buf_pl-gds
+     2651           where buf_pl-gds.obj-type = p-curr-obj-type
+     2652           and buf_pl-gds.obj-code = p-curr-obj-code
+     2653           on error undo stop-shift, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     2654           :
+     2655           run trg/lockplgd.p
+     2656               ( input p-curr-obj-type
+     2657               ,input p-curr-obj-code
+     2658               ,input buf_pl-gds.pl-code
+     2659               ,input buf_pl-gds.gds-code
+     2660               ,input "assign-rvs-on=true":U
+     2661               ,input "":U
+     2662               ,input true
+     2663               ) no-error.
+     2664           if error-status:error then
+     2665           do:
+     2666               assign
+     2667                   v-err-msg = substitute( "&1.&2&3&2&4&2"
+     2668                                   , vss-workfile
+     2669                                   , chr(10)
+     2670                                   , return-value
+     2671                                   , error-status :get-message (1)
+     2672                                 ).
+     2673               if p-silent <> true then
+     2674               do:
+     2675                   message
+     2676                       v-err-msg
+     2677                       view-as alert-box error.
+     2678               end.
+     2679               undo, return error v-err-msg .
+     2680           end.
+     2681       end.
+     2682   define variable vss-include-info7 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2683   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run curobjdt in g#library
+     2684     (input  buf_shift-obj.obj-type
+     2685     ,input  buf_shift-obj.obj-code
+     2686     ,output v-obj-date
+     2687     )  .
+     2688       assign
+     2689           buf_shift-obj.status_    = 'зкр':U
+     2690           buf_shift-obj.close-date = v-obj-date
+     2691           .
+     2692       if p-silent <> true then
+     2693       do:
+     2694           if s-time > 86400 then
+     2695           do:
+     2696               assign
+     2697                   s-time = s-time - 86400.
+     2698           end.
+     2699           assign
+     2700               buf_shift-obj.close-time = s-time
+     2701               .
+     2702       end.
+     2703       else
+     2704       do:
+     2705           if buf_shift-obj.close-time = 0 then
+     2706           do:
+     2707               assign
+     2708                   v-err-msg = substitute( "Не задано время закрытия смены.&1"
+     2709                                   , chr(10)
+     2710                                 ) .
+     2711               if p-silent <> true then
+     2712               do:
+     2713                   message
+     2714                       v-err-msg
+     2715                       view-as alert-box.
+     2716               end.
+     2717               undo, return error v-err-msg .
+     2718           end.
+     2719       end.
+     2720       for each buf_pl-gds
+     2721           where buf_pl-gds.obj-type = p-curr-obj-type
+     2722           and buf_pl-gds.obj-code = p-curr-obj-code
+     2723           on error undo stop-shift, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message ( 1 ) )
+     2724           :
+     2725           run trg/lockplgd.p
+     2726               ( input p-curr-obj-type
+     2727               ,input p-curr-obj-code
+     2728               ,input buf_pl-gds.pl-code
+     2729               ,input buf_pl-gds.gds-code
+     2730               ,input "assign-rvs-on=false":U
+     2731               ,input "":U
+     2732               ,input true
+     2733               ) no-error.
+     2734           if error-status:error then
+     2735           do:
+     2736               assign
+     2737                   v-err-msg = substitute( "&1.&2&3&2&4&2"
+     2738                                   , vss-workfile
+     2739                                   , chr(10)
+     2740                                   , return-value
+     2741                                   , error-status :get-message (1)
+     2742                                 ).
+     2743               if p-silent <> true then
+     2744               do:
+     2745                   message
+     2746                       v-err-msg
+     2747                       view-as alert-box error.
+     2748               end.
+     2749               undo, return error v-err-msg .
+     2750           end.
+     2751       end.
+     2752       release buf_shift-obj no-error.
+     2753       if error-status:error then
+     2754       do:
+     2755           if not p-silent then
+     2756           do:
+     2757               undo stop-shift, return error.
+     2758           end.
+     2759           else
+     2760           do:
+     2761               undo stop-shift, return error substitute("Ошибка при закрытии смены: &1&2 От &3 П. &4&5&6&5&7"
+     2762                   , p-curr-obj-type
+     2763                   , p-curr-obj-code
+     2764                   , s-date
+     2765                   , s-num
+     2766                   , chr(10)
+     2767                   , error-status:get-message(1)
+     2768                   , return-value ).
+     2769           end.
+     2770       end.
+     2771   end.
+     2772   run str/calc-shift-period.p (input parparentproc,
+     2773       input p-curr-obj-type,
+     2774       input p-curr-obj-code,
+     2775       input v-shift-date,
+     2776       input v-shift-num)
+     2777       no-error .
+     2778   if error-status:error then
+     2779   do:
+     2780       assign
+     2781           v-err-msg = substitute( "&1.&2&3&2&4&2"
+     2782                               , vss-workfile
+     2783                               , chr(10)
+     2784                               , return-value
+     2785                               , error-status :get-message (1)
+     2786                             ).
+     2787       if p-silent <> true then
+     2788       do:
+     2789           message
+     2790               v-err-msg
+     2791               view-as alert-box error.
+     2792       end.
+     2793   end.
+     2794   run str/prep1C-shift-period.p (input parparentproc,
+     2795       input p-curr-obj-type,
+     2796       input p-curr-obj-code,
+     2797       input v-shift-date,
+     2798       input v-shift-num)
+     2799       no-error .
+     2800   if error-status:error then
+     2801   do:
+     2802       assign
+     2803           v-err-msg = substitute( "&1.&2&3&2&4&2"
+     2804                               , vss-workfile
+     2805                               , chr(10)
+     2806                               , return-value
+     2807                               , error-status :get-message (1)
+     2808                             ).
+     2809       if p-silent <> true then
+     2810       do:
+     2811           message
+     2812               v-err-msg
+     2813               view-as alert-box error.
+     2814       end.
+     2815   end.
+     2816   find first cur_rvs-doc no-lock
+     2817       where cur_rvs-doc.obj-type   = p-curr-obj-type
+     2818       and cur_rvs-doc.obj-code   = p-curr-obj-code
+     2819       and cur_rvs-doc.shift-date = v-shift-date
+     2820       and cur_rvs-doc.shift-num  = v-shift-num
+     2821       and cur_rvs-doc.status_    = 'факт':U
+     2822       and cur_rvs-doc.rvs-type   = 'смена':U
+     2823       no-error.
+     2824   find last prev_shift-obj no-lock
+     2825       where prev_shift-obj.obj-type = p-curr-obj-type
+     2826       and prev_shift-obj.obj-code = p-curr-obj-code
+     2827       and prev_shift-obj.status_  = 'зкр':U
+     2828       and ( prev_shift-obj.shift-date < v-shift-date
+     2829       or prev_shift-obj.shift-date = v-shift-date
+     2830       and prev_shift-obj.shift-num  < v-shift-num
+     2831       )
+     2832       use-index stts
+     2833       no-error.
+     2834   if available prev_shift-obj
+     2835       then
+     2836   do :
+     2837       find first prev_rvs-doc no-lock
+     2838           where prev_rvs-doc.obj-type   = prev_shift-obj.obj-type
+     2839           and prev_rvs-doc.obj-code   = prev_shift-obj.obj-code
+     2840           and prev_rvs-doc.shift-date = prev_shift-obj.shift-date
+     2841           and prev_rvs-doc.shift-num  = prev_shift-obj.shift-num
+     2842           and prev_rvs-doc.status_    = 'факт':U
+     2843           and prev_rvs-doc.rvs-type   = 'смена':U
+     2844           no-error.
+     2845   end .
+     2846   if available cur_rvs-doc
+     2847       and available prev_rvs-doc
+     2848       then
+     2849   do :
+     2850       for each cur_rvs-line no-lock where cur_rvs-line.rvs-code = cur_rvs-doc.rvs-code
+     2851           and cur_rvs-line.obj-type = cur_rvs-doc.obj-type
+     2852           and cur_rvs-line.obj-code = cur_rvs-doc.obj-code,
+     2853           first buf_place no-lock where buf_place.pl-code = cur_rvs-line.pl-code
+     2854           :
+     2855           find first prev_rvs-line no-lock where prev_rvs-line.rvs-code = prev_rvs-doc.rvs-code
+     2856               and prev_rvs-line.obj-type = prev_rvs-doc.obj-type
+     2857               and prev_rvs-line.obj-code = prev_rvs-doc.obj-code
+     2858               and prev_rvs-line.pl-code  = cur_rvs-line.pl-code
+     2859               no-error .
+     2860           if not available prev_rvs-line
+     2861               or (available prev_rvs-line and prev_rvs-line.gds-code <> cur_rvs-line.gds-code)
+     2862               then
+     2863           do :
+     2864               place-list = place-list + string(recid(buf_place)) + "," .
+     2865           end .
+     2866       end .
+     2867       place-list = trim(place-list, ",") .
+     2868       if place-list > ""
+     2869           then
+     2870       do :
+     2871           run utl/init-shift-period.p (input place-list) .
+     2872       end .
+     2873   end .
+     2874   for each buf_place-attr exclusive-lock where buf_place-attr.obj-type = p-curr-obj-type
+     2875       and buf_place-attr.obj-code = p-curr-obj-code
+     2876       and buf_place-attr.attr-code = "pending-table-version"
+     2877       :
+     2878       do ii = 1 to num-entries(buf_place-attr.attr-value) :
+     2879           find first buf_place-imp no-lock where buf_place-imp.obj-type = buf_place-attr.obj-type
+     2880               and buf_place-imp.obj-code = buf_place-attr.obj-code
+     2881               and buf_place-imp.pl-code  = buf_place-attr.pl-code
+     2882               and buf_place-imp.table-version = integer(entry(ii, buf_place-attr.attr-value))
+     2883               no-error .
+     2884           if available buf_place-imp
+     2885               and buf_place-imp.status_ = 0
+     2886               then
+     2887           do :
+     2888               run str/apply_place-imp.p (input buf_place-imp.obj-type,
+     2889                   input buf_place-imp.obj-code,
+     2890                   input buf_place-imp.pl-code,
+     2891                   input buf_place-imp.table-version)
+     2892                   no-error .
+     2893               if error-status:error
+     2894                   then
+     2895               do :
+     2896                   assign
+     2897                       v-err-msg = substitute( "&1.&2&3&2&4&2"
+     2898                                     , vss-workfile
+     2899                                     , chr(10)
+     2900                                     , return-value
+     2901                                     , "Ошибка при применении новых параметров резервуара "
+     2902                                   ).
+     2903                   if p-silent <> true then
+     2904                   do:
+     2905                       message
+     2906                           v-err-msg
+     2907                           view-as alert-box error.
+     2908                   end.
+     2909               end .
+     2910           end .
+     2911       end .
+     2912       delete buf_place-attr .
+     2913   end .
+     2914   if p-silent <> true then
+     2915   do:
+     2916       run mainmenu-disp-mutable in parparentproc (
+     2917           output v-cur-date-error-code
+     2918           ).
+     2919       message
+     2920           "Текущая смена закрыта."
+     2921           view-as alert-box information.
+     2922   end.
+     2923   run str/diallog.w ( input parparentproc
+     2924       , input this-procedure
+     2925       , input ('local-rum':U + chr(4) +
+     2926       "1" + chr(4) +
+     2927       "0" + chr(4) +
+     2928       "1" + chr(4) +
+     2929       "1" + chr(4) +
+     2930       "yes")
+     2931       , input string(2)
+     2932       , input p-silent
+     2933       , input ''
+     2934       , input 'Операции, выполняемые после закрытия смены') no-error .
+     2935   define variable v-base-code like ub.sysconf.base-code no-undo .
+     2936   define buffer buf_currency for ub.currency.
+     2937   define variable v_dataseth  as handle    no-undo .
+     2938   define variable vss-include-info8 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+     2939   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run basecode in g#library
+     2940     (input  v-cntxt-host-code-obj
+     2941     ,output v-base-code
+     2942     )  .
+     2943   find first buf_currency no-lock
+     2944       where buf_currency.curr-code = v-base-code
+     2945       .
+     2946   run str/reportSend.p (
+     2947       input parparentproc,
+     2948       input v-cntxt-userid,
+     2949       input v-shift-date,
+     2950       input v-shift-num,
+     2951       input v-shift-name,
+     2952       input p-curr-obj-code,
+     2953       input p-curr-obj-type) .
+     2954   return .
+     2955   procedure  local-rum:
+     2956       define input parameter parparentproc as widget-handle no-undo .
+     2957       define input parameter p-parent-handle  as widget-handle no-undo .
+     2958       define input parameter p-log-handle  as handle no-undo .
+     2959       define input parameter p-parameter   as character no-undo .
+     2960       define variable v-uniq-key-rec       as character no-undo .
+     2961       define variable v-shift-uniq-key-rec as character no-undo .
+     2962       define variable v-list               as character no-undo extent 2.
+     2963       define variable v-thobj-type-list    as character no-undo extent 2.
+     2964       define variable v-entry0             as character no-undo .
+     2965       define variable v-entry              as character no-undo .
+     2966       define variable v-thobj-type0        as character no-undo .
+     2967       define variable v-thobj-type         as character no-undo .
+     2968       define variable v-obj-type           as character no-undo .
+     2969       define variable v-obj-code           as integer   no-undo .
+     2970       define variable v-upper-code         as character no-undo .
+     2971       define variable v-ii                 as integer   no-undo .
+     2972       define variable v-jj                 as integer   no-undo .
+     2973       define variable v-step               as integer   no-undo .
+     2974       define buffer buf_thbj-attr for ub.thbj-attr.
+     2975       assign
+     2976           v-list[1]            = 'fdoc':U
+     2977           v-list[2]            = 'rep':U + chr(44) + 'rep':U
+     2978           v-thobj-type-list[1] = "global"
+     2979           v-thobj-type-list[2] = 'объект':U + chr(44) + "global"
+     2980           .
+     2981       main-block:
+     2982       do
+     2983           on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+     2984           on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+     2985           on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+     2986           :
+     2987           v-step = integer(p-parameter).
+     2988           run gen-key-rec in this-procedure (
+     2989               input  'shift-obj':U
+     2990               ,input (buffer buf_shift-obj:handle)
+     2991               ,output v-shift-uniq-key-rec).
+     2992           _v-ii:
+     2993           do v-ii = 1 to num-entries(v-list[v-step], chr(4) ):
+     2994               v-entry0  = entry(v-ii, v-list[v-step], chr(4)).
+     2995               v-thobj-type0 = entry(v-ii, v-thobj-type-list[v-step], chr(4)).
+     2996               _v-jj:
+     2997               do v-jj = 1 to num-entries(v-entry0):
+     2998                   assign
+     2999                       v-entry      = entry(v-jj, v-entry0)
+     3000                       v-thobj-type = entry(v-jj, v-thobj-type0).
+     3001                   .
+     3002                   case v-thobj-type:
+     3003                       when "global" then
+     3004                           do:
+     3005                               v-obj-type = ''.
+     3006                               v-obj-code = 0.
+     3007                               v-upper-code = 'rum':U.
+     3008                           end.
+     3009                       when 'объект':U then
+     3010                           do:
+     3011                               v-obj-type = buf_shift-obj.obj-type.
+     3012                               v-obj-code = buf_shift-obj.obj-code.
+     3013                               v-upper-code = 'rum_obj':U.
+     3014                           end.
+     3015                   end case.
+     3016                   find first buf_thbj-attr no-lock where
+     3017                       buf_thbj-attr.upper-prop-code = v-upper-code
+     3018                       and buf_thbj-attr.prop-code = v-entry
+     3019                       and buf_thbj-attr.obj-type = v-obj-type
+     3020                       and buf_thbj-attr.obj-code = v-obj-code
+     3021                       and buf_thbj-attr.property-value-logical = yes
+     3022                       no-error.
+     3023                   if not available buf_thbj-attr then
+     3024                   do:
+     3025                       next _v-jj.
+     3026                   end.
+     3027                   else
+     3028                   do:
+     3029                       leave _v-jj.
+     3030                   end.
+     3031               end.
+     3032               if available buf_thbj-attr
+     3033                   then
+     3034               do:
+     3035                   run gen-key-rec in this-procedure (
+     3036                       input  'thbj-attr':U
+     3037                       ,input (buffer buf_thbj-attr:handle)
+     3038                       ,output v-uniq-key-rec).
+     3039                   case v-entry:
+     3040                       when 'fdoc':U then
+     3041                           do:
+     3042                               run str/fdocrum.p
+     3043                                   (
+     3044                                   input parparentproc
+     3045                                   ,input p-parent-handle
+     3046                                   ,input p-log-handle
+     3047                                   ,input 'work_fin-doc':U
+     3048                                   ,input 0
+     3049                                   ,input 24
+     3050                                   ,input 1
+     3051                                   ,input g#db-num
+     3052                                   ,input v-uniq-key-rec
+     3053                                   ,input v-shift-uniq-key-rec
+     3054                                   ,input yes
+     3055                                   ) no-error .
+     3056                           end.
+     3057                       when 'rep':U then
+     3058                           do:
+     3059                               run rep/reprum.p
+     3060                                   (
+     3061                                   input parparentproc
+     3062                                   ,input p-parent-handle
+     3063                                   ,input p-log-handle
+     3064                                   ,input 'close-shift':U
+     3065                                   ,input 0
+     3066                                   ,input 22
+     3067                                   ,input 5
+     3068                                   ,input 0
+     3069                                   ,input g#db-num
+     3070                                   ,input v-uniq-key-rec
+     3071                                   ,input v-shift-uniq-key-rec + chr(4) + ""
+     3072                                   ,input yes
+     3073                                   ) no-error .
+     3074                           end.
+     3075                   end case.
+     3076                   if error-status:error then
+     3077                   do:
+     3078                       assign
+     3079                           v-rum-err = yes.
+     3080                       undo main-block, return error .
+     3081                   end.
+     3082               end.
+     3083           end.
+     3084       end.
+     3085   end procedure.

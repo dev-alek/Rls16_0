@@ -1,0 +1,3 @@
+block-level on error undo, throw.
+DEFINE INPUT PARAMETER parParentProc  AS WIDGET-HANDLE NO-UNDO.
+DEFINE INPUT PARAMETER P-REZ          AS CHARACTER NO-UNDO .

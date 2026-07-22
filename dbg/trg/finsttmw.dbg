@@ -1,0 +1,821 @@
+        1   block-level on error undo, throw.
+        2   TRIGGER PROCEDURE FOR WRITE OF ub.fin-statement OLD buffer oldb.
+        3   define variable vss-revision    as character no-undo init "$Revision$":U .
+        4   define variable vss-author      as character no-undo init "$Author$":U .
+        5   define variable vss-date        as character no-undo init "$Date$":U .
+        6   define variable vss-workfile    as character no-undo init "$Workfile$":U .
+        7   define variable vss-archive     as character no-undo init "$Archive$":U .
+        8   define variable vss-description as character no-undo init "Триггер на запись банковской выписки".
+        9   procedure vss-get-info :
+       10     define output parameter p-vss-revision    like vss-revision    no-undo .
+       11     define output parameter p-vss-author      like vss-author      no-undo .
+       12     define output parameter p-vss-date        like vss-date        no-undo .
+       13     define output parameter p-vss-workfile    like vss-workfile    no-undo .
+       14     define output parameter p-vss-archive     like vss-archive     no-undo .
+       15     define output parameter p-vss-description like vss-description no-undo .
+       16     assign
+       17       p-vss-revision    = vss-revision
+       18       p-vss-author      = vss-author
+       19       p-vss-date        = vss-date
+       20       p-vss-workfile    = vss-workfile
+       21       p-vss-archive     = vss-archive
+       22       p-vss-description = vss-description
+       23     .
+       24   end procedure.
+       25   procedure vss-get-parameters :
+       26     define output parameter p-vss-parameters as character no-undo .
+       27       assign
+       28         p-vss-parameters = substitute('&1|&2', ub.fin-statement.host-code, ub.fin-statement.sttm-code)
+       29       .
+       30   end procedure.
+       31   define new global shared variable g#vssrevis-logger as handle    no-undo .
+       32   define variable v-vssrevis-logevent                 as logical   no-undo init false .
+       33   define variable v-vssrevis-logger                   as handle    no-undo .
+       34   procedure vss-logevent :
+       35     define input  parameter p-extra-paramters as character no-undo .
+       36     define variable v-vssrevis-parameters as character no-undo .
+       37     do
+       38     on error undo, return error return-value
+       39     :
+       40       if  valid-handle(v-vssrevis-logger)
+       41       and v-vssrevis-logger :get-signature("logevent") <> ""
+       42       then do:
+       43         run vss-get-parameters in this-procedure
+       44           (output v-vssrevis-parameters
+       45           ).
+       46         run logevent in v-vssrevis-logger
+       47           (input vss-workfile
+       48           ,input vss-revision
+       49           ,input v-vssrevis-parameters
+       50           ,input p-extra-paramters
+       51           ).
+       52       end.
+       53     end.
+       54   end procedure.
+       55   assign
+       56     v-vssrevis-logger = g#vssrevis-logger
+       57   .
+       58   if  valid-handle(v-vssrevis-logger)
+       59   and v-vssrevis-logger :get-signature("logevent") <> ""
+       60   then do:
+       61     assign
+       62       v-vssrevis-logevent = true
+       63     .
+       64     run vss-logevent in this-procedure (input vss-description) .
+       65   end.
+       66   define new global shared variable g#language as character no-undo .
+       67   if g#language <> '' and g#language <> 'rus':U then do:
+       68     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       69   end.
+       70   define new global shared variable g#library  as handle no-undo .
+       71   define new global shared variable g#library2 as handle no-undo .
+       72   define   shared variable g#auto as logical no-undo.
+       73   define   shared variable g#news as logical no-undo.
+       74   define   shared variable g#oxml as logical no-undo.
+       75   define   shared variable g#esys as logical no-undo.
+       76   define   shared variable g#news-source-db as integer no-undo.
+       77   define   shared variable g#esys-source-esys as integer no-undo.
+       78   define   shared variable g#db-num as integer   no-undo .
+       79   define   shared variable g#userid as character no-undo .
+       80   define   shared variable g#passwd as character no-undo .
+       81   define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+       82   procedure cur-time :
+       83      define output parameter p-today as date      no-undo .
+       84      define output parameter p-time  as integer   no-undo .
+       85     do
+       86     on error undo, return error
+       87     :
+       88       define variable v-date1 as date      no-undo .
+       89       define variable v-date2 as date      no-undo .
+       90       define variable v-time  as integer   no-undo .
+       91       assign
+       92         v-date1 = today
+       93         v-time  = time
+       94         v-date2 = today
+       95       .
+       96       if v-date1 <> v-date2
+       97       then do:
+       98         assign
+       99           v-date1 = today
+      100           v-time  = v-time
+      101         .
+      102       end.
+      103       assign
+      104         p-today = v-date1
+      105         p-time  = v-time
+      106       .
+      107     end.
+      108   end.
+      109   function cur-time-date returns character
+      110   :
+      111     return string(today, '99/99/9999':U) .
+      112   end.
+      113   function cur-time-mjd returns decimal
+      114   :
+      115     define variable v-date as date      no-undo .
+      116     define variable v-time as integer   no-undo .
+      117     run cur-time in this-procedure
+      118       (output v-date
+      119       ,output v-time
+      120       ) .
+      121     return integer(v-date) - 2400002 + (v-time / 86400) .
+      122   end.
+      123   function cur-time-get-ending-index returns integer
+      124   (input p-number as integer
+      125   )
+      126   :
+      127     if p-number < 0
+      128     or p-number = ?
+      129     then do:
+      130       return 1 .
+      131     end.
+      132     define variable v-rest as integer   no-undo .
+      133     assign
+      134       p-number = p-number modulo 100
+      135     .
+      136     if p-number < 20
+      137     then do:
+      138       assign
+      139         v-rest = p-number
+      140       .
+      141     end.
+      142     else do:
+      143       assign
+      144         v-rest = p-number modulo 10
+      145       .
+      146     end.
+      147     case v-rest :
+      148       when 1
+      149       then do:
+      150         return 2 .
+      151       end.
+      152       when 2 or
+      153       when 3 or
+      154       when 4
+      155       then do:
+      156         return 3 .
+      157       end.
+      158       otherwise do:
+      159         return 1 .
+      160       end.
+      161     end case .
+      162   end.
+      163   procedure cur-time-mjd-to-date :
+      164      define input  parameter i-mjd-diff as decimal no-undo.
+      165      define output parameter o-Date     as date    no-undo.
+      166      define output parameter o-Time     as integer no-undo.
+      167      define variable v-day-number as integer   no-undo .
+      168      if    i-mjd-diff < 0
+      169         or i-mjd-diff = ?
+      170      then do:
+      171         return "?" .
+      172      end.
+      173      assign
+      174         v-day-number = truncate(i-mjd-diff,0).
+      175         o-Date = date(v-day-number + 2400002).
+      176         o-Time = truncate((i-mjd-diff - v-day-number) * 86400, 0)
+      177     .
+      178   end.
+      179   function cur-time-mjd-to-string returns character
+      180   (input p-mjd-diff as decimal
+      181   )
+      182   :
+      183     define variable v-day-number as integer   no-undo .
+      184     define variable v-seconds    as integer   no-undo .
+      185     define variable v-hour       as integer   no-undo .
+      186     define variable v-min        as integer   no-undo .
+      187     define variable v-day-name    as character no-undo extent 3 initial [   "дней",    "день",     "дня" ] .
+      188     define variable v-hour-name   as character no-undo extent 3 initial [  "часов",     "час",    "часа" ] .
+      189     define variable v-min-name    as character no-undo extent 3 initial [  "минут",  "минута",  "минуты" ] .
+      190     define variable v-second-name as character no-undo extent 3 initial [ "секунд", "секунда", "секунды" ] .
+      191     if p-mjd-diff < 0
+      192     or p-mjd-diff = ?
+      193     then do:
+      194       return "?" .
+      195     end.
+      196     assign
+      197       v-day-number = integer(truncate(p-mjd-diff,0))
+      198       v-seconds    = truncate((p-mjd-diff - v-day-number) * 86400, 0)
+      199     .
+      200     if v-seconds > 86400
+      201     then do:
+      202       assign
+      203         v-seconds = 86400 - 1
+      204       .
+      205     end.
+      206     if v-seconds < 0
+      207     then do:
+      208       assign
+      209         v-seconds = 0
+      210       .
+      211     end.
+      212     assign
+      213       v-hour = truncate(v-seconds / 3600, 0)
+      214     .
+      215     assign
+      216       v-seconds = v-seconds modulo 3600
+      217     .
+      218     assign
+      219       v-min = truncate(v-seconds / 60, 0)
+      220     .
+      221     assign
+      222       v-seconds = v-seconds modulo 60
+      223     .
+      224     return
+      225         (if v-day-number <> 0
+      226           then string(v-day-number) + " " + v-day-name[cur-time-get-ending-index(v-day-number)] + " "
+      227           else ""
+      228         )
+      229       + (if v-day-number <> 0 or v-hour <> 0
+      230           then string(v-hour) + " " + v-hour-name[cur-time-get-ending-index(v-hour)] + " "
+      231           else ""
+      232         )
+      233       + (if v-day-number <> 0 or v-hour <> 0 or v-min <> 0
+      234           then string(v-min) + " " + v-min-name[cur-time-get-ending-index(v-min)] + " "
+      235           else ""
+      236         )
+      237       + string(v-seconds) + " " + v-second-name[cur-time-get-ending-index(v-seconds)]
+      238       .
+      239   end.
+      240   function cur-time-string returns character
+      241   :
+      242     define variable v-date as date      no-undo .
+      243     define variable v-time as integer   no-undo .
+      244     run cur-time in this-procedure
+      245       (output v-date
+      246       ,output v-time
+      247       ) .
+      248     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM':U) .
+      249   end.
+      250   function cur-time-string-sec returns character
+      251   :
+      252     define variable v-date as date      no-undo .
+      253     define variable v-time as integer   no-undo .
+      254     run cur-time in this-procedure
+      255       (output v-date
+      256       ,output v-time
+      257       ) .
+      258     return string(v-date, '99/99/9999':U) + ' ':u + string(v-time, 'HH:MM:SS':U) .
+      259   end.
+      260   function cur-time-custom  returns character
+      261   (input p-prefix as character
+      262   ,input p-date-format as character
+      263   ,input p-delimiter as character
+      264   ,input p-time-format as character
+      265   ,input p-suffix as character
+      266   )
+      267   :
+      268     define variable v-date as date      no-undo .
+      269     define variable v-time as integer   no-undo .
+      270     run cur-time in this-procedure
+      271       (output v-date
+      272       ,output v-time
+      273       ) .
+      274     return
+      275       p-prefix
+      276       + string(v-date, p-date-format)
+      277       + p-delimiter
+      278       + string(v-time, p-time-format)
+      279       + p-suffix
+      280       .
+      281   end.
+      282   function cur-time-print  returns character
+      283   :
+      284     define variable v-date as date      no-undo .
+      285     define variable v-time as integer   no-undo .
+      286     run cur-time in this-procedure
+      287       (output v-date
+      288       ,output v-time
+      289       ) .
+      290     return "Дата печати : " + string(v-date, '99.99.9999':U) + ' , ':U + string(v-time, 'HH:MM':U) .
+      291   end.
+      292   function cur-time-datetime returns datetime
+      293   :
+      294     define variable v-char as character no-undo .
+      295     define variable v-datetime as datetime no-undo .
+      296     v-char = cur-time-string().
+      297     v-datetime = datetime(v-char).
+      298     return  v-datetime.
+      299   end.
+      300   function cur-time-string-msec returns character
+      301   :
+      302     define variable v-date as datetime  no-undo .
+      303     v-date = now.
+      304     return string(v-date) .
+      305   end.
+      306   define variable vss-include-info1 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      307   procedure factord :
+      308     define input  parameter p-fact-date            as date    no-undo .
+      309     define input  parameter p-fact-time            as integer no-undo .
+      310     define input  parameter p-fact-num             as integer no-undo .
+      311     define input  parameter p-shift-date           as date    no-undo .
+      312     define input  parameter p-shift-num            as integer no-undo .
+      313     define input  parameter p-shift-on             as logical no-undo .
+      314     define output parameter p-fact-order           as decimal no-undo .
+      315     define output parameter p-shift-end-fact-order as decimal no-undo .
+      316     define output parameter p-day-end-fact-order   as decimal no-undo .
+      317     define variable vss-description as character no-undo init "factord: Определение порядкового номера документа".
+      318     if p-fact-date = ?
+      319     then do:
+      320       return error "Не указана фактическая дата" .
+      321     end.
+      322     define variable v-fact-date-num as integer no-undo .
+      323     assign
+      324       v-fact-date-num = integer(p-fact-date)
+      325     .
+      326     if p-fact-num = ?
+      327     or p-fact-num = 0
+      328     then do:
+      329       return error "Не задан p-fact-num " + string(p-fact-num) .
+      330     end.
+      331     if p-fact-num < 0
+      332     then do:
+      333       return error "Отрицательный fact-num " + string(p-fact-num) .
+      334     end.
+      335     if p-fact-num >= 100000000
+      336     then do:
+      337       return error "Недопустимо большой fact-num " + string(p-fact-num) .
+      338     end.
+      339     if p-shift-on = true
+      340     then do:
+      341       if p-shift-date = ?
+      342       then do:
+      343         return error "Не задана дата смены" .
+      344       end.
+      345       if p-shift-num = ?
+      346       or p-shift-num = 0
+      347       then do:
+      348         return error "Не задан номер смены" .
+      349       end.
+      350     end.
+      351     else do:
+      352       assign
+      353         p-shift-date = p-fact-date
+      354         p-shift-num  = 24
+      355       .
+      356     end.
+      357     define variable v-shift-offset as integer no-undo .
+      358     if p-shift-date = p-fact-date
+      359     then do:
+      360       assign
+      361         v-shift-offset = 1
+      362       .
+      363     end.
+      364     if p-shift-date < p-fact-date
+      365     then do:
+      366       assign
+      367         v-shift-offset = 0
+      368       .
+      369     end.
+      370     if p-shift-date > p-fact-date
+      371     then do:
+      372       message
+      373         vss-workfile vss-revision vss-description skip
+      374         "Неправильная дата закрытия смены" skip
+      375         "Дата закрытия не смены не может быть раньше чем дата открытия смены" skip
+      376         view-as alert-box error .
+      377       undo, return error
+      378         substitute("Дата закрытия не смены &1 не может быть раньше чем дата открытия смены &2"
+      379           ,string(p-fact-date, '99/99/9999':U)
+      380           ,string(p-shift-date, '99/99/9999':U)
+      381           )
+      382       .
+      383     end.
+      384     if p-shift-num < 1
+      385     or p-shift-num > 24
+      386     then do:
+      387       message
+      388         vss-workfile vss-revision vss-description skip
+      389         "Неправильный номер смены" skip
+      390         "p-shift-num" p-shift-num skip
+      391         view-as alert-box error .
+      392       undo, return error return-value .
+      393     end.
+      394     assign
+      395       p-fact-order           = v-fact-date-num
+      396                              + v-shift-offset * 0.5
+      397                              + p-shift-num    * 0.02 - 0.01
+      398                              + p-fact-num     * 0.0000000001
+      399       p-shift-end-fact-order = v-fact-date-num
+      400                              + v-shift-offset * 0.5
+      401                              + p-shift-num    * 0.02
+      402       p-day-end-fact-order   = v-fact-date-num
+      403                              + 0.99
+      404     .
+      405     if p-fact-order           <= v-fact-date-num
+      406     or p-shift-end-fact-order <= v-fact-date-num
+      407     or p-fact-order           >= p-shift-end-fact-order - 0.0000000001
+      408     or p-shift-end-fact-order >= p-day-end-fact-order
+      409     then do:
+      410       message
+      411         vss-workfile vss-revision vss-description skip
+      412         "Внутренняя ошибка при генерации фактического номера" skip
+      413         "p-fact-date"            p-fact-date            skip
+      414         "p-fact-time"            p-fact-time            skip
+      415         "p-fact-num"             p-fact-num             skip
+      416         "p-shift-date"           p-shift-date           skip
+      417         "p-shift-num"            p-shift-num            skip
+      418         "p-shift-on"             p-shift-on             skip
+      419         "p-shift-end-fact-order" p-shift-end-fact-order skip
+      420         "p-day-end-fact-order"   p-day-end-fact-order   skip
+      421         "v-fact-date-num"        v-fact-date-num        skip
+      422         view-as alert-box error .
+      423       undo, return error return-value .
+      424     end.
+      425   end procedure.
+      426   procedure day-begin-fact-order :
+      427     define input  parameter p-fact-date            as date    no-undo .
+      428     define output parameter p-day-begin-fact-order as decimal no-undo .
+      429     do
+      430     on error undo, return error return-value
+      431     :
+      432       if p-fact-date = ?
+      433       then do:
+      434         assign
+      435           p-day-begin-fact-order = 0
+      436         .
+      437       end.
+      438       else do:
+      439         assign
+      440           p-day-begin-fact-order = integer(p-fact-date)
+      441         .
+      442       end.
+      443     end.
+      444   end procedure.
+      445   procedure factord-max-fact-order :
+      446     define output parameter p-max-fact-order as decimal   no-undo .
+      447     do
+      448     on error undo, return error return-value
+      449     :
+      450       run day-begin-fact-order in this-procedure
+      451         (input  date(1, 1, 5000)
+      452         ,output p-max-fact-order
+      453         ) .
+      454     end.
+      455   end procedure.
+      456   procedure factord-cut-archive :
+      457     define input  parameter p-obj-type             as character no-undo .
+      458     define input  parameter p-obj-code             as integer   no-undo .
+      459     define input  parameter p-fact-date            as date      no-undo .
+      460     define output parameter p-shift-on             as logical   no-undo .
+      461     define output parameter p-shift-date           as date      no-undo .
+      462     define output parameter p-shift-num            as integer   no-undo .
+      463     define output parameter p-day-end-fact-order   as decimal   no-undo .
+      464     define output parameter p-shift-end-fact-order as decimal   no-undo .
+      465     define variable v-fact-order as decimal   no-undo .
+      466     define buffer buf_shift-obj for ub.shift-obj .
+      467     do
+      468     on error undo, return error return-value
+      469     :
+      470   define variable vss-include-info2 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      471   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      472     (input  p-obj-type
+      473     ,input  p-obj-code
+      474     ,input  'shift-on=request'
+      475     ,output p-shift-on
+      476     ) no-error .
+      477       if error-status :error
+      478       then do:
+      479         message
+      480           vss-workfile vss-revision vss-description skip
+      481           "Ошибка при определении атрибута объекта" skip
+      482           "Объект" p-obj-type p-obj-code skip
+      483           error-status :get-message(1) skip
+      484           return-value skip
+      485           view-as alert-box error .
+      486         undo, return error return-value .
+      487       end.
+      488       if p-shift-on = false
+      489       then do:
+      490         assign
+      491           p-shift-date               = ?
+      492           p-shift-num                = 0
+      493         .
+      494       end.
+      495       else do:
+      496         find first buf_shift-obj share-lock
+      497           where buf_shift-obj.obj-type   = p-obj-type
+      498             and buf_shift-obj.obj-code   = p-obj-code
+      499             and buf_shift-obj.shift-date > p-fact-date
+      500           use-index pi
+      501           no-error .
+      502         if not available buf_shift-obj
+      503         or buf_shift-obj.status_ <> 'зкр':U
+      504         then do:
+      505           message
+      506             vss-workfile vss-revision vss-description skip
+      507             "Невозможно вычислить последнюю смену" skip
+      508             "Отсутствует закрытая смена с датой большей чем дата инициализации архива" skip
+      509             "Объект" p-obj-type p-obj-code skip
+      510             "Дата" p-fact-date skip
+      511             view-as alert-box error .
+      512           undo, return error return-value .
+      513         end.
+      514         find last buf_shift-obj share-lock
+      515           where buf_shift-obj.obj-type = p-obj-type
+      516             and buf_shift-obj.obj-code = p-obj-code
+      517             and buf_shift-obj.shift-date <= p-fact-date
+      518           use-index pi
+      519           no-error .
+      520         if available buf_shift-obj
+      521         then do:
+      522           if  buf_shift-obj.status_ = 'зкр':U
+      523           then do:
+      524             assign
+      525               p-shift-date = buf_shift-obj.shift-date
+      526               p-shift-num  = buf_shift-obj.shift-num
+      527             .
+      528           end.
+      529           else do:
+      530             message
+      531               vss-workfile vss-revision vss-description skip
+      532               "Невозможно вычислить последнюю смену" skip
+      533               "Статус смены отличен от статуса" 'зкр':U skip
+      534               "Объект" p-obj-type p-obj-code skip
+      535               "Дата" p-fact-date skip
+      536               "Смена" buf_shift-obj.shift-date buf_shift-obj.shift-num skip
+      537               view-as alert-box error .
+      538             undo, return error return-value .
+      539           end.
+      540         end.
+      541         else do:
+      542           assign
+      543             p-shift-date = p-fact-date - 1
+      544             p-shift-num  = 1
+      545           .
+      546         end.
+      547       end.
+      548       run factord in this-procedure
+      549         (input  p-fact-date
+      550         ,input  1
+      551         ,input  1
+      552         ,input  p-shift-date
+      553         ,input  p-shift-num
+      554         ,input  p-shift-on
+      555         ,output v-fact-order
+      556         ,output p-shift-end-fact-order
+      557         ,output p-day-end-fact-order
+      558         ) no-error .
+      559       if error-status :error
+      560       then do:
+      561         message
+      562           vss-workfile vss-revision vss-description skip
+      563           "Ошибка при вызове процедуры factord"
+      564           error-status :get-message(1) skip
+      565           return-value skip
+      566           view-as alert-box error .
+      567         undo, return error return-value .
+      568       end.
+      569     end.
+      570   end procedure.
+      571   procedure factord-lock-shift :
+      572     define input  parameter p-obj-type  as character no-undo .
+      573     define input  parameter p-obj-code  as integer   no-undo .
+      574     define input  parameter p-fact-date as date      no-undo .
+      575     define parameter buffer buf_shift-obj for ub.shift-obj .
+      576     define variable v-shift-on      as logical   no-undo .
+      577     define variable v-extra-message as character no-undo .
+      578     define variable v-error as character no-undo .
+      579     do
+      580     on error undo, return error return-value
+      581     :
+      582   define variable vss-include-info3 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      583   if (valid-handle(g#library) <> true) then do:   run gbl/library.p persistent no-error .   if error-status :error or (valid-handle(g#library) <> true) then do:     message       "Error starting library.p" skip       g#library skip       g#library :type skip       g#library :file-name skip       error-status :get-message(1) skip       return-value skip       view-as alert-box error .     stop .   end. end. run objat in g#library
+      584     (input  p-obj-type
+      585     ,input  p-obj-code
+      586     ,input  'shift-on=request'
+      587     ,output v-shift-on
+      588     ) no-error .
+      589       if error-status :error
+      590       then do:
+      591         v-error = substitute("Ошибка при определении атрибута объекта  &1 &2 &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value) .
+      592         undo, return error v-error .
+      593       end.
+      594       if v-shift-on = true
+      595       then do:
+      596         find first buf_shift-obj share-lock
+      597           where buf_shift-obj.obj-type   = p-obj-type
+      598             and buf_shift-obj.obj-code   = p-obj-code
+      599             and buf_shift-obj.shift-date > p-fact-date
+      600           use-index pi
+      601           no-error .
+      602         if not available buf_shift-obj
+      603         or buf_shift-obj.status_ <> 'зкр':U
+      604         then do:
+      605           find last buf_shift-obj
+      606             where buf_shift-obj.obj-type = p-obj-type
+      607               and buf_shift-obj.obj-code = p-obj-code
+      608               and buf_shift-obj.status_  = 'зкр':U
+      609             use-index stts
+      610             no-error .
+      611           if available buf_shift-obj
+      612           then do:
+      613             assign
+      614               v-extra-message =
+      615                     substitute("Дата начала последеней закрытой смены на объекте &1"
+      616                               ,string(buf_shift-obj.shift-date, '99/99/9999':u)
+      617                               )
+      618             .
+      619           end.
+      620           v-error = substitute("Ошибка при блокировке смены объекта  &1 &2 Отсутствует закрытая смена с датой большей чем указанная дата  &5  &3 &4" ,p-obj-type , p-obj-code  , error-status :get-message(1) , return-value , p-fact-date) .
+      621           undo, return error v-error .
+      622         end.
+      623       end.
+      624     end.
+      625   end procedure.
+      626   procedure factord-end-day :
+      627     define input  parameter p-fact-date            as date    no-undo .
+      628     define output parameter p-day-end-fact-order   as decimal no-undo .
+      629     do
+      630     on error undo, return error return-value
+      631     :
+      632       if p-fact-date = ?
+      633       then do:
+      634         return error "Не указана фактическая дата" .
+      635       end.
+      636       assign
+      637         p-day-end-fact-order = integer(p-fact-date) + 0.99
+      638       .
+      639     end.
+      640   end procedure.
+      641   procedure factord-to-date :
+      642     define input  parameter p-fact-order as decimal no-undo .
+      643     define output parameter p-fact-date  as date    no-undo .
+      644     define variable v-ref-date  as date      no-undo .
+      645     define variable v-ref-delta as integer   no-undo .
+      646     do
+      647     on error undo, return error return-value
+      648     :
+      649       if p-fact-order = ?
+      650       or p-fact-order = 0
+      651       then do:
+      652         return error "Не указан fact-order" .
+      653       end.
+      654       assign
+      655         v-ref-date  = date(1, 1, 2000)
+      656       .
+      657       assign
+      658         v-ref-delta = integer(truncate(p-fact-order, 0)) - integer(v-ref-date)
+      659       .
+      660       assign
+      661         p-fact-date = v-ref-date + v-ref-delta
+      662       .
+      663     end.
+      664   end procedure.
+      665   procedure factord-to-fact-num :
+      666     define input  parameter p-fact-order as decimal no-undo .
+      667     define output parameter p-fact-num   as integer no-undo .
+      668     define variable v-fact-order-trunc as decimal no-undo .
+      669     do
+      670     on error undo, return error return-value
+      671     :
+      672       if p-fact-order = ?
+      673       or p-fact-order = 0
+      674       then do:
+      675         return error "Не указан fact-order" .
+      676       end.
+      677       assign
+      678        v-fact-order-trunc = truncate(p-fact-order, 2)
+      679       .
+      680       assign
+      681         p-fact-num = (p-fact-order - v-fact-order-trunc ) * 10000000000
+      682       .
+      683     end.
+      684   end procedure.
+      685   procedure factord-to-shift-num :
+      686     define input  parameter p-fact-order as decimal no-undo .
+      687     define output parameter p-shift-num   as integer no-undo .
+      688     define variable  p-shift-numd  as decimal   no-undo .
+      689     define variable v-fact-order-trunc as decimal no-undo .
+      690     do
+      691     on error undo, return error return-value
+      692     :
+      693       if p-fact-order = ?
+      694       or p-fact-order = 0
+      695       then do:
+      696         return error "Не указан fact-order" .
+      697       end.
+      698       assign
+      699        v-fact-order-trunc = truncate(p-fact-order, 2)  - truncate(p-fact-order,0)
+      700       .
+      701       if v-fact-order-trunc < 0.5 then do:
+      702         v-fact-order-trunc = v-fact-order-trunc + 0.5.
+      703       end.
+      704       assign
+      705         p-shift-numd = (( v-fact-order-trunc  * 100 - 50 ) + 1 ) / 2
+      706         .
+      707        assign
+      708         p-shift-num = truncate (p-shift-numd , 0)
+      709       .
+      710     end.
+      711   end procedure.
+      712   define variable vss-include-info4 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+      713   procedure write-fin-statement-history :
+      714   define parameter buffer buf_fin-statement for ub.fin-statement.
+      715   define variable v-date as date no-undo .
+      716   define variable v-time as integer no-undo .
+      717   define buffer buf_c-fin-statement for ub.c-fin-statement.
+      718   define buffer buf_c-fin-statement-line for ub.c-fin-statement-line.
+      719   define buffer buf_c-fin-statement-attr for ub.c-fin-statement-attr.
+      720     do
+      721     on error undo, return error
+      722     :
+      723       run cur-time in this-procedure(output v-date, output v-time).
+      724       create buf_c-fin-statement.
+      725       buffer-copy buf_fin-statement to buf_c-fin-statement
+      726       assign
+      727       buf_c-fin-statement.chip-num           = next-value (s-fin-corr-chip, ub)
+      728       buf_c-fin-statement.corr-time          = v-time
+      729       buf_c-fin-statement.corr-user-db-num   = g#db-num
+      730       buf_c-fin-statement.corr-user-name     = g#userid
+      731       buf_c-fin-statement.corr-date          = v-date
+      732       buf_c-fin-statement.corr-doc-code      = "":U
+      733       .
+      734       for each ub.fin-statement-line where
+      735                ub.fin-statement-line.host-code = buf_fin-statement.host-code
+      736            AND ub.fin-statement-line.sttm-code = buf_fin-statement.sttm-code:
+      737         create buf_c-fin-statement-line.
+      738         buffer-copy ub.fin-statement-line to buf_c-fin-statement-line
+      739         assign
+      740         buf_c-fin-statement-line.chip-num           = buf_c-fin-statement.chip-num
+      741         buf_c-fin-statement-line.corr-user-db-num   = buf_c-fin-statement.corr-user-db-num
+      742         .
+      743       end.
+      744       for each ub.fin-statement-attr where
+      745                ub.fin-statement-attr.host-code = buf_fin-statement.host-code
+      746            AND ub.fin-statement-attr.sttm-code = buf_fin-statement.sttm-code:
+      747         create buf_c-fin-statement-attr.
+      748         buffer-copy ub.fin-statement-attr to buf_c-fin-statement-attr
+      749         assign
+      750         buf_c-fin-statement-attr.chip-num           = buf_c-fin-statement.chip-num
+      751         buf_c-fin-statement-attr.corr-user-db-num   = buf_c-fin-statement.corr-user-db-num
+      752         buf_c-fin-statement-attr.attr-value         = buf_c-fin-statement-attr.attr-value
+      753         .
+      754       end.
+      755       release buf_c-fin-statement.
+      756     end.
+      757   end procedure.
+      758   define variable v-creating-hist as logical no-undo .
+      759   define variable v-cmp as character no-undo .
+      760   define buffer buf_sysconf  for ub.sysconf.
+      761   main-block:
+      762   do
+      763   on error  undo main-block, return error substitute( "&1. &2&3&4", vss-workfile, return-value, chr(10), error-status :get-message (1))
+      764   on stop   undo main-block, return error substitute( "&1. stop", vss-workfile )
+      765   on endkey undo main-block, return error substitute( "&1. endkey", vss-workfile )
+      766   :
+      767     if not g#news then do:
+      768       find first buf_sysconf no-lock.
+      769       if buf_sysconf.firm-db-num <> g#db-num
+      770       then do:
+      771         message
+      772         vss-workfile vss-revision vss-description skip
+      773         "Нельзя изменять запись БАНКОВСКОЙ ВЫПИСКИ в БД, отличной от главной БД фирмы" skip
+      774         "Номер текущей БД" g#db-num "Номер главной БД фирмы" buf_sysconf.firm-db-num
+      775         view-as alert-box error .
+      776         undo main-block, return error .
+      777       end.
+      778     end.
+      779     if not g#news
+      780     and not new(ub.fin-statement)
+      781     and (ub.fin-statement.status_ <> 'новый':U
+      782          or oldb.status_ <> 'новый':U
+      783          ) then do:
+      784       buffer-compare oldb
+      785       to ub.fin-statement
+      786       case-sensitive
+      787       save result in v-cmp
+      788       .
+      789       if v-cmp <> "":U then do:
+      790         assign
+      791         v-creating-hist = yes
+      792         .
+      793         run write-fin-statement-history in this-procedure (buffer oldb).
+      794       end.
+      795     end.
+      796     if v-creating-hist
+      797     or
+      798     (oldb.status_ <> ub.fin-statement.status_
+      799     AND not new(ub.fin-statement)) then do:
+      800       run str/callnews.p
+      801         (input 'fin-statement':U
+      802         ,input (buffer ub.fin-statement:handle)
+      803         ).
+      804     end.
+      805       if g#oxml = yes
+      806       then do:
+      807       run str/calloxml.p (
+      808             input 'update':U
+      809           , input 'fin-statement':U
+      810           , input ( buffer ub.fin-statement:handle )
+      811       ) no-error.
+      812       if error-status :error
+      813       then do:
+      814           undo, return error substitute( "&2&1Ошибка при отправке записи в систему OpenXML&1&3&1&4"
+      815                                , chr(10)
+      816                                , vss-workfile
+      817                                , return-value
+      818                                , error-status :get-message ( 1 ) ).
+      819       end.
+      820       end.
+      821   end.

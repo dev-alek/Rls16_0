@@ -1,0 +1,253 @@
+block-level on error undo, throw.
+define variable vss-revision    as character no-undo init "$Revision: c575f5acca55, 2347, rls $":U .
+define variable vss-author      as character no-undo init "$Author: ARostovtsev $":U .
+define variable vss-date        as character no-undo init "$Date: Ср июн 10 21:13:33 2020 +0300 $":U .
+define variable vss-workfile    as character no-undo init "$Workfile: marktype.p $":U .
+define variable vss-archive     as character no-undo init "$Archive: rep/marktype.p $":U .
+define variable vss-description as character no-undo init "Форма изменения типа маркировки".
+SESSION:ERROR-STACK-TRACE=YES.
+DEFINE TEMP-TABLE tt_code NO-UNDO LIKE code.
+define input        parameter parparentproc as handle            no-undo.
+define input        parameter iMode         as character         no-undo.
+define input-output parameter iCode       like ub.code.code      no-undo.
+define input-output parameter iCodeValue  like ub.code.codevalue no-undo.
+define input-output parameter iCodeName   like ub.code.codename  no-undo.
+define input-output parameter iMisc1      like ub.code.misc1 no-undo.
+define input-output parameter iMisc2      like ub.code.misc2 no-undo.
+define input-output parameter iMisc3      like ub.code.misc3 no-undo.
+define input-output parameter iMisc4      like ub.code.misc4 no-undo.
+define output       parameter isUpdated     as logical       no-undo.
+define variable vss-include-info0 as character format "x(65)" no-undo initial "@(#)$Workfile$ $Revision$".
+define temp-table userobjs_temp-user-obj no-undo
+  field obj-type as character
+  field obj-code as integer
+  index xpk is primary unique obj-type obj-code
+  .
+procedure userobjs_clear :
+  define buffer buf_userobjs_temp-user-obj for userobjs_temp-user-obj .
+  do
+  on error undo, return error return-value
+  :
+    for each buf_userobjs_temp-user-obj
+    on error undo, return error return-value
+    :
+      delete buf_userobjs_temp-user-obj .
+    end.
+  end.
+end .
+procedure userobjs_object-count :
+  define output parameter p-total-count as integer   no-undo .
+  define buffer buf_userobjs_temp-user-obj for userobjs_temp-user-obj .
+  do
+  on error undo, return error return-value
+  :
+    assign
+      p-total-count = 0
+    .
+    for each buf_userobjs_temp-user-obj
+    on error undo, return error return-value
+    :
+      assign
+        p-total-count = p-total-count + 1
+      .
+    end.
+  end.
+end.
+procedure userobjs_append :
+   define input  parameter p-obj-type as character no-undo .
+   define input  parameter p-obj-code as integer   no-undo .
+  define buffer buf_userobjs_temp-user-obj for userobjs_temp-user-obj .
+  do
+  on error undo, return error return-value
+  :
+    find first buf_userobjs_temp-user-obj
+      where buf_userobjs_temp-user-obj.obj-type = p-obj-type
+        and buf_userobjs_temp-user-obj.obj-code = p-obj-code
+      no-error .
+    if not available buf_userobjs_temp-user-obj
+    then do:
+      create buf_userobjs_temp-user-obj .
+      assign
+        buf_userobjs_temp-user-obj.obj-type = p-obj-type
+        buf_userobjs_temp-user-obj.obj-code = p-obj-code
+      .
+    end.
+  end.
+end.
+procedure userobjs_object-exist :
+  define output parameter p-object-exist as logical   no-undo .
+  define buffer buf_userobjs_temp-user-obj for userobjs_temp-user-obj .
+  do
+  on error undo, return error return-value
+  :
+    find first buf_userobjs_temp-user-obj
+      no-error .
+    if not available buf_userobjs_temp-user-obj
+    then do:
+      assign
+        p-object-exist = false
+      .
+    end.
+    else do:
+      assign
+        p-object-exist = true
+      .
+    end.
+  end.
+end.
+procedure userobjs_transfer :
+  define input  parameter p-callback-handle as handle no-undo .
+  define variable vss-description as character no-undo init "userobjs_transfer: Передача списка объектов".
+  define buffer buf_userobjs_temp-user-obj for userobjs_temp-user-obj .
+  do
+  on error undo, return error return-value
+  :
+    if valid-handle(p-callback-handle) <> true
+    then do:
+      message
+        vss-workfile vss-revision vss-description skip
+        "Ошибка задания входных параметров" skip
+        "Неизвестный указатель на процедуру" skip
+        view-as alert-box error .
+      undo, return error return-value .
+    end.
+    if p-callback-handle :get-signature("userobjs_append") = ""
+    then do:
+      message
+        vss-workfile vss-revision vss-description skip
+        "Ошибка задания входных параметров" skip
+        substitute("В процедуре &1 не найдена внутренняя процедура userobjs_append"
+                  ,p-callback-handle :file-name
+                  ) skip
+        view-as alert-box error .
+      undo, return error return-value .
+    end.
+    for each buf_userobjs_temp-user-obj
+    on error undo, return error return-value
+    :
+      run userobjs_append in p-callback-handle
+        (input  buf_userobjs_temp-user-obj.obj-type
+        ,input  buf_userobjs_temp-user-obj.obj-code
+        ) .
+    end.
+  end.
+end procedure.
+procedure userobjs_select-one :
+   define input  parameter parparentproc     as widget-handle no-undo .
+   define input  parameter p-db-num          as integer   no-undo .
+   define input  parameter p-user-id         as character no-undo .
+   define input  parameter p-host-code-obj   as integer   no-undo .
+   define input  parameter p-obj-type        as character no-undo .
+   define input  parameter p-obj-code        as integer   no-undo .
+   define output parameter p-user-select     as logical   no-undo .
+   define output parameter p-select-obj-type as character no-undo .
+   define output parameter p-select-obj-code as character no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run gbl/userobjs.w
+      (input  parparentproc
+      ,input  this-procedure :handle
+      ,input  p-db-num
+      ,input  p-user-id
+      ,input  p-host-code-obj
+      ,input  p-obj-type
+      ,input  p-obj-code
+      ,INPUT  "b-sel"
+      ,output p-user-select
+      ,output p-select-obj-type
+      ,output p-select-obj-code
+      ) .
+  end.
+end.
+procedure userobjs_select-many :
+  define input  parameter parparentproc   as widget-handle no-undo .
+  define input  parameter p-db-num        as integer   no-undo .
+  define input  parameter p-user-id       as character no-undo .
+  define input  parameter p-host-code-obj as integer   no-undo .
+  define input  parameter p-obj-type      as character no-undo .
+  define input  parameter p-obj-code      as integer   no-undo .
+  define output parameter p-user-select   as logical   no-undo .
+  define variable v-select-obj-type as character no-undo .
+  define variable v-select-obj-code as integer   no-undo .
+  do
+  on error undo, return error return-value
+  :
+    run gbl/userobjs.w
+      (input  parparentproc
+      ,input  this-procedure :handle
+      ,input  p-db-num
+      ,input  p-user-id
+      ,input  p-host-code-obj
+      ,input  p-obj-type
+      ,input  p-obj-code
+      ,INPUT  "b-sel,b-mark"
+      ,output p-user-select
+      ,output v-select-obj-type
+      ,output v-select-obj-code
+      ) .
+  end.
+end.
+procedure thobjs :
+   define input        parameter parparentproc     as widget-handle no-undo .
+   define input        parameter i-bttns           as character     no-undo .
+   define input        parameter i-list-mode       as character     no-undo.
+   define input        parameter i-obj-type        as character     no-undo.
+   define input        parameter i-db-num          as integer       no-undo.
+   define input        parameter i-host-code       as integer       no-undo.
+   define input-output parameter p-rid-list        as character     no-undo .
+run ref/thobjs.p
+        ( input parparentproc
+         ,input  this-procedure :handle
+        , input i-bttns
+        , input i-list-mode
+        , input i-obj-type
+        , input i-db-num
+        , input i-host-code
+        , input-output p-rid-list ) no-error .
+end.
+define variable mMarkType as class ibs.th.ref.marktype no-undo .
+mMarkType = new ibs.th.ref.marktype (
+                    parparentproc, iMode,
+                    iCode, iCodeValue, iCodeName, iMisc1, iMisc2, iMisc3, iMisc4
+                ).
+wait-for  mMarkType:ShowDialog() .
+isUpdated = mMarkType:isUpdated.
+if isUpdated then
+do:
+    assign
+        iCode      = mMarkType:codeType
+        iCodeValue = mMarkType:codeValue
+        iCodeName  = mMarkType:codeName
+        iMisc1     = mMarkType:codeMisc1
+        iMisc2     = mMarkType:codeMisc2
+        iMisc3     = mMarkType:codeMisc3
+        iMisc4     = mMarkType:codeMisc4
+    .
+end.
+define variable v-err-msg as character no-undo .
+catch exAppErrors as class Progress.Lang.AppError :
+  v-err-msg = exAppErrors:ReturnValue .
+  if v-err-msg > "" then .
+  else
+  do :
+    v-err-msg = exAppErrors:GetMessage(1) .
+    if v-err-msg > "" then .
+    else v-err-msg = "AppError в модуле c:\tester\Rls_16_0\rc_160_rus\cmpdir\src\ref\marktype.p" .
+  end .
+  message v-err-msg  view-as alert-box.
+end catch .
+catch exProErrors as class Progress.Lang.ProError :
+  v-err-msg = exProErrors:GetMessage(1) .
+  if v-err-msg > "" then .
+  else v-err-msg = "ProError в модуле c:\tester\Rls_16_0\rc_160_rus\cmpdir\src\ref\marktype.p" .
+  message "ProError" skip(1) v-err-msg  view-as alert-box.
+end catch .
+catch exAnyErrors as class Progress.Lang.Error:
+  v-err-msg = "Unexpected error в модуле c:\tester\Rls_16_0\rc_160_rus\cmpdir\src\ref\marktype.p " + exAnyErrors:GetMessage(1).
+  message "LangError" skip(1) v-err-msg  view-as alert-box.
+end catch .
+finally:
+  SESSION:ERROR-STACK-TRACE=no.
+  if valid-object(mMarkType) then delete object mMarkType no-error .
+end finally.

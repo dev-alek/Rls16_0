@@ -1,0 +1,115 @@
+        1   using Progress.Lang.*.
+        2   using ibs.th.skt.Commands.*.
+        3   using ibs.th.skt.ControlledClients.*.
+        4   using ibs.th.skt.Adapters.*.
+        5   block-level on error undo, throw.
+        6   class ibs.th.skt.Commands.markingcmd inherits ICommand:
+        7     define override public property vss-revision    as character no-undo init "$Revision:$":U get .
+        8     define override public property vss-author      as character no-undo init "$Author:$":U get.
+        9     define override public property vss-date        as character no-undo init "$Date:$":U get.
+       10     define override public property vss-workfile    as character no-undo init "$Workfile:$":U get.
+       11     define override public property vss-archive     as character no-undo init "$Archive:$":U get.
+       12     define override public property vss-description as character no-undo init "обработчик команд по маркам через сокет" get.
+       13     define public property LogMsg as character no-undo
+       14       get.
+       15       private set.
+       16      define private variable marking     as class  marking no-undo.
+       17      define temp-table tt-code no-undo like ub.code.
+       18      constructor public markingcmd (  ):
+       19         super ().
+       20         marking = new marking().
+       21      end constructor.
+       22     define private variable hndlSocket as handle no-undo.
+       23     method public override void Execute_( input req as ibs.th.skt.Commands.IRequest, resp as class IResponse ):
+       24       def buffer buf_code for ub.code.
+       25       def var vNeedUpd as integer no-undo.
+       26       def var vMarkOnlineResult as char no-undo.
+       27       def var vMark as char no-undo.
+       28       def var vOnlineResult as int no-undo.
+       29       def buffer buf_marking for ub.marking.
+       30       empty temp-table tt-code.
+       31       vMarkOnlineResult = "".
+       32       do transaction:
+       33          hndlsocket = req:HndlSocket.
+       34          marking:hndler(req).
+       35          if not writeSock(marking:SomeStr)
+       36          then do:
+       37            find first buf_code where
+       38                        buf_code.parent eq "GisMt"
+       39                    and buf_code.code   eq "GisMtErr"
+       40            no-lock no-error.
+       41            if avail buf_code then do:
+       42                create tt-code.
+       43                buffer-copy buf_code to tt-code.
+       44            end.
+       45            for each buf_code no-lock where
+       46                     buf_code.parent = "CDN_GisMt":
+       47                create tt-code.
+       48                buffer-copy buf_code to tt-code.
+       49            end.
+       50            vMarkOnlineResult = marking:GetMarkOnlineResult().
+       51            undo.
+       52          end.
+       53       end.
+       54       do transaction:
+       55           for each tt-code:
+       56              find first buf_code where
+       57                         buf_code.parent = tt-code.parent
+       58                     and buf_code.code   = tt-code.code
+       59                 exclusive-lock no-wait no-error.
+       60              if avail buf_code then do:
+       61                  buffer-copy tt-code to buf_code no-error.
+       62              end.
+       63           end.
+       64           if vMarkOnlineResult <> ""
+       65              and num-entries(vMarkOnlineResult,chr(9)) = 2
+       66           then do:
+       67               assign
+       68                  vMark = entry(1,vMarkOnlineResult,chr(9))
+       69                  vOnlineResult = int(entry(2,vMarkOnlineResult,chr(9)))
+       70                  no-error.
+       71               if vMark <> "" and vOnlineResult <> ?
+       72               then do:
+       73                   find first buf_marking exclusive-lock where
+       74                              buf_marking.mark begins vMark
+       75                      no-wait no-error.
+       76                   if avail buf_marking then
+       77                      buf_marking.online-result = vOnlineResult .
+       78               end.
+       79           end.
+       80       end.
+       81       vNeedUpd = marking:CheckCdnNeedUpd().
+       82       if vNeedUpd <> 0 then
+       83         run utl/pub-runcdn.p (vNeedUpd).
+       84     end method.
+       85     method private logical writeSock ( arg as longchar ):
+       86       define variable mbuffer  as memptr   no-undo.
+       87       define variable mbuffer1 as memptr   no-undo.
+       88       define variable tempStr  as longchar no-undo.
+       89       define variable glog     as logical  no-undo.
+       90       set-size(mbuffer1) = length (marking:SomeStr, "RAW":U).
+       91       copy-lob
+       92         from object marking:SomeStr
+       93         to object mbuffer1
+       94         convert target codepage "UTF-8".
+       95       if not hndlSocket:connected()
+       96       then do:
+       97          LogWrite:LogStr = " " + "Клиент отключился.".
+       98          return false.
+       99       end.
+      100       glog = hndlsocket:write(mbuffer1,1,get-size(mbuffer1)).
+      101       if not glog
+      102          or hndlsocket:bytes-written ne get-size(mbuffer1)
+      103       then do:
+      104           set-size(mbuffer1) = 0.
+      105           LogWrite:WriteFileToLog("Ошибка при отправке сообщения удаленному клиенту.").
+      106           return false.
+      107       end.
+      108       set-size(mbuffer1) = 0.
+      109       LogWrite:LogStr = LogWrite:LogStr + " " + string (marking:SomeStr).
+      110       return true.
+      111     end method.
+      112           destructor public markingcmd ( ):
+      113         delete object marking.
+      114           end destructor.
+      115   end class.

@@ -1,0 +1,178 @@
+        1   block-level on error undo, throw.
+        2   define variable vss-revision    as character no-undo init "$Revision: aea5316774be, 0, rls $":U .
+        3   define variable vss-author      as character no-undo init "$Author: expertek $":U .
+        4   define variable vss-date        as character no-undo init "$Date: Mon Jan 27 18:27:46 2014 +0400 $":U .
+        5   define variable vss-workfile    as character no-undo init "$Workfile: 00230000.p $":U .
+        6   define variable vss-archive     as character no-undo init "$Archive: cut/00230000.p $".
+        7   define variable vss-description as character no-undo init "Файл пирога обрезания. Относится к категории 230.".
+        8   define new global shared variable g#language as character no-undo .
+        9   if g#language <> '' and g#language <> 'rus':U then do:
+       10     undo, return error substitute( '&1. incorrect language&2str-glbl: rus&2db: &3':U, this-procedure :file-name, chr(10), g#language  ).
+       11   end.
+       12   define buffer old-add-doc                for src.add-doc                  .
+       13   define buffer old-add-line               for src.add-line                 .
+       14   define buffer old-add-trn                for src.add-trn                  .
+       15   define buffer old-add-trn-attr           for src.add-trn-attr             .
+       16   define buffer old-gds-add-charges        for src.gds-add-charges          .
+       17   define buffer old-gds-add-charges-attr   for src.gds-add-charges-attr     .
+       18   define buffer old-parts-add-attr         for src.parts-add-attr           .
+       19   define buffer old-parts-add              for src.parts-add                .
+       20   define buffer old-c-parts-add            for src.c-parts-add              .
+       21   define buffer old-c-add-doc              for src.c-add-doc                .
+       22   define buffer old-c-add-line             for src.c-add-line               .
+       23   define buffer new-add-doc               for dst.add-doc                .
+       24   define buffer new-add-line              for dst.add-line               .
+       25   define buffer new-add-trn               for dst.add-trn                .
+       26   define buffer new-add-trn-attr          for dst.add-trn-attr           .
+       27   define buffer new-gds-add-charges       for dst.gds-add-charges        .
+       28   define buffer new-gds-add-charges-attr  for dst.gds-add-charges-attr   .
+       29   define buffer new-parts-add-attr        for dst.parts-add-attr         .
+       30   define buffer new-parts-add             for dst.parts-add              .
+       31   define buffer new-c-parts-add           for dst.c-parts-add            .
+       32   define buffer new-c-add-doc             for dst.c-add-doc              .
+       33   define buffer new-c-add-line            for dst.c-add-line             .
+       34   define buffer new-goods for dst.goods  .
+       35   define buffer buf_clients     for dst.clients.
+       36   do
+       37   on error undo, return error
+       38   :
+       39   define input parameter vartype-cut            as integer   no-undo.
+       40   define input parameter varlist-db             as character no-undo.
+       41   define input parameter vardate-actual-goods   as date      no-undo.
+       42   define input parameter vardate-actual-docs    as date      no-undo.
+       43   define input parameter vardate-actual-findoc  as date      no-undo.
+       44   define input parameter vardate-output-zone    as date      no-undo.
+       45   define input parameter varstay-recipe-goods   as logical   no-undo.
+       46   define input parameter varstay-weight-goods   as logical   no-undo.
+       47   define input parameter varnot-copy-del-goods  as logical   no-undo.
+       48   define input parameter varstay-history        as logical   no-undo.
+       49   define input parameter vargen-file            as character no-undo.
+       50   define stream str-gen.
+       51   output stream str-gen to vargen-file append.
+       52   if not connected("src") then do:
+       53      return error "Нет коннекта с базой 'src'.".
+       54   end.
+       55   if not connected("dst") then do:
+       56      return error "Нет коннекта с базой 'dst'.".
+       57   end.
+       58   find src.sys-ctrl no-lock.
+       59   if not available src.sys-ctrl then do:
+       60      return error "В базе данных src не найдена уникальная запись sys-ctrl.".
+       61   end.
+       62   if src.sys-ctrl.db-num <> 0 then do:
+       63      return error "Пакет обрезания работает только в главной базе данных. В данной версии удаленные БД создаются выгрузкой из главных.".
+       64   end.
+       65   if vardate-actual-docs <> ? and
+       66      (vardate-actual-goods   > vardate-actual-docs or
+       67       vardate-actual-goods   = ? )   then do:
+       68         return error SUBSTITUTE("Ошибка при задании дат актуальности." +
+       69                                 "Дата актуальности товаров &1."        +
+       70                                 "Дата актуальности документов &2."     +
+       71                                 "Дата актуальности документов должна быть больше или равна дат актуальностей товаров.",
+       72                                 vardate-actual-goods,
+       73                                 vardate-actual-docs).
+       74   end.
+       75   define  shared temp-table tt-objs no-undo
+       76     field obj-type as character
+       77     field obj-code as integer
+       78     index pi is unique primary obj-type obj-code
+       79     .
+       80     on WRITE of dst.add-doc               override do: end.
+       81     on WRITE of dst.add-line              override do: end.
+       82     on WRITE of dst.add-trn               override do: end.
+       83     on WRITE of dst.add-trn-attr          override do: end.
+       84     on WRITE of dst.gds-add-charges       override do: end.
+       85     on WRITE of dst.gds-add-charges-attr  override do: end.
+       86     on WRITE of dst.parts-add-attr        override do: end.
+       87     on WRITE of dst.parts-add             override do: end.
+       88     on WRITE of dst.c-parts-add           override do: end.
+       89     on WRITE of dst.c-add-doc             override do: end.
+       90     on WRITE of dst.c-add-line            override do: end.
+       91   for each old-gds-add-charges  no-lock , first new-goods where new-goods.gds-code = old-gds-add-charges.gds-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+       92      create new-gds-add-charges.
+       93      buffer-copy old-gds-add-charges to new-gds-add-charges.
+       94   end.
+       95   for each old-gds-add-charges-attr  no-lock , first new-goods where new-goods.gds-code = old-gds-add-charges-attr.gds-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+       96      create new-gds-add-charges-attr.
+       97      buffer-copy old-gds-add-charges-attr to new-gds-add-charges-attr.
+       98   end.
+       99   for each old-parts-add  no-lock , first new-goods where new-goods.gds-code = old-parts-add.gds-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      100      create new-parts-add.
+      101      buffer-copy old-parts-add to new-parts-add.
+      102   end.
+      103   for each old-parts-add-attr  no-lock , first new-goods where new-goods.gds-code = old-parts-add-attr.gds-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      104      create new-parts-add-attr.
+      105      buffer-copy old-parts-add-attr to new-parts-add-attr.
+      106   end.
+      107   if vardate-actual-docs <> ? then do:
+      108       for each buf_clients no-lock  where
+      109                buf_clients.db-num <> ?
+      110       on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2))
+      111         :
+      112         if vartype-cut = 1 then do:
+      113             find first tt-objs where tt-objs.obj-type = buf_clients.obj-type and
+      114                                      tt-objs.obj-code = buf_clients.obj-code no-error.
+      115         end.
+      116         if vartype-cut = 0      or
+      117             (vartype-cut = 1 and available tt-objs) then do:
+      118           if buf_clients.obj-type  = 'маг':U OR buf_clients.obj-type  = 'скл':U then DO:
+      119             for each old-add-doc where old-add-doc.obj-type   = buf_clients.obj-type             and
+      120                       old-add-doc.obj-code   = buf_clients.obj-CODE and
+      121                       old-add-doc.status_    = 'акт':U         and
+      122                       old-add-doc.fact-date >= vardate-actual-docs no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      123                RUN proc-copy ( old-add-doc.doc-code ) no-error .
+      124                IF error-status :error THEN return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)).
+      125             END.
+      126           end.
+      127         end.
+      128         else do:
+      129           if buf_clients.obj-type  = 'маг':U OR buf_clients.obj-type  = 'скл':U then DO:
+      130               for each old-add-doc where
+      131                        old-add-doc.obj-type   = buf_clients.obj-type             and
+      132                        old-add-doc.obj-code   = buf_clients.obj-CODE  and
+      133                        old-add-doc.status_    = 'акт':U
+      134                      no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      135                        RUN proc-copy ( old-add-doc.doc-code ) no-error .
+      136                        IF error-status :error THEN return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)).
+      137               end.
+      138           END.
+      139         END.
+      140      end.
+      141   end.
+      142   output stream str-gen close.
+      143   return "Произведен экспорт таблиц: ~
+      144           add-doc add-line add-trn add-trn-attr gds-add-charges gds-add-charges-attr parts-add-attr parts-add c-parts-add c-add-doc c-add-line ".
+      145   end.
+      146   procedure proc-copy :
+      147   define input  parameter p-doc-code as character no-undo .
+      148     do
+      149     on error undo, return error return-value
+      150     :
+      151   for each old-add-doc  where old-add-doc.doc-code = p-doc-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      152      create new-add-doc.
+      153      buffer-copy old-add-doc to new-add-doc.
+      154   end.
+      155   for each old-add-line  where old-add-line.doc-code = p-doc-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      156      create new-add-line.
+      157      buffer-copy old-add-line to new-add-line.
+      158   end.
+      159   for each old-add-trn  where old-add-trn.doc-code = p-doc-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      160      create new-add-trn.
+      161      buffer-copy old-add-trn to new-add-trn.
+      162   end.
+      163   for each old-add-trn-attr  where old-add-trn-attr.doc-code = p-doc-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      164      create new-add-trn-attr.
+      165      buffer-copy old-add-trn-attr to new-add-trn-attr.
+      166   end.
+      167     if varstay-history = yes then do:
+      168   for each old-c-add-doc  where old-c-add-doc.doc-code = p-doc-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      169      create new-c-add-doc.
+      170      buffer-copy old-c-add-doc to new-c-add-doc.
+      171   end.
+      172   for each old-c-add-line  where old-c-add-line.doc-code = p-doc-code  no-lock on error undo, return error SUBSTITUTE("&1 &2 &3", return-value, error-status:get-message(1), error-status:get-message(2)):
+      173      create new-c-add-line.
+      174      buffer-copy old-c-add-line to new-c-add-line.
+      175   end.
+      176     end.
+      177   end.
+      178   end procedure.
