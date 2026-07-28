@@ -470,12 +470,6 @@ run filwrlib_append-new-line in this-procedure ( input "&global-define clntattr-
 /* Тип ЕМРЦ */
 { cmp/cr-prep.i 1 attr-emrc-type       emrc-type     " " emrc-type     }
 
-/* Признак продажи is18+ */
-{ cmp/cr-prep.i 1 attr-IS18Plus           IS18Plus         " " IS18Plus    }
-
-/* Оплата баллами Семейная команда */
-{ cmp/cr-prep.i 1 attr-loyalty-gift           loyalty-gift         " " loyalty-gift    }
-
 /* Признак предмета расчета */
 { cmp/cr-prep.i 1 attr-item-matter-mark     item-matter-mark     " " item-matter-mark     }
 
@@ -627,8 +621,6 @@ run filwrlib_append-new-line in this-procedure ( input "&global-define clntattr-
 ,{&bef-attr-office-type}~
 ,{&bef-attr-mark-type}~
 ,{&bef-attr-emrc-type}~
-,{&bef-attr-IS18Plus}~
-,{&bef-attr-loyalty-gift}~
 ,{&bef-attr-item-matter-mark}~
 ,{&bef-attr-type-method-calc}~
 ,{&bef-attr-group-np}~
@@ -740,7 +732,7 @@ cda-MAGIA-XML_operative
 
 /* Параметры последнего принятого чека */
 { cmp/cr-prepc.i 1 prop-list-cda-IBM-XML_operative
-"last-check-params,last-report-params,fo-version,OptVer,device-kind,USE_FFD_VERSION,KKT_FFD_VERSION,KKT_SCHEMA,last-time-polls,last-date-polls,GISMT_FAST_ANSWER,GISMT_TIMEOUT,GISMT_CHECK_TIMEOUT,GISMT_OPENCON_TIMEOUT"
+"last-check-params,fo-version,OptVer,device-kind,USE_FFD_VERSION,KKT_FFD_VERSION,KKT_SCHEMA,last-time-polls,last-date-polls,GISMT_FAST_ANSWER,GISMT_TIMEOUT,GISMT_CHECK_TIMEOUT,GISMT_OPENCON_TIMEOUT"
 cda-IBM-XML_operative
 }
 
@@ -760,7 +752,7 @@ cda-IBM-XML_general
 
 /* Параметры последнего принятого чека */
 { cmp/cr-prepc.i 1 prop-list-cda-AUTOTANK_operative
-"last-check-params,last-report-params,fo-version,OptVer,device-kind"
+"last-check-params,fo-version,OptVer,device-kind"
 cda-AUTOTANK_operative
 }
 
@@ -1148,12 +1140,6 @@ run filwrlib_append-new-line in this-procedure ( input "&global-define gdshattr-
 
 /* Номер MessageID для видеонаблюдения */
 { cmp/cr-prep.i 1 attr-asiport          asiport         " " asiport        }
-
-/* Код региона reg-code */
-{ cmp/cr-prep.i 1 attr-reg-code         reg-code        " " reg-code        }
-
-/* Время последней синхронизации обмена СПН */
-{ cmp/cr-prep.i 1 attr-last-nws-sync         last-nws-sync        " " last-nws-sync        }
 
 /* сюда добавлять новые названия атрибутов баз данных */
 

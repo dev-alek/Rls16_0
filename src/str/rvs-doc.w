@@ -2346,9 +2346,8 @@ procedure local-chg:
       view-as alert-box error.
     return error.
   end.
-    if pardoc-mode <> {&lookup} then  
-        find r-doc where recid(r-doc) = parrvs-rec.
-    else find r-doc where recid(r-doc) = parrvs-rec no-lock.
+
+  find r-doc where recid(r-doc) = parrvs-rec.
 end procedure.
 
 procedure proc_m-meas-4 :
@@ -3048,9 +3047,7 @@ procedure proc-lookup:
       view-as alert-box error.
     return error.
   end.
-    if pardoc-mode = {&lookup} then
-        find r-doc where recid(r-doc) = parrvs-rec no-lock.
-    else find r-doc where recid(r-doc) = parrvs-rec .
+  find r-doc where recid(r-doc) = parrvs-rec.
 end procedure.
 
 procedure proc-lkp:
@@ -3198,9 +3195,7 @@ procedure proc-lkp:
       view-as alert-box error.
     return error.
   end.
-  if pardoc-mode = {&lookup} then
-  find r-doc where recid(r-doc) = parrvs-rec no-lock.
-  else find r-doc where recid(r-doc) = parrvs-rec.
+  find r-doc where recid(r-doc) = parrvs-rec.
   run ui-on in this-procedure .
 end procedure.
 

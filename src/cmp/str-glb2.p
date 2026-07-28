@@ -992,7 +992,6 @@ run filwrlib_append-new-line in this-procedure ( input "&global-define right-typ
 { cmp/cr-prep.i 1 cmp                        "орг"                                       " " cmp                        }
 { cmp/cr-prep.i 1 prs                        "чел"                                       " " prs                        }
 { cmp/cr-prep.i 1 db                         "БД"                                        " " DB                         }
-{ cmp/cr-prep.i 1 region                     "регион"                                    " " region                     }
 { cmp/cr-prep.i 1 current-status             "тек"                                       " " actual                     }
 { cmp/cr-prep.i 1 deleted-status             "удал"                                      " " deleted                    }
 { cmp/cr-prep.i 1 blocked-status             "блок"                                      " " blocked                    }
